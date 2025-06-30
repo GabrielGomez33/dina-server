@@ -1,0 +1,2 @@
+# dina-server
+cat > README.md &lt;&lt; 'EOF' # 🧠 DINA - Distributed Intelligence Neural Architect  DINA is an AI coordination system designed as a central "brain" that routes human input to specialized AI "limbs" (submodules). The first implementation includes MirrorModule for multi-sensory human analysis.  ## 🏗️ Architecture
