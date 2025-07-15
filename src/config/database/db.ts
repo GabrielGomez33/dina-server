@@ -1,5 +1,6 @@
 // DINA Enhanced Database System - Complete Working Implementation
 // File: src/config/database/db.ts
+
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -469,6 +470,7 @@ export class DinaDatabase {
       await this.createIntelligentSchema();
     } else {
       console.log('🔄 Schema exists, checking for intelligent improvements...');
+      await this.verifySchema();
     }
     
     console.log('✅ Schema evolution complete');
@@ -483,133 +485,157 @@ export class DinaDatabase {
     }
   }
 
+  private async verifySchema(): Promise<void> {
+    console.log('🔍 Verifying schema integrity...');
+    const requiredTables = ['users', 'system_logs', 'system_intelligence', 'dina_requests', 'neural_memory'];
+    const existingTables = (await this.query('SHOW TABLES')).map((row: any) => Object.values(row)[0]);
+
+    for (const table of requiredTables) {
+      if (!existingTables.includes(table)) {
+        console.warn(`⚠️ Table ${table} missing, recreating...`);
+        await this.createTable(table);
+      }
+    }
+  }
+
+  private async createTable(tableName: string): Promise<void> {
+    const tableDefinitions: Record<string, string> = {
+      users: `CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+        email VARCHAR(255) UNIQUE,
+        username VARCHAR(100),
+        password_hash VARCHAR(255),
+        salt VARCHAR(32),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        last_login TIMESTAMP NULL,
+        failed_login_attempts INT DEFAULT 0,
+        locked_until TIMESTAMP NULL,
+        metadata JSON,
+        is_active BOOLEAN DEFAULT TRUE,
+        security_clearance ENUM('public','restricted','confidential','secret','top_secret') DEFAULT 'public',
+        
+        INDEX idx_email_active (email, is_active),
+        INDEX idx_security (security_clearance, is_active),
+        INDEX idx_login_tracking (last_login, failed_login_attempts)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+      system_logs: `CREATE TABLE IF NOT EXISTS system_logs (
+        id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+        level ENUM('debug','info','warn','error','critical') NOT NULL,
+        module VARCHAR(50) NOT NULL,
+        message TEXT NOT NULL,
+        metadata JSON,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        
+        INDEX idx_level_time (level, created_at),
+        INDEX idx_module_time (module, created_at),
+        INDEX idx_created_at (created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+      system_intelligence: `CREATE TABLE IF NOT EXISTS system_intelligence (
+        id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+        component VARCHAR(100) NOT NULL,
+        intelligence_type ENUM('performance','security','optimization','prediction','anomaly') NOT NULL,
+        analysis_data JSON NOT NULL,
+        recommendations JSON,
+        confidence_level DECIMAL(3,2) NOT NULL,
+        impact_score DECIMAL(5,2) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        applied_at TIMESTAMP NULL,
+        effectiveness_score DECIMAL(3,2) NULL,
+        
+        INDEX idx_component_type (component, intelligence_type),
+        INDEX idx_impact_confidence (impact_score DESC, confidence_level DESC),
+        INDEX idx_analysis_time (created_at),
+        
+        CHECK (confidence_level >= 0.00 AND confidence_level <= 1.00),
+        CHECK (effectiveness_score IS NULL OR (effectiveness_score >= 0.00 AND effectiveness_score <= 1.00))
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+      dina_requests: `CREATE TABLE IF NOT EXISTS dina_requests (
+        id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+        user_id VARCHAR(36),
+        source VARCHAR(50) NOT NULL,
+        target VARCHAR(50) NOT NULL,
+        method VARCHAR(100) NOT NULL,
+        payload JSON NOT NULL,
+        response JSON,
+        status ENUM('pending','processing','completed','failed','timeout') DEFAULT 'pending',
+        priority TINYINT NOT NULL DEFAULT 5,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        started_at TIMESTAMP NULL,
+        completed_at TIMESTAMP NULL,
+        processing_time_ms INT UNSIGNED,
+        error_message TEXT,
+        retry_count TINYINT UNSIGNED DEFAULT 0,
+        security_context JSON,
+        
+        INDEX idx_processing_queue (status, priority, created_at),
+        INDEX idx_performance_analysis (completed_at, processing_time_ms),
+        INDEX idx_user_requests (user_id, created_at),
+        INDEX idx_target_method (target, method),
+        
+        CHECK (priority >= 1 AND priority <= 10),
+        CHECK (retry_count <= 5)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+      neural_memory: `CREATE TABLE IF NOT EXISTS neural_memory (
+        id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+        user_id VARCHAR(36),
+        neural_path VARCHAR(255) NOT NULL,
+        memory_type ENUM('episodic','semantic','procedural','working','emotional') NOT NULL,
+        data JSON NOT NULL,
+        embeddings BLOB,
+        confidence_score DECIMAL(5,4) DEFAULT 0.0000,
+        importance_weight DECIMAL(5,4) DEFAULT 0.5000,
+        access_count INT UNSIGNED DEFAULT 0,
+        last_accessed TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP NULL,
+        is_active BOOLEAN DEFAULT TRUE,
+        security_classification ENUM('public','restricted','confidential','secret','top_secret') DEFAULT 'public',
+        
+        INDEX idx_neural_path (neural_path, is_active),
+        INDEX idx_memory_type (memory_type, importance_weight),
+        INDEX idx_confidence (confidence_score DESC),
+        INDEX idx_access_pattern (last_accessed, access_count),
+        INDEX idx_expiration (expires_at),
+        
+        CHECK (confidence_score >= 0.0000 AND confidence_score <= 1.0000),
+        CHECK (importance_weight >= 0.0000 AND importance_weight <= 1.0000)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+    };
+
+    const sql = tableDefinitions[tableName];
+    if (!sql) {
+      throw new Error(`No definition found for table ${tableName}`);
+    }
+
+    try {
+      console.log(`🏗️ Creating table: ${tableName}`);
+      await this.query(sql);
+      console.log(`✅ Table created: ${tableName}`);
+    } catch (error) {
+      console.error(`❌ Failed to create table ${tableName}:`, error);
+      throw error;
+    }
+  }
+
   private async createIntelligentSchema(): Promise<void> {
     console.log('🎨 Creating beautiful, secure, and efficient schema...');
     
     const tables = [
-      {
-        name: 'users',
-        sql: `CREATE TABLE IF NOT EXISTS users (
-          id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
-          email VARCHAR(255) UNIQUE,
-          username VARCHAR(100),
-          password_hash VARCHAR(255),
-          salt VARCHAR(32),
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-          last_login TIMESTAMP NULL,
-          failed_login_attempts INT DEFAULT 0,
-          locked_until TIMESTAMP NULL,
-          metadata JSON,
-          is_active BOOLEAN DEFAULT TRUE,
-          security_clearance ENUM('public','restricted','confidential','secret','top_secret') DEFAULT 'public',
-          
-          INDEX idx_email_active (email, is_active),
-          INDEX idx_security (security_clearance, is_active),
-          INDEX idx_login_tracking (last_login, failed_login_attempts)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
-      },
-      {
-        name: 'system_logs',
-        sql: `CREATE TABLE IF NOT EXISTS system_logs (
-          id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
-          level ENUM('debug','info','warn','error','critical') NOT NULL,
-          module VARCHAR(50) NOT NULL,
-          message TEXT NOT NULL,
-          metadata JSON,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          
-          INDEX idx_level_time (level, created_at),
-          INDEX idx_module_time (module, created_at),
-          INDEX idx_created_at (created_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
-      },
-      {
-        name: 'system_intelligence',
-        sql: `CREATE TABLE IF NOT EXISTS system_intelligence (
-          id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
-          component VARCHAR(100) NOT NULL,
-          intelligence_type ENUM('performance','security','optimization','prediction','anomaly') NOT NULL,
-          analysis_data JSON NOT NULL,
-          recommendations JSON,
-          confidence_level DECIMAL(3,2) NOT NULL,
-          impact_score DECIMAL(5,2) NOT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          applied_at TIMESTAMP NULL,
-          effectiveness_score DECIMAL(3,2) NULL,
-          
-          INDEX idx_component_type (component, intelligence_type),
-          INDEX idx_impact_confidence (impact_score DESC, confidence_level DESC),
-          INDEX idx_analysis_time (created_at),
-          
-          CHECK (confidence_level >= 0.00 AND confidence_level <= 1.00),
-          CHECK (effectiveness_score IS NULL OR (effectiveness_score >= 0.00 AND effectiveness_score <= 1.00))
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
-      },
-      {
-        name: 'dina_requests',
-        sql: `CREATE TABLE IF NOT EXISTS dina_requests (
-          id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
-          user_id VARCHAR(36),
-          source VARCHAR(50) NOT NULL,
-          target VARCHAR(50) NOT NULL,
-          method VARCHAR(100) NOT NULL,
-          payload JSON NOT NULL,
-          response JSON,
-          status ENUM('pending','processing','completed','failed','timeout') DEFAULT 'pending',
-          priority TINYINT NOT NULL DEFAULT 5,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          started_at TIMESTAMP NULL,
-          completed_at TIMESTAMP NULL,
-          processing_time_ms INT UNSIGNED,
-          error_message TEXT,
-          retry_count TINYINT UNSIGNED DEFAULT 0,
-          security_context JSON,
-          
-          INDEX idx_processing_queue (status, priority, created_at),
-          INDEX idx_performance_analysis (completed_at, processing_time_ms),
-          INDEX idx_user_requests (user_id, created_at),
-          INDEX idx_target_method (target, method),
-          
-          CHECK (priority >= 1 AND priority <= 10),
-          CHECK (retry_count <= 5)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
-      },
-      {
-        name: 'neural_memory',
-        sql: `CREATE TABLE IF NOT EXISTS neural_memory (
-          id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
-          user_id VARCHAR(36),
-          neural_path VARCHAR(255) NOT NULL,
-          memory_type ENUM('episodic','semantic','procedural','working','emotional') NOT NULL,
-          data JSON NOT NULL,
-          embeddings BLOB,
-          confidence_score DECIMAL(5,4) DEFAULT 0.0000,
-          importance_weight DECIMAL(5,4) DEFAULT 0.5000,
-          access_count INT UNSIGNED DEFAULT 0,
-          last_accessed TIMESTAMP NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          expires_at TIMESTAMP NULL,
-          is_active BOOLEAN DEFAULT TRUE,
-          security_classification ENUM('public','restricted','confidential','secret','top_secret') DEFAULT 'public',
-          
-          INDEX idx_neural_path (neural_path, is_active),
-          INDEX idx_memory_type (memory_type, importance_weight),
-          INDEX idx_confidence (confidence_score DESC),
-          INDEX idx_access_pattern (last_accessed, access_count),
-          INDEX idx_expiration (expires_at),
-          
-          CHECK (confidence_score >= 0.0000 AND confidence_score <= 1.0000),
-          CHECK (importance_weight >= 0.0000 AND importance_weight <= 1.0000)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
-      }
+      { name: 'users', sql: this.createTable('users') },
+      { name: 'system_logs', sql: this.createTable('system_logs') },
+      { name: 'system_intelligence', sql: this.createTable('system_intelligence') },
+      { name: 'dina_requests', sql: this.createTable('dina_requests') },
+      { name: 'neural_memory', sql: this.createTable('neural_memory') }
     ];
 
     for (const table of tables) {
       try {
-        console.log(`🏗️ Creating table: ${table.name}`);
-        await this.query(table.sql);
-        console.log(`✅ Table created: ${table.name}`);
+        await table.sql;
       } catch (error) {
         console.error(`❌ Failed to create table ${table.name}:`, error);
         throw error;
@@ -888,12 +914,13 @@ export class DinaDatabase {
     console.error('❌ Query execution failed:', errorInfo);
 
     try {
-      await this.recordIntelligence('database', 'anomaly', {
-        type: 'query_error',
-        ...errorInfo
-      }, 0.9, this.calculateErrorImpact(error));
+      // Only log to system_logs to avoid recursive errors if system_intelligence table is missing
+      await this.query(
+        'INSERT INTO system_logs (level, module, message, metadata) VALUES (?, ?, ?, ?)',
+        ['error', 'database', 'Query execution failed', JSON.stringify(errorInfo)]
+      );
     } catch (logError) {
-      // Silent fail if logging to intelligence system fails
+      console.error('Failed to log query error:', logError);
     }
   }
 
@@ -927,7 +954,14 @@ export class DinaDatabase {
         impactScore
       ]);
     } catch (error) {
-      // Silent fail if intelligence system not ready
+      // Log to system_logs instead of recursive call to avoid issues if table is missing
+      console.error('Failed to record intelligence:', error);
+      await this.query(
+        'INSERT INTO system_logs (level, module, message, metadata) VALUES (?, ?, ?, ?)',
+		['error', 'database', 'Failed to record intelligence', JSON.stringify({ component, type, error: error instanceof Error ? error.message : String(error) })]
+      ).catch(() => {
+        // Silent fail if system_logs is also missing
+      });
     }
   }
 
@@ -1183,6 +1217,26 @@ export class DinaDatabase {
     };
   }
 
+  async optimize(): Promise<void> {
+    console.log('🔧 Performing database optimization...');
+    
+    try {
+      await this.performIntelligentCleanup();
+      await this.updateTableStatistics();
+      
+      // Run performance analysis
+      const report = await this.performanceMetrics.analyzeAndOptimize();
+      if (report.slowQueries > 0) {
+        console.log(`📊 Found ${report.slowQueries} slow queries during optimization`);
+      }
+      
+      console.log('✅ Database optimization completed');
+    } catch (error) {
+      console.error('❌ Database optimization failed:', error);
+      throw error;
+    }
+  }
+
   private async getPerformanceMetrics(): Promise<any> {
     try {
       const recentPerformance = await this.query(`
@@ -1273,7 +1327,6 @@ export class DinaDatabase {
     }
   }
 
-  // Alias for shutdown method (for backward compatibility)
   async close(): Promise<void> {
     await this.shutdown();
   }

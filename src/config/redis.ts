@@ -2,13 +2,14 @@
 // Handles message queuing for high-performance processing
 
 import { createClient, RedisClientType } from 'redis';
-import { DinaUniversalMessage, DinaResponse, QUEUE_NAMES } from '../core/protocol';
+// Ensure DinaUniversalMessage and DinaResponse are imported from the correct protocol file
+import { DinaUniversalMessage, DinaResponse, QUEUE_NAMES } from '../core/protocol'; 
 
 export class DinaRedisManager {
   private client: RedisClientType;
   private publisher: RedisClientType;
   private subscriber: RedisClientType;
-  private isConnected: boolean = false;
+  public isConnected: boolean = false; // Made public for easier external health checks
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
 
@@ -53,6 +54,7 @@ export class DinaRedisManager {
 
     } catch (error) {
       console.error('❌ Redis initialization failed:', error);
+      this.isConnected = false; // Ensure connection status is false on failure
       throw error;
     }
   }
@@ -62,15 +64,20 @@ export class DinaRedisManager {
    */
   async enqueueMessage(message: DinaUniversalMessage): Promise<void> {
     if (!this.isConnected) {
-      throw new Error('Redis not connected');
+      throw new Error('Redis not connected. Please call initialize() first.');
     }
 
     try {
       // Determine which queue based on priority
       const queueName = this.getQueueName(message);
       
-      // Add timestamp for queue time tracking
-      const queuedMessage = {
+      // Add timestamp for queue time tracking (using a new type for the queued message)
+      // This is an internal detail, so we'll use a type assertion or a local interface
+      interface QueuedDinaUniversalMessage extends DinaUniversalMessage {
+        queued_at?: number;
+      }
+
+      const queuedMessage: QueuedDinaUniversalMessage = {
         ...message,
         queued_at: Date.now()
       };
@@ -87,29 +94,34 @@ export class DinaRedisManager {
   }
 
   /**
-   * Get the next message from a specific queue - FIXED for Redis v5
+   * Get the next message from a specific queue
    */
   async dequeueMessage(queueName: string, timeoutSeconds: number = 1): Promise<DinaUniversalMessage | null> {
     if (!this.isConnected) {
-      throw new Error('Redis not connected');
+      throw new Error('Redis not connected. Please call initialize() first.');
     }
 
     try {
       // BLPOP = blocking left pop (waits for message if queue empty)
-      // Fixed syntax for Redis v5
       const result = await this.client.blPop(queueName, timeoutSeconds);
       
       if (!result) {
         return null; // Timeout, no message available
       }
 
+      // Parse message and add queue time to trace
       const message: DinaUniversalMessage = JSON.parse(result.element);
       
-      // Calculate queue time - Fixed type assertion
-      const queueTime = Date.now() - (message as any).queued_at;
-      (message.trace as any).queue_time_ms = queueTime;
+      // Calculate queue time and assign directly to trace.queue_time_ms
+      // No 'any' cast needed if DinaUniversalMessage correctly defines trace.queue_time_ms
+      if (typeof (message as any).queued_at === 'number') {
+        const queueTime = Date.now() - (message as any).queued_at;
+        if (message.trace) { // Ensure trace exists
+          message.trace.queue_time_ms = queueTime;
+        }
+      }
 
-      console.log(`📤 Message dequeued: ${message.id} (waited ${queueTime}ms)`);
+      console.log(`📤 Message dequeued: ${message.id} (waited ${message.trace?.queue_time_ms || 'N/A'}ms)`);
       
       return message;
 
@@ -120,12 +132,13 @@ export class DinaRedisManager {
   }
 
   /**
-   * Process messages from multiple queues with priority ordering - FIXED return type
+   * Process messages from multiple queues with priority ordering
    */
   async processQueues(messageHandler: (message: DinaUniversalMessage) => Promise<DinaResponse>): Promise<void> {
     console.log('🔄 Starting queue processors...');
 
     // Process each queue with different intervals (higher priority = more frequent)
+    // Pass a reference to `this` to ensure `getQueueName` is callable within the class context
     this.processQueue(QUEUE_NAMES.HIGH, messageHandler, 10);    // Check every 10ms
     this.processQueue(QUEUE_NAMES.MEDIUM, messageHandler, 50);  // Check every 50ms
     this.processQueue(QUEUE_NAMES.LOW, messageHandler, 200);    // Check every 200ms
@@ -142,18 +155,26 @@ export class DinaRedisManager {
   ): void {
     
     const processLoop = async () => {
+      // Only process if connected to Redis
+      if (!this.isConnected) {
+        console.warn(`Queue processor (${queueName}) paused due to Redis disconnection.`);
+        setTimeout(processLoop, intervalMs * 5); // Retry connection check less frequently
+        return;
+      }
+
       try {
         const message = await this.dequeueMessage(queueName, 0.1); // 100ms timeout
         
         if (message) {
           // Process the message
           const startTime = performance.now();
-          const response = await messageHandler(message);
+          const response = await messageHandler(message); // Expects DinaResponse
           const processingTime = performance.now() - startTime;
 
-          // Publish response if needed
+          // Publish response if needed (check for `require_ack` on the original message)
           if (message.qos.require_ack) {
-            await this.publishResponse(message.source.instance || 'unknown', response);
+            // Use the connection_id from the original message's source if available, otherwise default
+            await this.publishResponse(message.source.instance || message.source.module, response);
           }
 
           console.log(`✅ Processed ${message.id} in ${processingTime.toFixed(2)}ms`);
@@ -176,8 +197,17 @@ export class DinaRedisManager {
    * Publish a response back to a specific connection
    */
   async publishResponse(connectionId: string, response: DinaResponse): Promise<void> {
+    if (!this.isConnected) {
+        console.warn('Cannot publish response, Redis not connected.');
+        return;
+    }
     const channel = `dina:response:${connectionId}`;
-    await this.publisher.publish(channel, JSON.stringify(response));
+    try {
+        await this.publisher.publish(channel, JSON.stringify(response));
+        console.log(`📢 Published response for request ${response.request_id} to channel ${channel}`);
+    } catch (error) {
+        console.error(`❌ Failed to publish response to ${channel}:`, error);
+    }
   }
 
   /**
@@ -187,6 +217,9 @@ export class DinaRedisManager {
     connectionId: string, 
     responseHandler: (response: DinaResponse) => void
   ): Promise<void> {
+    if (!this.isConnected) {
+        throw new Error('Redis not connected. Cannot subscribe.');
+    }
     const channel = `dina:response:${connectionId}`;
     
     await this.subscriber.subscribe(channel, (message) => {
@@ -197,12 +230,17 @@ export class DinaRedisManager {
         console.error('❌ Failed to parse response:', error);
       }
     });
+    console.log(`👂 Subscribed to response channel: ${channel}`);
   }
 
   /**
    * Get queue statistics for monitoring
    */
   async getQueueStats(): Promise<Record<string, number>> {
+    if (!this.isConnected) {
+        console.warn('Redis not connected. Cannot get queue stats.');
+        return {};
+    }
     const stats: Record<string, number> = {};
     
     for (const [name, queueName] of Object.entries(QUEUE_NAMES)) {
@@ -216,6 +254,10 @@ export class DinaRedisManager {
    * Get system load based on queue depths
    */
   async getSystemLoad(): Promise<number> {
+    if (!this.isConnected) {
+        console.warn('Redis not connected. Cannot get system load.');
+        return 0;
+    }
     const stats = await this.getQueueStats();
     const totalMessages = Object.values(stats).reduce((sum, count) => sum + count, 0);
     
@@ -230,9 +272,14 @@ export class DinaRedisManager {
     console.log('🗂️ Setting up message queues...');
     
     // Clear queues on startup (optional - you might want to preserve queues)
-    for (const queueName of Object.values(QUEUE_NAMES)) {
-      await this.client.del(queueName);
-      console.log(`🗑️ Cleared queue: ${queueName}`);
+    // Added a check to only clear if client is connected
+    if (this.client.isReady) {
+      for (const queueName of Object.values(QUEUE_NAMES)) {
+        await this.client.del(queueName);
+        console.log(`🗑️ Cleared queue: ${queueName}`);
+      }
+    } else {
+      console.warn('Client not ready, skipping queue clearing.');
     }
     
     console.log('✅ Message queues ready');
@@ -243,6 +290,11 @@ export class DinaRedisManager {
    */
   private startQueueMonitoring(): void {
     setInterval(async () => {
+      // Only monitor if connected
+      if (!this.isConnected) {
+        console.warn('Queue monitoring paused due to Redis disconnection.');
+        return;
+      }
       try {
         const stats = await this.getQueueStats();
         const systemLoad = await this.getSystemLoad();
@@ -271,18 +323,29 @@ export class DinaRedisManager {
       client.on('error', (error) => {
         console.error(`❌ Redis ${clientName} error:`, error);
         this.isConnected = false;
+        // Attempt reconnect only if it's a persistent error, not just a network hiccup
+        // The reconnectStrategy handles transient disconnections
+        if (error.message.includes('ECONNREFUSED') || error.message.includes('connect ECONNREFUSED')) {
+             this.attemptReconnect();
+        }
       });
 
       client.on('connect', () => {
         console.log(`🔗 Redis ${clientName} connected`);
         this.reconnectAttempts = 0;
+        this.isConnected = true; // Set connected to true on successful connection
       });
 
-      client.on('disconnect', () => {
-        console.warn(`🔌 Redis ${clientName} disconnected`);
+      client.on('end', () => { // 'end' event indicates client is fully disconnected
+        console.warn(`🔌 Redis ${clientName} connection ended`);
         this.isConnected = false;
-        this.attemptReconnect();
+        // The reconnectStrategy handles reconnects automatically; no need for manual attemptReconnect here
       });
+
+       // 'reconnecting' event might be useful for logging
+       client.on('reconnecting', (status) => {
+         console.log(`🔄 Redis ${clientName} reconnecting... Attempt ${status.attempt} of ${status.total_attempts || 'unlimited'}`);
+       });
     };
 
     handleError(this.client, 'client');
@@ -292,10 +355,14 @@ export class DinaRedisManager {
 
   /**
    * Attempt to reconnect to Redis
+   * This is a fallback in case the internal reconnectStrategy isn't sufficient
    */
   private async attemptReconnect(): Promise<void> {
+    if (this.isConnected) { // Already connected
+        return;
+    }
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('❌ Max reconnection attempts reached');
+      console.error('❌ Max reconnection attempts reached for Redis. Manual intervention may be required.');
       return;
     }
 
@@ -304,11 +371,14 @@ export class DinaRedisManager {
 
     console.log(`🔄 Attempting Redis reconnection ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`);
     
+    // Use setTimeout for a delayed retry
     setTimeout(async () => {
       try {
+        // Attempt to initialize again, which will try to connect all clients
         await this.initialize();
       } catch (error) {
-        console.error('❌ Reconnection failed:', error);
+        console.error('❌ Reconnection attempt failed:', error);
+        this.attemptReconnect(); // Retry if this attempt fails
       }
     }, delay);
   }
@@ -345,7 +415,7 @@ export class DinaRedisManager {
     console.log('🛑 Shutting down Redis connections...');
     
     try {
-      await Promise.all([
+      await Promise.allSettled([ // Use allSettled to ensure all quit attempts are made
         this.client.quit(),
         this.publisher.quit(),
         this.subscriber.quit()

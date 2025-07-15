@@ -192,6 +192,7 @@ export class DinaWebSocketManager {
           priority: messageData.priority || 5 
         },
         qos: {
+          delivery_mode: 'at_least_once',
           timeout_ms: messageData.timeout || 30000,
           retry_count: 0,
           max_retries: 3,
