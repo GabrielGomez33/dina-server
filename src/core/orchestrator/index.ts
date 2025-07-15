@@ -1,6 +1,7 @@
 // DINA Core Orchestrator with Database Integration
 import { DinaMessage, DinaResponse } from '../../types';
 import { database } from '../../config/database/db';
+import {redisManager} from '../../config/redis';
 
 export class DinaCore {
   private initialized: boolean = false;
@@ -16,8 +17,10 @@ export class DinaCore {
       await database.log('info', 'dina-core', 'DINA Core initialization started');
       
       // TODO: Initialize Redis connection
-      console.log('🔴 Redis connection - pending implementation');
-      
+	  console.log('📬 Initializing Redis message queue system...');
+	  await redisManager.initialize();
+	  await database.log('info', 'dina-core', 'Redis message queue system initialized');      
+
       // TODO: Initialize LLM services
       console.log('🤖 Local LLM initialization - pending implementation');
       
@@ -227,6 +230,8 @@ export class DinaCore {
     console.log('🛑 Shutting down DINA Core...');
     await database.log('info', 'dina-core', 'DINA Core shutdown initiated');
     
+	await redisManager.shutdown();
+	
     // Close database connections
     await database.close();
     
@@ -234,4 +239,3 @@ export class DinaCore {
     console.log('✅ DINA Core shutdown complete');
   }
 }
-

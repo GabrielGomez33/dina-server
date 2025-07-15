@@ -1,5 +1,7 @@
 // DINA Enhanced Database System - Complete Working Implementation
 // File: src/config/database/db.ts
+import dotenv from 'dotenv';
+dotenv.config();
 
 import mysql from 'mysql2/promise';
 import crypto from 'crypto';
