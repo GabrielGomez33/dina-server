@@ -5,7 +5,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { IncomingMessage } from 'http';
 import { Server as HTTPSServer } from 'https';
 import { v4 as uuidv4 } from 'uuid';
-import { DinaUniversalMessage, DinaResponse, DinaProtocol, ConnectionState } from '../../core/protocol';
+import { DinaUniversalMessage, DinaResponse, DinaProtocol, ConnectionState, SecurityLevel, createDinaMessage } from '../../core/protocol'; // Import createDinaMessage
 import { redisManager } from '../redis';
 
 export class DinaWebSocketManager {
@@ -72,7 +72,9 @@ export class DinaWebSocketManager {
     // Setup connection events
     this.setupConnectionEvents(ws, connectionId);
 
-    // Subscribe to Redis responses
+    // Subscribe to Redis responses for this specific connection
+    // This is crucial: the WebSocket server needs to listen for responses
+    // that the DinaCore publishes back to specific connection IDs.
     this.subscribeToConnectionResponses(connectionId);
 
     // Send welcome message
@@ -111,25 +113,43 @@ export class DinaWebSocketManager {
 
     try {
       const rawMessage = data.toString();
-      const messageData = JSON.parse(rawMessage);
+      const messageData = JSON.parse(rawMessage); // Client's raw JSON message
 
       // Update activity
       this.updateConnectionActivity(connectionId);
       connectionState.message_count++;
 
-      // Convert to DINA message format
-      let dinaMessage: DinaUniversalMessage;
-      
-      if (DinaProtocol.validateMessage(messageData)) {
-        dinaMessage = messageData;
-      } else {
-        dinaMessage = this.convertToDigmessage(messageData, connectionId);
-      }
-
-      // Add connection context
-      dinaMessage.source.instance = connectionId;
-      dinaMessage.security.session_id = connectionState.session_id;
-      dinaMessage = DinaProtocol.sanitizeMessage(dinaMessage);
+      // Always use createDinaMessage to ensure full DUMP compliance,
+      // and pass the client's messageData as the payload.data.
+      // This ensures 'id', 'timestamp', 'version' etc. are always present.
+      const dinaMessage: DinaUniversalMessage = createDinaMessage({
+        source: { 
+          module: messageData.source || 'websocket', // Use client's source if provided, else default
+          instance: connectionId,
+          version: '1.0.0'
+        },
+        target: { 
+          module: messageData.target || 'core', // Use client's target if provided, else default
+          method: messageData.method || 'process_data', // Use client's method if provided, else default
+          priority: messageData.priority || 5 
+        },
+        qos: {
+          delivery_mode: messageData.qos?.delivery_mode || 'at_least_once',
+          timeout_ms: messageData.qos?.timeout_ms || 30000,
+          retry_count: messageData.qos?.retry_count || 0,
+          max_retries: messageData.qos?.max_retries || 3,
+          require_ack: messageData.qos?.require_ack || false
+        },
+        security: {
+          user_id: messageData.security?.user_id || connectionState.session_id, // Use client's user_id or session_id
+          session_id: connectionState.session_id,
+          clearance: messageData.security?.clearance || SecurityLevel.PUBLIC, // Use client's clearance or default
+          sanitized: false // Will be set to true after sanitization middleware in DinaCore
+        },
+        payload: {
+          data: messageData.payload || messageData // Client's original payload or the whole message if no explicit payload
+        }
+      });
 
       console.log(`📨 Message from ${connectionId}: ${dinaMessage.target.method}`);
 
@@ -143,7 +163,7 @@ export class DinaWebSocketManager {
           id: uuidv4(),
           timestamp: new Date().toISOString(),
           status: 'queued',
-          result: { message: 'Message queued for processing' },
+          payload: { data: { message: 'Message queued for processing' } }, // Use payload.data
           metrics: { processing_time_ms: 0 }
         };
         this.sendResponse(ws, ack);
@@ -153,7 +173,7 @@ export class DinaWebSocketManager {
       console.error(`❌ Error processing message from ${connectionId}:`, error);
       
       const errorResponse: DinaResponse = {
-        request_id: 'unknown',
+        request_id: 'unknown', // Cannot determine request_id if parsing failed
         id: uuidv4(),
         timestamp: new Date().toISOString(),
         status: 'error',
@@ -161,45 +181,12 @@ export class DinaWebSocketManager {
           code: 'MESSAGE_PARSE_ERROR',
           message: error instanceof Error ? error.message : 'Failed to parse message'
         },
+        payload: { data: null }, // Use payload.data
         metrics: { processing_time_ms: 0 }
       };
       
       this.sendResponse(ws, errorResponse);
     }
-  }
-
-  /**
-   * Convert simple message to DINA format
-   */
-  private convertToDigmessage(messageData: any, connectionId: string): DinaUniversalMessage {
-    const method = messageData.method || messageData.action || 'chat';
-    const data = messageData.data || messageData.message || messageData.prompt || messageData;
-    
-    return DinaProtocol.createMessage(
-      'websocket',
-      'core',
-      method,
-      data,
-      {
-        source: { 
-          module: 'websocket',
-          instance: connectionId,
-          version: '1.0.0'
-        },
-        target: { 
-          module: 'core',
-          method: method,
-          priority: messageData.priority || 5 
-        },
-        qos: {
-          delivery_mode: 'at_least_once',
-          timeout_ms: messageData.timeout || 30000,
-          retry_count: 0,
-          max_retries: 3,
-          require_ack: messageData.require_ack || false
-        }
-      }
-    );
   }
 
   /**
@@ -237,11 +224,13 @@ export class DinaWebSocketManager {
       id: uuidv4(),
       timestamp: new Date().toISOString(),
       status: 'success',
-      result: {
-        message: 'Welcome to DINA Phase 1!',
-        connection_id: connectionId,
-        capabilities: ['ping', 'echo', 'chat', 'system_stats'],
-        system_status: 'online'
+      payload: { // Use payload.data
+        data: {
+          message: 'Welcome to DINA Phase 1!',
+          connection_id: connectionId,
+          capabilities: ['ping', 'echo', 'chat', 'system_stats'],
+          system_status: 'online'
+        }
       },
       metrics: { processing_time_ms: 0 }
     };
@@ -260,6 +249,10 @@ export class DinaWebSocketManager {
     
     console.log(`🔌 Connection closed: ${connectionId} (${code}) after ${duration}ms`);
     this.cleanupConnection(connectionId);
+    // Unsubscribe from Redis responses when connection closes
+    redisManager.unsubscribeFromResponses(connectionId).catch(err => {
+      console.error(`❌ Error unsubscribing from Redis for ${connectionId}:`, err);
+    });
   }
 
   /**

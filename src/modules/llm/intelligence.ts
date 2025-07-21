@@ -79,8 +79,10 @@ export class QueryComplexityAnalyzer {
    */
   async analyzeQuery(query: string, context?: any): Promise<ComplexityScore> {
     const queryHash = this.hashQuery(query);
+    console.log(`🧠 Analyzing query complexity for hash: ${queryHash}`);
     const cached = this.patternCache.get(queryHash);
     if (cached) {
+      console.log(`⚡ Cache hit for query complexity: ${queryHash}`);
       return { ...cached, confidence: cached.confidence * 0.95 };
     }
 
@@ -111,6 +113,7 @@ export class QueryComplexityAnalyzer {
     this.patternCache.set(queryHash, result);
     await this.recordLearningData(query, result, performance.now() - startTime);
 
+    console.log(`✅ Query complexity analyzed: level=${result.level}, model=${result.recommendedModel}`);
     return result;
   }
 
@@ -330,6 +333,13 @@ export class QueryComplexityAnalyzer {
     return Buffer.from(query.toLowerCase().replace(/\s+/g, ' ').trim()).toString('base64').substring(0, 16);
   }
 
+  public getQueryHash(query: string): string {
+    console.log(`🧠 Generating query hash for: "${query.substring(0, 50)}..."`);
+    const hash = this.hashQuery(query);
+    console.log(`✅ Generated query hash: ${hash}`);
+    return hash;
+  }
+
   private async recordLearningData(query: string, result: ComplexityScore, analysisTime: number): Promise<void> {
     try {
       await database.recordIntelligence(
@@ -347,8 +357,9 @@ export class QueryComplexityAnalyzer {
         result.confidence,
         result.level
       );
+      console.log(`📊 Recorded learning data for query hash: ${this.hashQuery(query)}`);
     } catch (error) {
-      // Silent fail - don't break the main flow
+      console.error(`❌ Failed to record learning data: ${error}`);
     }
   }
 }
@@ -375,6 +386,7 @@ export class ContextMemorySystem {
   ): Promise<void> {
     try {
       const contextKey = `${userId}_${conversationId}`;
+      console.log(`📚 Storing context for key: ${contextKey}`);
       let context = this.conversationCache.get(contextKey) || {
         interactions: [],
         totalTokens: 0,
@@ -406,23 +418,27 @@ export class ContextMemorySystem {
         },
         confidence_score: 0.9
       });
-
+      console.log(`✅ Context stored for key: ${contextKey}`);
     } catch (error) {
-      console.error('Failed to store context:', error);
+      console.error(`❌ Failed to store context: ${error}`);
     }
   }
 
+// REPLACE the getContext method in intelligence.ts ContextMemorySystem class with this:
+  
   async getContext(userId: string, conversationId: string): Promise<any> {
     const contextKey = `${userId}_${conversationId}`;
+    console.log(`📚 Retrieving context for key: ${contextKey}`);
     
     let context = this.conversationCache.get(contextKey);
     
     if (!context) {
       try {
+        // FIXED: Pass memory type as array (the function expects an array parameter)
         const memories = await database.getUserMemory(
           userId, 
           `conversation_${conversationId}`, 
-          'episodic'
+          ['episodic'] // Pass as array, not single string
         );
         
         if (memories.length > 0) {
@@ -435,9 +451,10 @@ export class ContextMemorySystem {
           };
           
           this.conversationCache.set(contextKey, context);
+          console.log(`✅ Loaded context from database for key: ${contextKey}`);
         }
       } catch (error) {
-        console.error('Failed to load context from database:', error);
+        console.error(`❌ Failed to load context from database: ${error}`);
       }
     }
     
@@ -449,8 +466,10 @@ export class ContextMemorySystem {
   }
 
   async getRelevantContext(userId: string, conversationId: string, query: string): Promise<string[]> {
+    console.log(`📚 Getting relevant context for userId=${userId}, conversationId=${conversationId}`);
     const context = await this.getContext(userId, conversationId);
     if (!context || context.interactions.length === 0) {
+      console.log(`ℹ️ No context available for key: ${userId}_${conversationId}`);
       return [];
     }
 
@@ -467,10 +486,12 @@ export class ContextMemorySystem {
       .slice(0, 3) // Limit to top 3 relevant interactions
       .map((item: any) => `Query: ${item.interaction.query}\nResponse: ${item.interaction.response}`);
 
+    console.log(`✅ Found ${relevantInteractions.length} relevant context interactions`);
     return relevantInteractions;
   }
 
   async updateContext(userId: string, conversationId: string, query: string, response: string): Promise<void> {
+    console.log(`📚 Updating context for userId=${userId}, conversationId=${conversationId}`);
     await this.storeContext(userId, conversationId, {
       query,
       response,
@@ -481,6 +502,7 @@ export class ContextMemorySystem {
   }
 
   private async compressContext(context: any): Promise<any> {
+    console.log(`🗜️ Compressing context: totalTokens=${context.totalTokens}`);
     const recentInteractions = context.interactions.slice(-3);
     const olderInteractions = context.interactions.slice(0, -3);
     
@@ -490,13 +512,15 @@ export class ContextMemorySystem {
       sum + (interaction.estimatedTokens || 0), 0);
     const summaryTokens = this.estimateTokens(summary);
     
-    return {
+    const compressedContext = {
       interactions: recentInteractions,
       summary: context.summary ? `${context.summary}\n\n${summary}` : summary,
       totalTokens: recentTokens + summaryTokens,
       lastUpdated: context.lastUpdated,
       compressionCount: (context.compressionCount || 0) + 1
     };
+    console.log(`✅ Context compressed: new totalTokens=${compressedContext.totalTokens}`);
+    return compressedContext;
   }
 
   private summarizeInteractions(interactions: any[]): string {
@@ -519,21 +543,29 @@ export class ContextMemorySystem {
       }
     });
     
-    return `Previous conversation covered: ${Array.from(topics).slice(0, 5).join(', ')}. Key points: ${keyPoints.slice(0, 3).join('; ')}.`;
+    const summary = `Previous conversation covered: ${Array.from(topics).slice(0, 5).join(', ')}. Key points: ${keyPoints.slice(0, 3).join('; ')}.`;
+    console.log(`📝 Generated context summary: "${summary.substring(0, 50)}..."`);
+    return summary;
   }
 
   private estimateTokens(text: string): number {
-    return Math.ceil(text.split(/\s+/).length * 1.3);
+    const tokens = Math.ceil(text.split(/\s+/).length * 1.3);
+    console.log(`📏 Estimated tokens for text: ${tokens}`);
+    return tokens;
   }
 
   async cleanupOldContexts(): Promise<void> {
     const cutoffTime = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    console.log(`🧹 Cleaning up old contexts before ${cutoffTime}`);
     
+    let removed = 0;
     for (const [key, context] of this.conversationCache.entries()) {
       if (context.lastUpdated < cutoffTime) {
         this.conversationCache.delete(key);
+        removed++;
       }
     }
+    console.log(`✅ Cleaned up ${removed} old contexts`);
   }
 
   getContextStats(): any {
@@ -546,13 +578,15 @@ export class ContextMemorySystem {
       totalInteractions += context.interactions.length;
     }
     
-    return {
+    const stats = {
       activeContexts: totalContexts,
       totalTokensInMemory: totalTokens,
       totalInteractions,
       averageTokensPerContext: totalContexts > 0 ? Math.round(totalTokens / totalContexts) : 0,
       memoryUsage: `${(totalTokens * 4 / 1024 / 1024).toFixed(2)} MB`
     };
+    console.log(`📊 Context stats: ${JSON.stringify(stats)}`);
+    return stats;
   }
 }
 
@@ -573,6 +607,7 @@ export class LLMPerformanceOptimizer {
     success: boolean;
     quality?: number;
   }): Promise<void> {
+    console.log(`📈 Recording performance for query hash: ${data.queryHash}`);
     const history = this.performanceHistory.get(data.queryHash) || [];
     
     history.push({
@@ -587,11 +622,13 @@ export class LLMPerformanceOptimizer {
     
     this.performanceHistory.set(data.queryHash, history);
     await this.analyzePerformancePattern(data);
+    console.log(`✅ Performance recorded for query hash: ${data.queryHash}`);
   }
 
   private async analyzePerformancePattern(data: any): Promise<void> {
     try {
       const modelEfficiency = this.calculateModelEfficiency(data);
+      console.log(`📊 Model efficiency for ${data.model}: ${modelEfficiency}`);
       
       if (modelEfficiency < 0.7) {
         await database.recordIntelligence(
@@ -607,9 +644,10 @@ export class LLMPerformanceOptimizer {
           0.8,
           3.0
         );
+        console.log(`⚠️ Recorded optimization recommendation for query hash: ${data.queryHash}`);
       }
     } catch (error) {
-      // Silent fail
+      console.error(`❌ Failed to analyze performance pattern: ${error}`);
     }
   }
 
@@ -653,6 +691,7 @@ export class LLMPerformanceOptimizer {
   }
 
   async getOptimizationRecommendations(): Promise<any[]> {
+    console.log('📈 Fetching optimization recommendations...');
     try {
       const recentOptimizations = await database.query(`
         SELECT 
@@ -668,13 +707,16 @@ export class LLMPerformanceOptimizer {
         LIMIT 10
       `);
 
-      return recentOptimizations.map((opt: any) => ({
+      const recommendations = recentOptimizations.map((opt: any) => ({
         ...JSON.parse(opt.analysis_data),
         confidence: opt.confidence_level,
         impact: opt.impact_score,
         timestamp: opt.created_at
       }));
+      console.log(`✅ Retrieved ${recommendations.length} optimization recommendations`);
+      return recommendations;
     } catch (error) {
+      console.error(`❌ Failed to fetch optimization recommendations: ${error}`);
       return [];
     }
   }
@@ -696,13 +738,15 @@ export class LLMPerformanceOptimizer {
       }
     }
 
-    return {
+    const stats = {
       totalQueries,
       averageProcessingTime: totalQueries > 0 ? Math.round(totalTime / totalQueries) : 0,
       averagePredictionAccuracy: totalQueries > 0 ? (totalAccuracy / totalQueries * 100).toFixed(1) + '%' : '0%',
       modelUsageDistribution: Object.fromEntries(modelUsage),
       trackingUniqueQueries: this.performanceHistory.size
     };
+    console.log(`📊 Performance stats: ${JSON.stringify(stats)}`);
+    return stats;
   }
 }
 
@@ -716,20 +760,27 @@ export class LLMIntelligenceEngine {
 
   constructor() {
     this.queryAnalyzer = new QueryComplexityAnalyzer();
+    console.log('🚀 Initializing LLMIntelligenceEngine');
   }
 
   async analyzeQuery(query: string, context?: any): Promise<ComplexityScore> {
-    return await this.queryAnalyzer.analyzeQuery(query, context);
+    console.log(`🧠 Analyzing query: "${query.substring(0, 50)}..."`);
+    const result = await this.queryAnalyzer.analyzeQuery(query, context);
+    console.log(`✅ Query analysis complete: level=${result.level}, model=${result.recommendedModel}`);
+    return result;
   }
 
   async assessConfidence(response: string): Promise<number> {
+    console.log(`🧠 Assessing confidence for response: "${response.substring(0, 50)}..."`);
     // Simple confidence assessment based on response length and keywords
     const lengthScore = Math.min(response.length / 1000, 1.0);
     const qualityKeywords = ['confident', 'certain', 'accurate', 'reliable'];
     const keywordScore = qualityKeywords.reduce((score, keyword) => 
       score + (response.toLowerCase().includes(keyword) ? 0.2 : 0), 0);
     
-    return Math.min(0.95, 0.5 + lengthScore + keywordScore);
+    const confidence = Math.min(0.95, 0.5 + lengthScore + keywordScore);
+    console.log(`✅ Confidence assessed: ${confidence}`);
+    return confidence;
   }
 
   async processIntelligentRequest(
@@ -742,6 +793,7 @@ export class LLMIntelligenceEngine {
     processingStrategy: any;
     estimatedMetrics: any;
   }> {
+    console.log(`🚀 Processing intelligent request: "${query.substring(0, 50)}..."`);
     const startTime = performance.now();
     
     const complexity = await this.queryAnalyzer.analyzeQuery(query, context);
@@ -759,7 +811,7 @@ export class LLMIntelligenceEngine {
     const processingTime = performance.now() - startTime;
     
     await this.recordIntelligenceDecision({
-      query_hash: this.hashQuery(query),
+      query_hash: this.getQueryHash(query),
       complexity,
       modelSelection,
       processingStrategy,
@@ -767,6 +819,7 @@ export class LLMIntelligenceEngine {
       intelligenceProcessingTime: processingTime
     });
     
+    console.log(`✅ Intelligent request processed: model=${modelSelection.model}, processingTime=${processingTime.toFixed(2)}ms`);
     return {
       complexity,
       modelSelection,
@@ -776,7 +829,7 @@ export class LLMIntelligenceEngine {
   }
 
   private determineProcessingStrategy(complexity: ComplexityScore, modelSelection: any): any {
-    return {
+    const strategy = {
       useStreaming: complexity.level > 5,
       enableCache: complexity.level <= 5,
       timeoutMs: Math.max(5000, complexity.estimatedTokens * 50),
@@ -789,10 +842,12 @@ export class LLMIntelligenceEngine {
         unloadOtherModels: complexity.level > 8
       }
     };
+    console.log(`📋 Processing strategy: ${JSON.stringify(strategy)}`);
+    return strategy;
   }
 
   private estimatePerformanceMetrics(complexity: ComplexityScore, modelSelection: any): any {
-    return {
+    const metrics = {
       estimatedResponseTime: complexity.processingTime,
       estimatedTokens: complexity.estimatedTokens,
       estimatedMemoryUsage: this.getModelMemoryUsage(modelSelection.model),
@@ -800,6 +855,8 @@ export class LLMIntelligenceEngine {
       resourceIntensity: this.calculateResourceIntensity(complexity, modelSelection),
       qualityScore: this.estimateResponseQuality(complexity, modelSelection)
     };
+    console.log(`📊 Estimated metrics: ${JSON.stringify(metrics)}`);
+    return metrics;
   }
 
   private getModelMemoryUsage(model: ModelType): number {
@@ -841,14 +898,13 @@ export class LLMIntelligenceEngine {
   }
 
   private determineFallbackModel(primaryModel: ModelType): ModelType {
-    switch (primaryModel) {
-      case ModelType.LLAMA2_70B:
-        return ModelType.CODELLAMA_34B;
-      case ModelType.CODELLAMA_34B:
-        return ModelType.MISTRAL_7B;
-      default:
-        return ModelType.MISTRAL_7B;
-    }
+    const fallback = {
+      [ModelType.LLAMA2_70B]: ModelType.CODELLAMA_34B,
+      [ModelType.CODELLAMA_34B]: ModelType.MISTRAL_7B,
+      [ModelType.MISTRAL_7B]: ModelType.MISTRAL_7B
+    }[primaryModel];
+    console.log(`📋 Fallback model for ${primaryModel}: ${fallback}`);
+    return fallback;
   }
 
   private async recordIntelligenceDecision(data: any): Promise<void> {
@@ -860,8 +916,9 @@ export class LLMIntelligenceEngine {
         data.complexity.confidence,
         data.complexity.level
       );
+      console.log(`📊 Recorded intelligence decision for query hash: ${data.query_hash}`);
     } catch (error) {
-      // Silent fail
+      console.error(`❌ Failed to record intelligence decision: ${error}`);
     }
   }
 
@@ -869,7 +926,15 @@ export class LLMIntelligenceEngine {
     return Buffer.from(query.toLowerCase().replace(/\s+/g, ' ').trim()).toString('base64').substring(0, 16);
   }
 
+  public getQueryHash(query: string): string {
+    console.log(`🧠 Generating query hash for: "${query.substring(0, 50)}..."`);
+    const hash = this.hashQuery(query);
+    console.log(`✅ Generated query hash: ${hash}`);
+    return hash;
+  }
+
   async getIntelligenceStats(): Promise<any> {
+    console.log('📊 Fetching intelligence stats...');
     try {
       const stats = await database.query(`
         SELECT 
@@ -885,13 +950,16 @@ export class LLMIntelligenceEngine {
         LIMIT 7
       `);
 
-      return {
+      const intelligenceStats = {
         recentDecisions: stats,
         engineStatus: 'active',
         learningEnabled: true,
         cacheSize: this.queryAnalyzer['patternCache'].size
       };
+      console.log(`✅ Intelligence stats: ${JSON.stringify(intelligenceStats)}`);
+      return intelligenceStats;
     } catch (error) {
+      console.error(`❌ Failed to fetch intelligence stats: ${error}`);
       return {
         engineStatus: 'active',
         learningEnabled: true,
@@ -916,4 +984,4 @@ setInterval(() => {
 }, 60 * 60 * 1000); // Every hour
 
 console.log('🧠 DINA LLM Intelligence Engine initialized successfully');
-console.log('✅ Multi-model intelligence system ready for Phase 2 integration');
+

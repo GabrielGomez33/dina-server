@@ -1,6 +1,8 @@
 // DINA Universal Message Protocol (DUMP) - Enhanced Version
 // This is the standard format ALL DINA modules use to communicate
 
+import { v4 as uuidv4 } from 'uuid'; // Import uuidv4 for generating unique IDs
+
 // Core message interface that every DINA module understands
 export interface DinaUniversalMessage {
   // === IDENTITY SECTION ===
@@ -75,7 +77,13 @@ export interface DinaUniversalMessage {
 export type MessagePriority = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
 
 // Security clearance levels
-export type SecurityLevel = 'public' | 'restricted' | 'confidential';
+export enum SecurityLevel {
+  PUBLIC = 'public',
+  RESTRICTED = 'restricted',
+  CONFIDENTIAL = 'confidential',
+  SECRET = 'secret',
+  TOP_SECRET = 'top_secret'
+}
 
 // Standard response format (Enhanced)
 // THIS IS THE DEFINITIVE DinaResponse INTERFACE
@@ -84,7 +92,10 @@ export interface DinaResponse {
   id: string;
   timestamp: string;
   status: 'success' | 'error' | 'processing' | 'queued';
-  result?: any; // The actual response data (consider a more specific type if possible)
+  payload: { // Changed from 'result' to 'payload' to be consistent with DinaUniversalMessage
+    data: any;
+    metadata?: any;
+  };
   error?: {
     code: string;
     message: string;
@@ -98,15 +109,8 @@ export interface DinaResponse {
   };
 }
 
-// Response wrapper for DUMP protocol
-export interface DinaResponseWrapper {
-  response: DinaResponse; // This now explicitly uses the above DinaResponse
-  trace: {
-    route: string[];
-    total_processing_time: number;
-    hops: number;
-  };
-}
+// Response wrapper for DUMP protocol (Removed as DinaResponse is now top-level)
+// export interface DinaResponseWrapper { ... }
 
 // Quality of Service levels
 export interface QoSLevel {
@@ -161,15 +165,16 @@ export function createDinaMessage(options: {
     method: string; // Ensure method is always provided here for clarity and safety
     priority?: number;
   };
-  payload: any;
+  payload: any; // This is the data part of the payload
   qos?: Partial<QoSLevel>;
   security?: {
     user_id?: string;
     session_id?: string;
     clearance?: SecurityLevel;
+    sanitized?: boolean; // Added sanitized to the options for creation
   };
 }): DinaUniversalMessage {
-  const messageId = generateMessageId();
+  const messageId = uuidv4(); // Use uuidv4 for message ID
   const timestamp = new Date().toISOString();
   const now = Date.now();
 
@@ -195,13 +200,13 @@ export function createDinaMessage(options: {
     security: {
       user_id: options.security?.user_id,
       session_id: options.security?.session_id,
-      clearance: options.security?.clearance || 'public',
-      sanitized: false // Default to unsanitized, sanitization is a separate step
+      clearance: options.security?.clearance || SecurityLevel.PUBLIC, // Use enum
+      sanitized: options.security?.sanitized ?? false // Default to false if not provided
     },
     
     // Data
     payload: {
-      data: options.payload,
+      data: options.payload, // Use options.payload directly as data
       metadata: {
         size_bytes: JSON.stringify(options.payload).length
       }
@@ -214,7 +219,7 @@ export function createDinaMessage(options: {
       retry_count: options.qos?.retry_count || 0,           // Default retry count
       max_retries: options.qos?.max_retries || 3,           // Default max retries
       require_ack: options.qos?.require_ack ?? true,        // Default require_ack
-      priority_boost: options.qos?.priority_boost || false  // Default priority boost
+      priority_boost: options.qos?.priority_boost ?? false  // Default priority boost
     },
     
     // Tracing
@@ -231,22 +236,32 @@ export function createDinaMessage(options: {
 }
 
 /**
- * Create a DUMP-compliant response wrapper
+ * Create a DUMP-compliant response (now directly DinaResponse)
  */
-export function createDinaResponse(
-  originalMessage: DinaUniversalMessage,
-  response: DinaResponse // This parameter now strictly expects the common DinaResponse
-): DinaResponseWrapper {
+export function createDinaResponse(options: {
+  request_id: string; // Original message ID this responds to
+  status: 'success' | 'error' | 'processing' | 'queued';
+  payload: any; // The actual response data
+  metrics: {
+    processing_time_ms: number;
+    queue_time_ms?: number;
+    model_used?: string;
+    tokens_generated?: number;
+  };
+  error?: {
+    code: string;
+    message: string;
+    details?: any;
+  };
+}): DinaResponse {
   return {
-    response: {
-      ...response,
-      request_id: originalMessage.id // Ensure request_id is always tied to the original message
-    },
-    trace: {
-      route: [...originalMessage.trace.route],
-      total_processing_time: Date.now() - originalMessage.trace.created_at,
-      hops: originalMessage.trace.route.length
-    }
+    id: uuidv4(), // Generate a new ID for the response
+    timestamp: new Date().toISOString(),
+    request_id: options.request_id,
+    status: options.status,
+    payload: { data: options.payload }, // Wrap data in a payload object
+    metrics: options.metrics,
+    error: options.error
   };
 }
 
@@ -299,10 +314,10 @@ export class DinaProtocol {
     
     return {
       request_id: originalMessage.id,
-      id: generateMessageId(),
+      id: uuidv4(), // Generate a new ID for the response
       timestamp: new Date().toISOString(),
       status: error ? 'error' : 'success',
-      result: error ? undefined : result,
+      payload: { data: error ? undefined : result }, // Wrap data in payload
       error: error ? {
         code: error.code || 'UNKNOWN_ERROR',
         message: error.message || 'An unknown error occurred',
@@ -319,65 +334,57 @@ export class DinaProtocol {
    * Validates that a message follows the DUMP protocol
    */
   static validateMessage(message: any): message is DinaUniversalMessage {
-    // Check required fields exist
-    const required = ['id', 'timestamp', 'version', 'source', 'target', 'security', 'payload', 'qos', 'trace', 'method'];
-    
-    for (const field of required) {
-      if (!(field in message)) {
-        console.warn(`Invalid DINA message: missing field '${field}'`);
+      const required = ['id', 'timestamp', 'version', 'source', 'target', 'security', 'payload', 'qos', 'trace', 'method'];
+      for (const field of required) {
+        if (!(field in message)) {
+          console.warn(`Invalid DINA message: missing field '${field}'`);
+          return false;
+        }
+      }
+      if (!message.source || !message.source.module || !message.source.version) {
+        console.warn('Invalid DINA message: missing source details');
         return false;
       }
-    }
-    
-    // Check nested required fields
-    if (!message.source || !message.source.module || !message.source.version) {
-      console.warn('Invalid DINA message: missing source details');
-      return false;
-    }
-    if (!message.target || !message.target.module || !message.target.method || typeof message.target.priority === 'undefined') {
-      console.warn('Invalid DINA message: missing target details');
-      return false;
-    }
-    if (!message.security || typeof message.security.sanitized === 'undefined') { // clearance is checked below
-      console.warn('Invalid DINA message: missing security details');
-      return false;
-    }
-    if (!message.payload || typeof message.payload.data === 'undefined') { // metadata is optional
-      console.warn('Invalid DINA message: missing payload data');
-      return false;
-    }
-    if (!message.qos || typeof message.qos.delivery_mode === 'undefined' || typeof message.qos.timeout_ms === 'undefined' || typeof message.qos.retry_count === 'undefined' || typeof message.qos.max_retries === 'undefined' || typeof message.qos.require_ack === 'undefined') {
-      console.warn('Invalid DINA message: missing QoS details');
-      return false;
-    }
-    if (!message.trace || typeof message.trace.created_at === 'undefined' || !message.trace.route || !message.trace.request_chain || typeof message.trace.performance_target_ms === 'undefined') {
-      console.warn('Invalid DINA message: missing trace details');
-      return false;
-    }
-
-    // Check priority is valid
-    if (message.target.priority < 1 || message.target.priority > 10) {
-      console.warn(`Invalid priority: ${message.target.priority}`);
-      return false;
-    }
-    
-    // Check security level is valid
-    const validSecurity: SecurityLevel[] = ['public', 'restricted', 'confidential'];
-    if (!validSecurity.includes(message.security.clearance)) {
-      console.warn(`Invalid security clearance: ${message.security.clearance}`);
-      return false;
-    }
-    
-    // Check QoS delivery mode
-    const validDeliveryModes: ('at_most_once' | 'at_least_once' | 'exactly_once')[] = ['at_most_once', 'at_least_once', 'exactly_once'];
-    if (!validDeliveryModes.includes(message.qos.delivery_mode)) {
-      console.warn(`Invalid delivery mode: ${message.qos.delivery_mode}`);
-      return false;
-    }
-    
-    return true;
-  }
-  
+      if (!message.target || !message.target.module || !message.target.method || typeof message.target.priority === 'undefined') {
+        console.warn('Invalid DINA message: missing target details');
+        return false;
+      }
+      if (!message.security || typeof message.security.sanitized === 'undefined') {
+        console.warn('Invalid DINA message: missing security details');
+        return false;
+      }
+      if (!message.payload || typeof message.payload.data === 'undefined') {
+        console.warn('Invalid DINA message: missing payload data');
+        return false;
+      }
+      if (message.target.module === 'llm' && message.target.method === 'llm_generate' && !message.payload.data?.query) {
+        console.warn('Invalid DINA message: missing query for llm_generate');
+        return false;
+      }
+      if (!message.qos || typeof message.qos.delivery_mode === 'undefined' || typeof message.qos.timeout_ms === 'undefined' || typeof message.qos.retry_count === 'undefined' || typeof message.qos.max_retries === 'undefined' || typeof message.qos.require_ack === 'undefined') {
+        console.warn('Invalid DINA message: missing QoS details');
+        return false;
+      }
+      if (!message.trace || typeof message.trace.created_at === 'undefined' || !message.trace.route || !message.trace.request_chain || typeof message.trace.performance_target_ms === 'undefined') {
+        console.warn('Invalid DINA message: missing trace details');
+        return false;
+      }
+      if (message.target.priority < 1 || message.target.priority > 10) {
+        console.warn(`Invalid priority: ${message.target.priority}`);
+        return false;
+      }
+      const validSecurity: SecurityLevel[] = Object.values(SecurityLevel);
+      if (!validSecurity.includes(message.security.clearance)) {
+        console.warn(`Invalid security clearance: ${message.security.clearance}`);
+        return false;
+      }
+      const validDeliveryModes: ('at_most_once' | 'at_least_once' | 'exactly_once')[] = ['at_most_once', 'at_least_once', 'exactly_once'];
+      if (!validDeliveryModes.includes(message.qos.delivery_mode)) {
+        console.warn(`Invalid delivery mode: ${message.qos.delivery_mode}`);
+        return false;
+      }
+      return true;
+    }  
   /**
    * Sanitizes input data to remove potentially dangerous content
    */
@@ -445,13 +452,6 @@ export class DinaProtocol {
 // ================================
 
 /**
- * Generate unique message ID
- */
-function generateMessageId(): string {
-  return `dina_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`; // Adjusted length for uniqueness
-}
-
-/**
  * Calculate message priority based on content and urgency
  */
 export function calculateMessagePriority(
@@ -507,3 +507,4 @@ export const DELIVERY_MODES = {
 
 console.log('📡 DINA Universal Message Protocol (DUMP) v2.0 loaded');
 console.log('✅ Enhanced with LLM support and enterprise messaging capabilities');
+

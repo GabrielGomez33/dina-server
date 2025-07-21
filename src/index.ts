@@ -1,5 +1,5 @@
-// DINA Server - Phase 1: Redis + WebSocket Foundation
-// REPLACE your existing src/index.ts with this file
+// DINA Server - Phase 1: Redis + WebSocket Foundation (Enhanced for API Routes)
+// File: src/index.ts
 
 import https from 'https';
 import fs from 'fs';
@@ -7,6 +7,8 @@ import express from 'express';
 import dotenv from 'dotenv';
 import { DinaCore } from './core/orchestrator';
 import { DinaWebSocketManager } from './config/wss';
+import { setupAPI } from './api/routes'; // Import the setupAPI function
+import { database } from './config/database/db'; // Import the database instance
 
 // Load environment variables FIRST
 dotenv.config();
@@ -25,210 +27,147 @@ class DinaServer {
   private websocketManager: DinaWebSocketManager | null = null;
   private dinaCore: DinaCore;
   private isRunning: boolean = false;
-  private startTime: Date = new Date();
+  private startTime: Date = new Date(); // Moved initialization here
 
   constructor() {
     console.log('🚀 Initializing DINA Phase 1: Foundation Services');
     
     this.validateEnvironment();
-    this.expressApp = this.setupExpress();
-    this.dinaCore = new DinaCore();
+    this.expressApp = express(); // Initialize express app here
+    this.dinaCore = new DinaCore(); // Initialize DinaCore
     this.setupGracefulShutdown();
   }
 
   /**
-   * Validate required environment variables
+   * Validates critical environment variables.
    */
   private validateEnvironment(): void {
-    const requiredEnvs = ['TUGRRPRIV', 'TUGRRCERT', 'TUGRRINTERCERT'];
-
-    for (const key of requiredEnvs) {
-      if (!process.env[key]) {
-        console.error(`❌ Missing required environment variable: ${key}`);
-        console.error(`💡 Please add ${key} to your .env file`);
-        process.exit(1);
-      }
+    if (!process.env.TUGRRPRIV || !process.env.TUGRRCERT || !process.env.TUGRRINTERCERT) {
+      console.warn('⚠️ SSL certificates environment variables (TUGRRPRIV, TUGRRCERT, TUGRRINTERCERT) are not fully set. HTTPS server might not start.');
+      // In production, this should be a critical error.
     }
-    
+    // No specific validation for REDIS_URL or DINA_PORT as they have defaults.
     console.log('✅ Environment variables validated');
   }
 
   /**
-   * Setup Express application
+   * Configures the Express application.
    */
-  private setupExpress(): express.Application {
-    const app = express();
-    
-    // Middleware
-    app.use(express.json({ limit: '10mb' }));
-    app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-    
-    // Request logging
-    app.use((req, res, next) => {
-      console.log(`[HTTP] ${req.method} ${req.url} from ${req.ip}`);
-      next();
+  private configureExpress(): void {
+    // Basic Express setup
+    this.expressApp.disable('x-powered-by'); // Security best practice
+    this.expressApp.use(express.json({ limit: '1mb' })); // For parsing application/json
+    this.expressApp.use(express.urlencoded({ extended: true, limit: '1mb' })); // For parsing application/x-www-form-urlencoded
+
+    // Root endpoint
+    this.expressApp.get('/', (req, res) => {
+      res.status(200).send('DINA Server is running. Access API at /api/v1 or WebSocket at /dina/ws');
     });
-    
-    // DINA API routes
-    this.setupAPIRoutes(app);
-    
-    return app;
+
+    // Setup API routes
+    // The Apache config specifies /dina as the base path for DINA.
+    // So, the API path will be /dina/api/v1
+    setupAPI(this.expressApp, this.dinaCore, '/dina');
+
+    console.log('✅ Express application configured');
   }
 
   /**
-   * Setup API routes
+   * Loads SSL certificates.
+   * @returns An object containing key, cert, and ca.
    */
-  private setupAPIRoutes(app: express.Application): void {
-    // Root DINA endpoint
-    app.get('/dina', (req, res) => {
-      res.json({
-        name: 'DINA Server',
-        description: 'Distributed Intelligence Neural Architect',
-        version: '1.0.0',
-        phase: 1,
-        capabilities: ['websocket', 'redis_queues', 'ssl'],
-        endpoints: {
-          health: '/dina/health',
-          stats: '/dina/stats',
-          websocket: `wss://${req.get('host')}/dina/ws`
-        },
-        status: this.isRunning ? 'running' : 'starting',
-        timestamp: new Date().toISOString()
-      });
-    });
-
-    // Health check
-    app.get('/dina/health', (req, res) => {
-      const coreStatus = this.dinaCore.getModuleStatus();
-      const wsStats = this.websocketManager?.getStats() || {};
-      
-      res.json({
-        status: 'healthy',
-        phase: 1,
-        services: {
-          core: coreStatus['dina-core'] === 'active' ? 'online' : 'offline',
-          websocket: this.websocketManager ? 'online' : 'offline',
-          redis: coreStatus['redis'] === 'active' ? 'online' : 'offline',
-          ssl: 'enabled'
-        },
-        uptime_ms: Date.now() - this.startTime.getTime(),
-        connections: wsStats.active_connections || 0,
-        timestamp: new Date().toISOString()
-      });
-    });
-
-    // System statistics
-    app.get('/dina/stats', async (req, res) => {
-      try {
-        const coreStatus = this.dinaCore.getModuleStatus();
-        const wsStats = this.websocketManager?.getStats() || {};
-        
-        res.json({
-          server: {
-            uptime_ms: Date.now() - this.startTime.getTime(),
-            memory_usage: process.memoryUsage(),
-            node_version: process.version,
-            phase: 1,
-            ssl_enabled: true
-          },
-          core: coreStatus,
-          connections: wsStats,
-          timestamp: new Date().toISOString()
-        });
-      } catch (error) {
-        res.status(500).json({ 
-          error: 'Failed to get system stats',
-          message: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    });
-
-    // Error handler
-    app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-      console.error('❌ HTTP Error:', err);
-      res.status(500).json({
-        error: 'Internal server error',
-        message: err.message,
-        timestamp: new Date().toISOString()
-      });
-    });
-  }
-
-  /**
-   * Load SSL credentials
-   */
-  private loadSSLCredentials(): https.ServerOptions {
+  private loadSSLCertificates(): { key: Buffer; cert: Buffer; ca: Buffer } {
+    console.log('🔐 Loading SSL certificates...');
     try {
-      const PRIV = fs.readFileSync(process.env.TUGRRPRIV!, 'utf8');
-      const CERT = fs.readFileSync(process.env.TUGRRCERT!, 'utf8');
-      const INTERCERT = fs.readFileSync(process.env.TUGRRINTERCERT!, 'utf8');
-      
+      const privateKey = fs.readFileSync(process.env.TUGRRPRIV!, 'utf8');
+      const certificate = fs.readFileSync(process.env.TUGRRCERT!, 'utf8');
+      const ca = fs.readFileSync(process.env.TUGRRINTERCERT!, 'utf8');
       console.log('✅ SSL certificates loaded successfully');
-      
-      return {
-        key: PRIV,
-        cert: CERT,
-        ca: INTERCERT,
-      };
+      return { key: Buffer.from(privateKey), cert: Buffer.from(certificate), ca: Buffer.from(ca) }; // Convert to Buffer
     } catch (error) {
       console.error('❌ Failed to load SSL certificates:', error);
-      throw error;
+      throw new Error('SSL certificate loading failed. Ensure TUGRRPRIV, TUGRRCERT, TUGRRINTERCERT are correctly set and files exist.');
     }
   }
 
   /**
-   * Start the DINA server
+   * Starts the HTTPS server.
+   */
+  private startHttpServer(): void {
+    console.log('🌐 Creating HTTPS server...');
+    const credentials = this.loadSSLCertificates();
+    this.httpsServer = https.createServer(credentials, this.expressApp);
+
+    const port = parseInt(process.env.DINA_PORT || '8445', 10);
+    this.httpsServer.listen(port, () => {
+      this.isRunning = true;
+      console.log(`🔗 HTTPS Server: https://localhost:${port}/dina`);
+    });
+
+    this.httpsServer.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${port} is already in use. Please free up the port or change DINA_PORT.`);
+      } else {
+        console.error('❌ HTTPS Server error:', error);
+      }
+      process.exit(1); // Exit on critical server error
+    });
+  }
+
+  /**
+   * Starts the WebSocket server.
+   */
+  private startWebSocketServer(): void {
+    if (!this.httpsServer) {
+      throw new Error('HTTPS server must be started before WebSocket server.');
+    }
+    console.log('🔌 Setting up secure WebSocket...');
+    this.websocketManager = new DinaWebSocketManager(this.httpsServer);
+    console.log('🔌 Initializing DINA WebSocket server...'); // Log from wss/index.ts
+    console.log('✅ DINA WebSocket server (WSS) ready on /dina/ws');
+  }
+
+  /**
+   * Starts all DINA services.
    */
   async start(): Promise<void> {
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('Phase 1 Features:');
+    console.log('  ✅ SSL/TLS Security');
+    console.log('  ✅ Secure WebSocket (WSS)'); 
+    console.log('  ✅ Redis Message Queues (4 Priority Levels)');
+    console.log('  ✅ Universal Message Protocol (DUMP)');
+    console.log('  ✅ Connection Management (10,000+ users)');
+    console.log('  ✅ Performance Monitoring');
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    console.log('⚡ Starting DINA services...');
+
     try {
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log('Phase 1 Features:');
-      console.log('  ✅ SSL/TLS Security');
-      console.log('  ✅ Secure WebSocket (WSS)'); 
-      console.log('  ✅ Redis Message Queues (4 Priority Levels)');
-      console.log('  ✅ Universal Message Protocol (DUMP)');
-      console.log('  ✅ Connection Management (10,000+ users)');
-      console.log('  ✅ Performance Monitoring');
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log('⚡ Starting DINA services...');
-      
-      // Step 1: Initialize DINA Core (includes Redis)
-      console.log('🧠 Initializing DINA Core...');
+      // Initialize DINA Core first, which initializes DB, Redis, LLM Manager
       await this.dinaCore.initialize();
-      
-      // Step 2: Load SSL certificates
-      console.log('🔐 Loading SSL certificates...');
-      const credentials = this.loadSSLCredentials();
-      
-      // Step 3: Create HTTPS server
-      console.log('🌐 Creating HTTPS server...');
-      this.httpsServer = https.createServer(credentials, this.expressApp);
-      
-      // Step 4: Setup WebSocket on HTTPS server
-      console.log('🔌 Setting up secure WebSocket...');
-      this.websocketManager = new DinaWebSocketManager(this.httpsServer);
-      
-      // Step 5: Start listening
-      const port = parseInt(process.env.DINA_PORT || '8443');
-      this.httpsServer.listen(port, () => {
-        this.isRunning = true;
-        this.startTime = new Date();
-        
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('✅ DINA Phase 1 services online!');
-        console.log(`🔗 HTTPS Server: https://localhost:${port}/dina`);
-        console.log(`🔌 WebSocket Server: wss://localhost:${port}/dina/ws`);
-        console.log('📊 System ready for 10,000+ concurrent users');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('🎯 Phase 1 Complete! Ready for Phase 2: Multi-Model LLM Integration');
-        console.log('');
-      });
-      
+
+      this.configureExpress(); // Configure Express AFTER DinaCore is initialized
+      this.startHttpServer();
+      this.startWebSocketServer();
+
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      console.log('✅ DINA Phase 1 services online!');
+      console.log(`🔗 HTTPS Server: https://localhost:${process.env.DINA_PORT || '8445'}/dina`);
+      console.log(`🔌 WebSocket Server: wss://localhost:${process.env.DINA_PORT || '8445'}/dina/ws`);
+      console.log('📊 System ready for 10,000+ concurrent users');
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+      await database.log('info', 'dina-server', 'DINA server started successfully');
+
     } catch (error) {
-      console.error('❌ Failed to start DINA:', error);
+      console.error('❌ Failed to start DINA Phase 1 services:', error);
+      await database.log('critical', 'dina-server', 'DINA server failed to start', { error: (error as Error).message });
       process.exit(1);
     }
   }
+
+  /**
+   * Sets up graceful shutdown handlers.
+   */
   private setupGracefulShutdown(): void {
     const shutdown = async (signal: string) => {
       console.log(`\n🛑 Received ${signal}, shutting down DINA gracefully...`);
@@ -246,7 +185,7 @@ class DinaServer {
           this.httpsServer.close();
         }
         
-        // Shutdown DINA Core (includes Redis)
+        // Shutdown DINA Core (includes Redis, LLM Manager, Database)
         await this.dinaCore.shutdown();
         
         console.log('✅ DINA shutdown complete');
@@ -288,5 +227,6 @@ process.on('unhandledRejection', (reason, promise) => {
   process.exit(1);
 });
 
-// Start the DINA Phase 1 application
+// Start the DINA server
 startDinaPhase1();
+
