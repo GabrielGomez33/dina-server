@@ -23,9 +23,15 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
 
   // Apply security middleware to core API routes that require authentication
   // The /models endpoint is now public.
-  apiRouter.use(['/models/:modelId/chat', '/models/:modelId/embeddings', '/dina'], authenticate);
-  apiRouter.use(['/models/:modelId/chat', '/models/:modelId/embeddings', '/dina'], rateLimit);
-  apiRouter.use(['/models/:modelId/chat', '/models/:modelId/embeddings', '/dina'], sanitizeInput);
+  //apiRouter.use(['/models/:modelId/chat', '/models/:modelId/embeddings', '/dina'], authenticate);
+  //apiRouter.use(['/models/:modelId/chat', '/models/:modelId/embeddings', '/dina'], rateLimit);
+  //apiRouter.use(['/models/:modelId/chat', '/models/:modelId/embeddings', '/dina'], sanitizeInput);
+
+  // Apply security middleware to core API routes that require authentication
+  // Make embeddings endpoint public for testing
+  apiRouter.use(['/models/:modelId/chat', '/dina'], authenticate);
+  apiRouter.use(['/models/:modelId/chat', '/dina'], rateLimit);
+  apiRouter.use(['/models/:modelId/chat', '/dina'], sanitizeInput);
   
   // Health check endpoint (specific to API)
   apiRouter.get('/health', (req: Request, res: Response) => {
