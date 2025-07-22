@@ -189,27 +189,40 @@ export class DinaRedisManager {
   }
 
   async retrieveMessage(queueName: string): Promise<DinaUniversalMessage | null> {
-    if (!this.isConnected) {
-      console.warn('Redis not connected. Cannot retrieve message.');
-      return null;
-    }
+  // ADD THIS CHECK at the beginning:
+  if (!this.isConnected) {
+    // Don't log here to avoid spam - let the caller handle it
+    return null;
+  }
+  
+  try {
+    // BLPOP = blocking left pop (waits for message if queue empty)
+    // Using 0.1s timeout for non-blocking behavior in intervals
     const result = await this.client.blPop(queueName, 0.1); 
     
     if (!result) {
-      return null;
+      return null; // Timeout, no message available
     }
 
+    // Parse message and add queue time to trace
     const message: DinaUniversalMessage & { queued_at?: number } = JSON.parse(result.element);
     
     if (typeof message.queued_at === 'number' && message.trace) {
-      message.trace.queue_time_ms = Date.now() - message.queued_at;
+      const queueTime = Date.now() - message.queued_at;
+      message.trace.queue_time_ms = queueTime;
     }
 
     console.log(`📤 Message dequeued: ${message.id} (waited ${message.trace?.queue_time_ms || 'N/A'}ms)`);
     
     return message;
+    
+  } catch (error) {
+    console.error(`❌ Error retrieving message from ${queueName}:`, error);
+    // Mark as disconnected if Redis error
+    this.isConnected = false;
+    return null;
   }
-
+}
   private getQueueName(message: DinaUniversalMessage): string {
     const priority = message.target.priority;
     
@@ -270,63 +283,116 @@ export class DinaRedisManager {
     console.log(`🚫 Unsubscribed from response channel: ${channel}`);
   }
 
-  async getQueueStats(): Promise<{ totalMessages: number; high: number; medium: number; low: number; batch: number }> {
-    if (!this.isConnected) {
-      console.warn('Redis not connected. Cannot get queue stats.');
-      return { totalMessages: 0, high: 0, medium: 0, low: 0, batch: 0 };
-    }
-    try {
-      const [high, medium, low, batch] = await Promise.all([
-        this.client.lLen(QUEUE_NAMES.HIGH),
-        this.client.lLen(QUEUE_NAMES.MEDIUM),
-        this.client.lLen(QUEUE_NAMES.LOW),
-        this.client.lLen(QUEUE_NAMES.BATCH),
-      ]);
-      return {
-        totalMessages: high + medium + low + batch,
-        high,
-        medium,
-        low,
-        batch,
-      };
-    } catch (error) {
-      console.error('❌ Failed to get queue stats:', error);
-      return { totalMessages: 0, high: 0, medium: 0, low: 0, batch: 0 };
-    }
+async getQueueStats(): Promise<{ [key: string]: number }> {
+  // ADD THIS CHECK:
+  if (!this.isConnected) {
+    // Return empty stats silently when Redis is disconnected
+    return {
+      [QUEUE_NAMES.HIGH]: 0,
+      [QUEUE_NAMES.MEDIUM]: 0,
+      [QUEUE_NAMES.LOW]: 0,
+      [QUEUE_NAMES.BATCH]: 0
+    };
   }
+  
+  try {
+    const stats: { [key: string]: number } = {};
+    
+    for (const queueName of Object.values(QUEUE_NAMES)) {
+      const count = await this.client.lLen(queueName);
+      stats[queueName] = count;
+    }
+    
+    return stats;
+  } catch (error) {
+    console.error('❌ Error getting queue stats:', error);
+    // Mark as disconnected if Redis error
+    this.isConnected = false;
+    return {
+      [QUEUE_NAMES.HIGH]: 0,
+      [QUEUE_NAMES.MEDIUM]: 0,
+      [QUEUE_NAMES.LOW]: 0,
+      [QUEUE_NAMES.BATCH]: 0
+    };
+  }
+}
 
-  async setExactCachedResponse(key: string, data: any, ttlSeconds: number): Promise<void> {
-    if (!this.isConnected) {
-      console.warn('Redis not connected. Cannot set cached response.');
-      return;
-    }
-    try {
-      const serializedData = JSON.stringify(data);
-      await this.client.setEx(`cache:${key}`, ttlSeconds, serializedData);
-      console.log(`💾 Redis cache: Set key 'cache:${key}' with TTL ${ttlSeconds}s`);
-    } catch (error) {
-      console.error(`❌ Failed to set Redis cache for key '${key}':`, error);
+async setExactCachedResponse(key: string, data: any, ttlSeconds: number): Promise<void> {
+  console.log(`🔍 REDIS DEBUG: Starting cache set for key: cache:${key}`);
+  
+  if (!this.isConnected) {
+    console.warn('Redis not connected. Cannot set cached response.');
+    return;
+  }
+  
+  try {
+    const serializedData = JSON.stringify(data);
+    console.log(`🔍 REDIS DEBUG: Data serialized, length: ${serializedData.length}`);
+    
+    // Add timeout to Redis set as well
+    const setPromise = this.client.setEx(`cache:${key}`, ttlSeconds, serializedData);
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      setTimeout(() => reject(new Error('Redis set timeout')), 5000);
+    });
+    
+    await Promise.race([setPromise, timeoutPromise]);
+    
+    console.log(`💾 Redis cache: Set key 'cache:${key}' with TTL ${ttlSeconds}s`);
+  } catch (error) {
+    console.error(`❌ Failed to set Redis cache for key '${key}':`, error);
+    
+    if (error instanceof Error && error.message === 'Redis set timeout') {
+      console.error(`🚨 REDIS SET TIMEOUT: Marking Redis as disconnected`);
+      this.isConnected = false;
     }
   }
+}
 
-  async getExactCachedResponse(key: string): Promise<any | null> {
-    if (!this.isConnected) {
-      console.warn('Redis not connected. Cannot get cached response.');
-      return null;
-    }
-    try {
-      const serializedData = await this.client.get(`cache:${key}`);
-      if (serializedData) {
-        console.log(`⚡ Redis cache: Hit for key 'cache:${key}'`);
-        return JSON.parse(serializedData);
-      }
-      console.log(`⏳ Redis cache: Miss for key 'cache:${key}'`);
-      return null;
-    } catch (error) {
-      console.error(`❌ Failed to get Redis cache for key '${key}':`, error);
-      return null;
-    }
+async getExactCachedResponse(key: string): Promise<any | null> {
+  console.log(`🔍 REDIS DEBUG: Starting cache get for key: cache:${key}`);
+  
+  if (!this.isConnected) {
+    console.warn('REDIS DEBUG: Redis not connected, returning null');
+    return null;
   }
+  
+  try {
+    console.log(`🔍 REDIS DEBUG: About to call this.client.get() - THIS IS WHERE IT HANGS`);
+    
+    // Add timeout to the Redis call
+    const getPromise = this.client.get(`cache:${key}`);
+    const timeoutPromise = new Promise<null>((_, reject) => {
+      setTimeout(() => reject(new Error('Redis get timeout')), 5000); // 5 second timeout
+    });
+    
+    console.log(`🔍 REDIS DEBUG: Created promises, about to race them`);
+    
+    const serializedData = await Promise.race([getPromise, timeoutPromise]);
+    
+    console.log(`🔍 REDIS DEBUG: Redis get completed, data length: ${serializedData?.length || 0}`);
+    
+    if (serializedData) {
+      console.log(`⚡ Redis cache: Hit for key 'cache:${key}'`);
+      const parsed = JSON.parse(serializedData);
+      console.log(`🔍 REDIS DEBUG: JSON parse successful`);
+      return parsed;
+    }
+    
+    console.log(`⏳ Redis cache: Miss for key 'cache:${key}'`);
+    return null;
+    
+  } catch (error) {
+    console.error(`❌ REDIS ERROR for key '${key}':`, error);
+    
+    // If Redis is hanging, mark as disconnected and return null
+    if (error instanceof Error && error.message === 'Redis get timeout') {
+      console.error(`🚨 REDIS TIMEOUT: Marking Redis as disconnected`);
+      this.isConnected = false;
+    }
+    
+    return null;
+  }
+}
 
   async clearAllExactCache(): Promise<void> {
     if (!this.isConnected) {

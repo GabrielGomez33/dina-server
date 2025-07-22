@@ -57,24 +57,97 @@ export class OllamaClient {
     }
   }
 
-  async generate(prompt: string, model: string): Promise<OllamaResponse> {
-    console.log(`📡 Sending request to Ollama for model ${model}, prompt: "${prompt.substring(0, 50)}..."`);
-    try {
-      const response = await fetch(`${this.baseUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, prompt }),
-        signal: AbortSignal.timeout(this.timeoutMs)
-      });
-      // FIXED: Proper type casting
-      const data = await response.json() as OllamaResponse;
-      console.log(`✅ Received Ollama response for model ${model}: "${data.response.substring(0, 50)}..."`);
-      return data;
-    } catch (error) {
-      console.error(`❌ Ollama generate error: ${error}`);
-      throw error;
+async generate(prompt: string, model: string): Promise<OllamaResponse> {
+  console.log(`📡 Sending request to Ollama for model ${model}, prompt: "${prompt.substring(0, 50)}..."`);
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.error(`⏰ Ollama generate timeout for model ${model}`);
+      controller.abort();
+    }, 60000); // 60 second timeout
+
+    const response = await fetch(`${this.baseUrl}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        model, 
+        prompt,
+        stream: false,  // This actually still returns streaming format!
+        options: {
+          num_predict: 500,
+          temperature: 0.7
+        }
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Ollama HTTP ${response.status}: ${response.statusText} - ${errorText}`);
     }
+    
+    // THE FIX: Ollama returns NDJSON (newline-delimited JSON) even with stream:false
+    const responseText = await response.text();
+    console.log(`🔍 OLLAMA DEBUG: Raw response length: ${responseText.length}, first 100 chars: ${responseText.substring(0, 100)}`);
+    
+    // Parse NDJSON: Split by newlines and parse each JSON object
+    const lines = responseText.trim().split('\n').filter(line => line.trim());
+    console.log(`🔍 OLLAMA DEBUG: Found ${lines.length} JSON lines`);
+    
+    if (lines.length === 0) {
+      throw new Error('Empty response from Ollama');
+    }
+    
+    // Ollama sends multiple JSON objects, the last one has done:true and the complete response
+    let finalResponse: any = null;
+    let accumulatedResponse = '';
+    
+    for (const line of lines) {
+      try {
+        const jsonObj = JSON.parse(line);
+        console.log(`🔍 OLLAMA DEBUG: Parsed JSON with keys: ${Object.keys(jsonObj).join(', ')}`);
+        
+        // Accumulate response parts
+        if (jsonObj.response) {
+          accumulatedResponse += jsonObj.response;
+        }
+        
+        // The final object has done:true
+        if (jsonObj.done === true) {
+          finalResponse = jsonObj;
+          // Set the complete accumulated response
+          finalResponse.response = accumulatedResponse;
+          break;
+        }
+      } catch (parseError) {
+        console.error(`🔍 OLLAMA DEBUG: Failed to parse JSON line: ${line.substring(0, 100)}`);
+        console.error(`🔍 OLLAMA DEBUG: Parse error: ${parseError}`);
+      }
+    }
+    
+    if (!finalResponse) {
+      // Fallback: use the last valid JSON object
+      const lastLine = lines[lines.length - 1];
+      finalResponse = JSON.parse(lastLine);
+      finalResponse.response = accumulatedResponse || finalResponse.response;
+    }
+    
+    console.log(`✅ Received Ollama response for model ${model}: "${(finalResponse.response || '').substring(0, 50)}..."`);
+    console.log(`🔍 OLLAMA DEBUG: Final response keys: ${Object.keys(finalResponse).join(', ')}`);
+    
+    return finalResponse as OllamaResponse;
+    
+  } catch (error) {
+    console.error(`❌ Ollama generate error: ${error}`);
+    //console.error(`❌ Error type: ${error.constructor.name}`);
+    if (error instanceof SyntaxError) {
+      console.error(`❌ This is a JSON parsing error - Ollama is returning malformed JSON`);
+    }
+    throw error;
   }
+}
 
   async embed(input: string, model: string = 'mxbai-embed-large'): Promise<OllamaEmbeddingResponse> {
     console.log(`📡 Generating embedding for input: "${input.substring(0, 50)}..." using ${model}`);
@@ -298,17 +371,30 @@ export class DinaLLMManager {
     return response;
   }
 
-  // FIXED: Made public
-  public async embed(text: string, options?: any): Promise<LLMResponse> {
-    console.log(`🔢 Generating embedding for text: "${text.substring(0, 50)}..."`);
-    const startTime = performance.now();
+public async embed(text: string, options?: any): Promise<LLMResponse> {
+  console.log(`🔢 MANAGER: Starting embed method for text: "${text.substring(0, 50)}..."`);
+  const startTime = performance.now();
+  
+  try {
+    // ADD DEBUG LOG:
+    console.log(`🔍 MANAGER DEBUG: About to call intelligence engine analyzeQuery`);
     
     const complexity = await llmIntelligenceEngine.analyzeQuery(text, options?.context);
+    
+    // ADD DEBUG LOG:
+    console.log(`🔍 MANAGER DEBUG: Intelligence analysis complete: level=${complexity.level}`);
+    
     const model = options?.model_preference && this.availableModels.includes(options.model_preference)
       ? options.model_preference
       : 'mxbai-embed-large';
     
+    // ADD DEBUG LOG:
+    console.log(`🔍 MANAGER DEBUG: Model selected: ${model}, about to call ollama.embed()`);
+    
     const embeddingResponse = await this.ollama.embed(text, model);
+    
+    // ADD DEBUG LOG:
+    console.log(`🔍 MANAGER DEBUG: Ollama embed complete, building response object`);
     
     const response: LLMResponse = {
       id: `llm-embed-${uuidv4()}`,
@@ -324,7 +410,7 @@ export class DinaLLMManager {
         queueTime: 0,
         modelLoadTime: 0
       },
-      confidence: 0.9, // Fixed confidence for embeddings
+      confidence: 0.9,
       metadata: {
         complexity,
         context_used: !!options?.context,
@@ -332,9 +418,14 @@ export class DinaLLMManager {
       }
     };
     
-    console.log(`✅ Embedding response: id=${response.id}, model=${model}, dimensions=${embeddingResponse.embeddings.length}`);
+    console.log(`✅ MANAGER: Embedding response built: id=${response.id}, model=${model}, dimensions=${embeddingResponse.embeddings.length}`);
     return response;
+    
+  } catch (error) {
+    console.error(`❌ MANAGER ERROR in embed method: ${error}`);
+    throw error;
   }
+}
 
   // FIXED: Added missing methods
   public async getSystemStatus(): Promise<Record<string, any>> {
@@ -409,3 +500,4 @@ export class DinaLLMManager {
     return capabilities;
   }
 }
+

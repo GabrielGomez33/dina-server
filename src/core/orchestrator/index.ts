@@ -71,7 +71,8 @@ export class DinaCore {
   private queueProcessors: Map<string, NodeJS.Timeout> = new Map();
   private llmManager: DinaLLMManager;
   private startTime: Date = new Date();
-
+  private lastRedisWarning: number = 0;
+  
   constructor() {
     console.log('🧠 Initializing DINA Core...');
     this.llmManager = new DinaLLMManager();
@@ -131,71 +132,87 @@ export class DinaCore {
     }
   }
 
-  private startQueueProcessors(): void {
-    const queueIntervals: { [key: string]: number } = {
-      [QUEUE_NAMES.HIGH]: 10,
-      [QUEUE_NAMES.MEDIUM]: 50,
-      [QUEUE_NAMES.LOW]: 200,
-      [QUEUE_NAMES.BATCH]: 1000
-    };
+private startQueueProcessors(): void {
+  const queueIntervals: { [key: string]: number } = {
+    [QUEUE_NAMES.HIGH]: 10,
+    [QUEUE_NAMES.MEDIUM]: 50,
+    [QUEUE_NAMES.LOW]: 200,
+    [QUEUE_NAMES.BATCH]: 1000
+  };
 
-    for (const queueName of Object.keys(queueIntervals)) {
-      const interval = queueIntervals[queueName];
-      console.log(`🔄 Queue processor started: ${queueName} (${interval}ms interval)`);
-      const processor = setInterval(async () => {
-        if (!this.initialized) return;
-        const message = await redisManager.retrieveMessage(queueName);
-        if (message) {
-          console.log(`📥 Processing message from ${queueName} queue: ${message.target.method}`);
-          try {
-            const response = await this.handleIncomingMessage(message);
-            console.log(`📤 Generated response for message ${message.id}:`, JSON.stringify(response, null, 2));
-            if (message.source.instance) {
-              console.log(`📤 Publishing response to channel dina:response:${message.source.instance}`);
-              await redisManager.publishResponse(message.source.instance, response);
-              console.log(`✅ Response published for message ${message.id}`);
-            } else {
-              console.warn(`⚠️ No source.instance for message ${message.id}, cannot publish response`);
-            }
-            await database.updateRequestStatus(
-              message.id,
-              'completed',
-              response.payload.data,
-              response.metrics?.processing_time_ms
-            );
-          } catch (error) {
-            console.error(`❌ Error in DUMP message processing for ${message.target.method}:`, error);
-            await database.updateRequestStatus(
-              message.id,
-              'failed',
-              { status: 'error', message: (error as Error).message },
-              undefined,
-              (error as Error).message
-            );
-            if (message.source.instance) {
-              const errorResponse: DinaResponse = createDinaResponse({
-                request_id: message.id,
-                status: 'error',
-                payload: { message: (error as Error).message, code: 'PROCESSING_ERROR' },
-                metrics: { processing_time_ms: 0 },
-                error: {
-                  code: 'PROCESSING_ERROR',
-                  message: (error as Error).message,
-                  details: { error: true }
-                }
-              });
-              console.log(`📤 Publishing error response for message ${message.id}:`, JSON.stringify(errorResponse, null, 2));
-              await redisManager.publishResponse(message.source.instance, errorResponse);
-              console.log(`✅ Error response published for message ${message.id}`);
-            } else {
-              console.warn(`⚠️ No source.instance for error response of message ${message.id}, cannot publish`);
-            }
+  for (const queueName of Object.keys(queueIntervals)) {
+    const interval = queueIntervals[queueName];
+    console.log(`🔄 Queue processor started: ${queueName} (${interval}ms interval)`);
+    const processor = setInterval(async () => {
+      // ADD THIS CHECK: Don't process if not initialized or Redis not connected
+      if (!this.initialized) {
+        return;
+      }
+      
+      // ADD THIS CHECK: Skip processing if Redis is not connected
+      if (!redisManager.isConnected) {
+        // Don't spam logs - only log once per minute when Redis is down
+        const now = Date.now();
+        if (!this.lastRedisWarning || (now - this.lastRedisWarning) > 60000) {
+          console.warn(`⚠️ Skipping queue processing for ${queueName} - Redis disconnected`);
+          this.lastRedisWarning = now;
+        }
+        return;
+      }
+      
+      const message = await redisManager.retrieveMessage(queueName);
+      if (message) {
+        console.log(`📥 Processing message from ${queueName} queue: ${message.target.method}`);
+        try {
+          const response = await this.handleIncomingMessage(message);
+          console.log(`📤 Generated response for message ${message.id}:`, JSON.stringify(response, null, 2));
+          if (message.source.instance) {
+            console.log(`📤 Publishing response to channel dina:response:${message.source.instance}`);
+            await redisManager.publishResponse(message.source.instance, response);
+            console.log(`✅ Response published for message ${message.id}`);
+          } else {
+            console.warn(`⚠️ No source.instance for message ${message.id}, cannot publish response`);
+          }
+          await database.updateRequestStatus(
+            message.id,
+            'completed',
+            response.payload.data,
+            response.metrics?.processing_time_ms
+          );
+        } catch (error) {
+          console.error(`❌ Error in DUMP message processing for ${message.target.method}:`, error);
+          await database.updateRequestStatus(
+            message.id,
+            'failed',
+            { status: 'error', message: (error as Error).message },
+            undefined,
+            (error as Error).message
+          );
+          if (message.source.instance) {
+            const errorResponse: DinaResponse = createDinaResponse({
+              request_id: message.id,
+              status: 'error',
+              payload: { message: (error as Error).message, code: 'PROCESSING_ERROR' },
+              metrics: { processing_time_ms: 0 },
+              error: {
+                code: 'PROCESSING_ERROR',
+                message: (error as Error).message,
+                details: { error: true }
+              }
+            });
+            console.log(`📤 Publishing error response for message ${message.id}:`, JSON.stringify(errorResponse, null, 2));
+            await redisManager.publishResponse(message.source.instance, errorResponse);
+            console.log(`✅ Error response published for message ${message.id}`);
+          } else {
+            console.warn(`⚠️ No source.instance for error response of message ${message.id}, cannot publish`);
           }
         }
-      }, interval);
-      this.queueProcessors.set(queueName, processor);
-    }
+      }
+    }, interval);
+    this.queueProcessors.set(queueName, processor);
   }
+}
+
 
   public async handleIncomingMessage(message: DinaUniversalMessage): Promise<DinaResponse> {
     const startTime = performance.now();
@@ -276,86 +293,99 @@ export class DinaCore {
     }
   }
 
-  private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
-    const { method } = message.target;
-    const { query, text, code_request, analysis_query, options } = message.payload.data;
-    console.log(`🤖 Processing LLM request: ${method}, query: ${query || text || code_request || analysis_query}`);
+private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
+  const { method } = message.target;
+  const { query, text, code_request, analysis_query, options } = message.payload.data;
+  console.log(`🤖 Processing LLM request: ${method}, query: ${query || text || code_request || analysis_query}`);
 
-    if (method === 'llm_generate' && !query) {
-      throw new Error('Missing required field: query for llm_generate');
-    }
-    if (method === 'llm_code' && !code_request) {
-      throw new Error('Missing required field: code_request for llm_code');
-    }
-    if (method === 'llm_analysis' && !analysis_query) {
-      throw new Error('Missing required field: analysis_query for llm_analysis');
-    }
-    if (method === 'llm_embed' && !text) {
-      throw new Error('Missing required field: text for llm_embed');
-    }
+  // ADD THIS DEBUG LOG:
+  console.log(`🔍 DEBUG: About to switch on method: ${method}`);
 
-    const cacheKey = `${method}:${message.security.user_id || 'default'}:${message.security.session_id || 'default'}:${query || text || code_request || analysis_query}`;
-    const cachedResponse = await redisManager.getExactCachedResponse(cacheKey);
-
-    if (cachedResponse) {
-      console.log(`⚡ Serving cached LLM response for method: ${method}, key: ${cacheKey}`);
-      return { ...cachedResponse, metadata: { ...cachedResponse.metadata, cached: true } };
-    }
-
-    let llmResponse: any;
-    try {
-      switch (method) {
-        case 'llm_generate':
-          console.log(`🚀 Calling llmManager.generate with query: ${query}, model: ${options?.model_preference}`);
-          // Fixed: Use simplified method signature
-          llmResponse = await this.llmManager.generate(query!, {
-            user_id: message.security.user_id,
-            conversation_id: options?.conversation_id,
-            model_preference: options?.model_preference as ModelType,
-            streaming: options?.streaming,
-            max_tokens: options?.max_tokens,
-            temperature: options?.temperature,
-            include_context: options?.include_context
-          });
-          console.log(`✅ LLM generate response received:`, JSON.stringify(llmResponse, null, 2));
-          break;
-        case 'llm_code':
-          console.log(`🚀 Calling llmManager.generateCode with code_request: ${code_request}`);
-          // Fixed: Use simplified method signature
-          llmResponse = await this.llmManager.generateCode(code_request!, options);
-          console.log(`✅ LLM code response received:`, JSON.stringify(llmResponse, null, 2));
-          break;
-        case 'llm_analysis':
-          console.log(`🚀 Calling llmManager.analyze with analysis_query: ${analysis_query}`);
-          // Fixed: Use simplified method signature
-          llmResponse = await this.llmManager.analyze(analysis_query!, options);
-          console.log(`✅ LLM analysis response received:`, JSON.stringify(llmResponse, null, 2));
-          break;
-        case 'llm_embed':
-          console.log(`🚀 Calling llmManager.embed with text: ${text}`);
-          llmResponse = await this.llmManager.embed(text!, {
-            user_id: message.security.user_id,
-            conversation_id: options?.conversation_id,
-            model_preference: options?.model_preference
-          });
-          console.log(`✅ LLM embed response received:`, JSON.stringify(llmResponse, null, 2));
-          break;
-        default:
-          throw new Error(`Unknown LLM method: ${method}`);
-      }
-
-      if (llmResponse && llmResponse.status !== 'error') {
-        const ttlSeconds = 3600;
-        await redisManager.setExactCachedResponse(cacheKey, llmResponse, ttlSeconds);
-        console.log(`💾 Cached LLM response for method: ${method}, key: ${cacheKey}`);
-      }
-    } catch (error) {
-      console.error(`❌ LLM processing failed for ${method}:`, error);
-      throw error;
-    }
-
-    return llmResponse;
+  if (method === 'llm_generate' && !query) {
+    throw new Error('Missing required field: query for llm_generate');
   }
+  if (method === 'llm_code' && !code_request) {
+    throw new Error('Missing required field: code_request for llm_code');
+  }
+  if (method === 'llm_analysis' && !analysis_query) {
+    throw new Error('Missing required field: analysis_query for llm_analysis');
+  }
+  if (method === 'llm_embed' && !text) {
+    throw new Error('Missing required field: text for llm_embed');
+  }
+
+  // ADD THIS DEBUG LOG:
+  console.log(`🔍 DEBUG: Validation passed, creating cache key...`);
+
+  const cacheKey = `${method}:${message.security.user_id || 'default'}:${message.security.session_id || 'default'}:${query || text || code_request || analysis_query}`;
+  
+  // ADD THIS DEBUG LOG:
+  console.log(`🔍 DEBUG: Cache key created: ${cacheKey}`);
+  
+  const cachedResponse = await redisManager.getExactCachedResponse(cacheKey);
+
+  // ADD THIS DEBUG LOG:
+  console.log(`🔍 DEBUG: Cache check complete, cached: ${!!cachedResponse}`);
+
+  if (cachedResponse) {
+    console.log(`⚡ Serving cached LLM response for method: ${method}, key: ${cacheKey}`);
+    return { ...cachedResponse, metadata: { ...cachedResponse.metadata, cached: true } };
+  }
+
+  let llmResponse: any;
+  try {
+    // ADD THIS DEBUG LOG:
+    console.log(`🔍 DEBUG: About to switch to method handler: ${method}`);
+    
+    switch (method) {
+      case 'llm_generate':
+        console.log(`🔍 DEBUG: Entering llm_generate case`);
+        console.log(`🚀 Calling llmManager.generate with query: ${query}, model: ${options?.model_preference}`);
+        llmResponse = await this.llmManager.generate(query!, {
+          user_id: message.security.user_id,
+          conversation_id: options?.conversation_id,
+          model_preference: options?.model_preference as ModelType,
+          streaming: options?.streaming,
+          max_tokens: options?.max_tokens,
+          temperature: options?.temperature,
+          include_context: options?.include_context
+        });
+        console.log(`🔍 DEBUG: llm_generate completed`);
+        break;
+        
+      case 'llm_embed':
+        console.log(`🔍 DEBUG: Entering llm_embed case`);
+        console.log(`🚀 Calling llmManager.embed with text: ${text}`);
+        // ADD THIS DEBUG LOG IMMEDIATELY BEFORE THE CALL:
+        console.log(`🔍 DEBUG: About to call this.llmManager.embed() - THIS IS WHERE IT MIGHT HANG`);
+        
+        llmResponse = await this.llmManager.embed(text!, {
+          user_id: message.security.user_id,
+          conversation_id: options?.conversation_id,
+          model_preference: options?.model_preference
+        });
+        
+        console.log(`🔍 DEBUG: llm_embed completed`);
+        break;
+        
+      // ... other cases
+    }
+    
+    // ADD THIS DEBUG LOG:
+    console.log(`🔍 DEBUG: Method handler completed, checking response...`);
+
+    if (llmResponse && llmResponse.status !== 'error') {
+      const ttlSeconds = 3600;
+      await redisManager.setExactCachedResponse(cacheKey, llmResponse, ttlSeconds);
+      console.log(`💾 Cached LLM response for method: ${method}, key: ${cacheKey}`);
+    }
+  } catch (error) {
+    console.error(`❌ LLM processing failed for ${method}:`, error);
+    throw error;
+  }
+
+  return llmResponse;
+}
 
   private async processDatabaseRequest(message: DinaUniversalMessage): Promise<any> {
     switch (message.target.method) {

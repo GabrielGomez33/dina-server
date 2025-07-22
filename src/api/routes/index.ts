@@ -12,6 +12,17 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   
   // API-specific middleware
   const apiRouter = express.Router();
+
+  // Add response timeout handling
+  apiRouter.use((req: Request, res: Response, next) => {
+    res.setTimeout(60000, () => {
+      console.error(`⏰ Request timeout: ${req.method} ${req.path}`);
+      if (!res.headersSent) {
+        res.status(408).json({ error: 'Request timeout' });
+      }
+    });
+    next();
+  });
   
   // Apply common middleware to all API routes
   apiRouter.use(express.json({ limit: '1mb' })); // Parse JSON bodies, limit payload size
@@ -29,9 +40,9 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
 
   // Apply security middleware to core API routes that require authentication
   // Make embeddings endpoint public for testing
-  apiRouter.use(['/models/:modelId/chat', '/dina'], authenticate);
-  apiRouter.use(['/models/:modelId/chat', '/dina'], rateLimit);
-  apiRouter.use(['/models/:modelId/chat', '/dina'], sanitizeInput);
+  apiRouter.use(['/dina'], authenticate);
+  apiRouter.use(['/dina'], rateLimit);
+  apiRouter.use(['/dina'], sanitizeInput);
   
   // Health check endpoint (specific to API)
   apiRouter.get('/health', (req: Request, res: Response) => {
@@ -258,6 +269,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
       console.log(`🔢 Requesting embeddings for model: ${modelId}`);
       // Changed from processMessage to handleIncomingMessage
       const embeddingResponse = await dina.handleIncomingMessage(dinaMessage); 
+      console.log(`📤 Sending embedding response: ${embeddingResponse.id}`);
       res.json(embeddingResponse.payload.data); // Return the embeddings data from payload.data
 
     } catch (error) {
@@ -265,6 +277,95 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
       res.status(500).json({
         error: 'LLM Embeddings Error',
         message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+
+  apiRouter.post('/debug/ollama-raw', async (req: Request, res: Response) => {
+    console.log('🔍 DEBUG: Testing raw Ollama responses');
+    
+    try {
+      const { model, prompt } = req.body;
+      const testModel = model || 'mistral:7b';
+      const testPrompt = prompt || 'Say hello';
+      
+      console.log(`🔍 DEBUG: Testing model ${testModel} with prompt: "${testPrompt}"`);
+      
+      // Test 1: Generate endpoint with stream:false
+      console.log('🔍 DEBUG: Testing /api/generate with stream:false');
+      const generateResponse = await fetch('http://localhost:11434/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          model: testModel, 
+          prompt: testPrompt,
+          stream: false
+        })
+      });
+      
+      const generateText = await generateResponse.text();
+      console.log(`🔍 DEBUG: Generate response status: ${generateResponse.status}`);
+      console.log(`🔍 DEBUG: Generate response length: ${generateText.length}`);
+      console.log(`🔍 DEBUG: Generate raw response: ${generateText}`);
+      
+      // Analyze the response structure
+      const lines = generateText.trim().split('\n').filter(line => line.trim());
+      console.log(`🔍 DEBUG: Generate response has ${lines.length} lines`);
+      
+      const analysisResult = {
+        generate_endpoint: {
+          status: generateResponse.status,
+          response_length: generateText.length,
+          line_count: lines.length,
+          raw_response: generateText,
+          parsed_lines: lines.map((line, index) => {
+            try {
+              const parsed = JSON.parse(line);
+              return {
+                line_number: index + 1,
+                keys: Object.keys(parsed),
+                done: parsed.done,
+                response_length: parsed.response ? parsed.response.length : 0,
+                sample_content: parsed.response ? parsed.response.substring(0, 50) : null
+              };
+            } catch (e) {
+              return {
+                line_number: index + 1,
+                error: 'Failed to parse JSON',
+                raw_line: line.substring(0, 100)
+              };
+            }
+          })
+        }
+      };
+      
+      
+      // Test 3: Ollama version
+      try {
+        const versionResponse = await fetch('http://localhost:11434/api/version');
+        const versionText = await versionResponse.text();
+        //analysisResult.ollama_version = JSON.parse(versionText);
+      } catch (e) {
+        //analysisResult.ollama_version = { error: 'Could not get version' };
+      }
+      
+      res.json({
+        success: true,
+        analysis: analysisResult,
+        recommendations: {
+          issue: 'Ollama generate endpoint returns NDJSON even with stream:false',
+          solution: 'Parse multiple JSON objects and accumulate response parts',
+          alternative: 'Use chat endpoint if available (returns single JSON)'
+        }
+      });
+      
+    } catch (error) {
+      console.error('❌ Debug endpoint error:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined
       });
     }
   });
