@@ -125,20 +125,27 @@ export class DinaRedisManager {
     console.log('✅ Message queues ready');
   }
 
-  private startQueueMonitoring(): void {
-    if (this.queueMonitoringInterval) {
-      clearInterval(this.queueMonitoringInterval);
-    }
-    this.queueMonitoringInterval = setInterval(async () => {
-      try {
-        const stats = await this.getQueueStats();
-        console.log(`📊 Queue Stats: High: ${stats.high}, Medium: ${stats.medium}, Low: ${stats.low}, Batch: ${stats.batch} (Total: ${stats.totalMessages})`);
-      } catch (error) {
-        console.error('❌ Error getting queue stats during monitoring:', error);
-      }
-    }, 10000);
+private startQueueMonitoring(): void {
+  if (this.queueMonitoringInterval) {
+    clearInterval(this.queueMonitoringInterval);
   }
-
+  this.queueMonitoringInterval = setInterval(async () => {
+    try {
+      const stats = await this.getQueueStats();
+      
+      // FIX: Map the queue names to simple properties
+      const high = stats[QUEUE_NAMES.HIGH] || 0;
+      const medium = stats[QUEUE_NAMES.MEDIUM] || 0;
+      const low = stats[QUEUE_NAMES.LOW] || 0;
+      const batch = stats[QUEUE_NAMES.BATCH] || 0;
+      const totalMessages = high + medium + low + batch;
+      
+      console.log(`📊 Queue Stats: High: ${high}, Medium: ${medium}, Low: ${low}, Batch: ${batch} (Total: ${totalMessages})`);
+    } catch (error) {
+      console.error('❌ Error getting queue stats during monitoring:', error);
+    }
+  }, 10000);
+}
   async enqueueMessage(message: DinaUniversalMessage): Promise<void> {
     if (!this.isConnected) {
       throw new Error('Redis not connected. Cannot enqueue message.');
@@ -294,15 +301,13 @@ async getQueueStats(): Promise<{ [key: string]: number }> {
       [QUEUE_NAMES.BATCH]: 0
     };
   }
-  
   try {
     const stats: { [key: string]: number } = {};
-    
     for (const queueName of Object.values(QUEUE_NAMES)) {
       const count = await this.client.lLen(queueName);
-      stats[queueName] = count;
+      // FIX: Ensure count is always a number, never undefined
+      stats[queueName] = count || 0;
     }
-    
     return stats;
   } catch (error) {
     console.error('❌ Error getting queue stats:', error);

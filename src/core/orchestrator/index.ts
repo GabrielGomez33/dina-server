@@ -72,6 +72,7 @@ export class DinaCore {
   private llmManager: DinaLLMManager;
   private startTime: Date = new Date();
   private lastRedisWarning: number = 0;
+  private lastStatsWarning: number = 0;
   
   constructor() {
     console.log('🧠 Initializing DINA Core...');
