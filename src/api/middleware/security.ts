@@ -1,269 +1,408 @@
-// DINA API Middleware: Security, Rate Limiting, and Input Sanitization
+// ========================================
+// DINA UNIFIED SECURITY MIDDLEWARE (WITH CORS)
 // File: src/api/middleware/security.ts
+// ========================================
 
 import { Request, Response, NextFunction } from 'express';
-import { redisManager } from '../../config/redis'; // Import Redis Manager for rate limiting and caching
-import { SecurityLevel } from '../../core/protocol'; // Import SecurityLevel enum
-import { v4 as uuidv4 } from 'uuid'; // For generating unique request IDs
+import crypto from 'crypto';
+import { v4 as uuidv4 } from 'uuid';
+import { database, DinaAuthRequest } from '../../config/database/db';
 
 // ================================
 // INTERFACES
 // ================================
 
-// Defines the structure for a cached API key
-interface ApiKeyCacheEntry {
-  userId: string;
-  securityLevel: SecurityLevel; // Use the enum type
-  lastUsed: number; // Timestamp
-  tokenCount: number; // For token-aware rate limiting
-}
-
-// ================================
-// IN-MEMORY CACHE FOR API KEYS (For simplicity in Phase 1, can be moved to Redis later)
-// In a real enterprise system, this would be backed by a secure database and Redis.
-const apiKeyStore = new Map<string, ApiKeyCacheEntry>();
-
-// Populate with a dummy API key for testing (REPLACE IN PRODUCTION)
-// In a real system, API keys would be securely generated and managed.
-apiKeyStore.set('DINA_API_KEY_TEST_123', {
-  userId: 'test_user_dina_1',
-  securityLevel: SecurityLevel.TOP_SECRET, // Corrected to use enum
-  lastUsed: Date.now(),
-  tokenCount: 0,
-});
-
-// ================================
-// AUTHENTICATION MIDDLEWARE
-// ================================
-/**
- * Authenticates API requests using a simple API key mechanism.
- * In a real enterprise system, this would involve JWT, OAuth2, or more complex schemes.
- * For Phase 1, we use a basic API key check.
- * @param req Express Request object
- * @param res Express Response object
- * @param next NextFunction to pass control to the next middleware
- */
-export async function authenticate(req: Request, res: Response, next: NextFunction): Promise<void> {
-  // Extract API key from Authorization header or query parameter
-  const apiKey = req.headers['authorization']?.split(' ')[1] || req.query.api_key as string;
-
-  if (!apiKey) {
-    console.warn('Authentication failed: No API key provided');
-    res.status(401).json({ error: 'Unauthorized', message: 'API key is required' });
-    return;
-  }
-
-  const apiKeyEntry = apiKeyStore.get(apiKey);
-
-  if (!apiKeyEntry) {
-    console.warn(`Authentication failed: Invalid API key: ${apiKey.substring(0, 10)}...`);
-    res.status(403).json({ error: 'Forbidden', message: 'Invalid API key' });
-    return;
-  }
-
-  // Attach user information to the request for downstream middleware/handlers
-  (req as any).user = {
-    id: apiKeyEntry.userId,
-    securityLevel: apiKeyEntry.securityLevel,
+export interface AuthenticatedRequest extends Request {
+  dina?: {
+    user_key: string;
+    dina_key: string;
+    trust_level: string;
+    session_id: string;
+    rate_limit_remaining: number;
+    token_limit_remaining: number;
+    is_new_user: boolean;
   };
-
-  // Update last used timestamp
-  apiKeyEntry.lastUsed = Date.now();
-
-  console.log(`✅ Authenticated user: ${apiKeyEntry.userId} (Level: ${apiKeyEntry.securityLevel})`);
-  next();
+  user?: {
+    id: string;
+    securityLevel: string;
+  };
 }
 
 // ================================
-// RATE LIMITING MIDDLEWARE (Token-aware)
+// CORS MIDDLEWARE
 // ================================
-const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute window
-const MAX_REQUESTS_PER_WINDOW = 100; // Max requests per user per window
-const MAX_TOKENS_PER_WINDOW = 50000; // Max estimated tokens per user per window
-
-// In-memory store for rate limiting (can be replaced by Redis for distributed limits)
-const userRequestCounts = new Map<string, { count: number; tokens: number; lastReset: number }>();
 
 /**
- * Estimates tokens in a given text. This is a simplified estimation.
- * A more accurate method would involve a proper tokenizer or LLM call.
- * @param text The text to estimate tokens for.
- * @returns Estimated token count.
+ * CORS middleware for browser testing
  */
-function estimateTokens(text: string): number {
-  return Math.ceil(text.split(/\s+/).length * 1.3); // Rough estimate: words * 1.3
-}
+export const corsMiddleware = (req: Request, res: Response, next: NextFunction): void => {
+  // Allow requests from remote domains and localhost for testing
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:8080',
+    'http://localhost:8445',
+    'https://localhost:8445',
+    'https://theundergroundrailroad.world',
+    'https://theundergroundrailroad.world:8445',
+    'http://theundergroundrailroad.world',
+    'http://theundergroundrailroad.world:8445',
+    'http://127.0.0.1:3000',
+    'https://127.0.0.1:8445',
+    'null' // For file:// protocol testing
+  ];
 
-/**
- * Implements token-aware rate limiting.
- * @param req Express Request object
- * @param res Express Response object
- * @param next NextFunction to pass control to the next middleware
- */
-export async function rateLimit(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const userId = (req as any).user?.id || 'anonymous'; // Get user ID from authentication
-  const now = Date.now();
-
-  let userState = userRequestCounts.get(userId);
-  if (!userState || (now - userState.lastReset) > RATE_LIMIT_WINDOW_MS) {
-    // Reset state for new window
-    userState = { count: 0, tokens: 0, lastReset: now };
-    userRequestCounts.set(userId, userState);
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin as string) || !origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
   }
 
-  // Estimate tokens from the request payload (e.g., query for LLM)
-  let estimatedReqTokens = 0;
-  if (req.body && typeof req.body.query === 'string') {
-    estimatedReqTokens = estimateTokens(req.body.query);
-  } else if (req.body && typeof req.body.code_request === 'string') {
-    estimatedReqTokens = estimateTokens(req.body.code_request);
-  } else if (req.body && typeof req.body.analysis_query === 'string') {
-    estimatedReqTokens = estimateTokens(req.body.analysis_query);
-  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-User-Key, X-Dina-Key, X-Dina-Signature, X-Client-Mac, User-Agent, Accept');
+  res.setHeader('Access-Control-Expose-Headers', 'X-Dina-Key, X-Dina-Trust-Level, X-Dina-Rate-Limit-Remaining, X-Dina-Token-Limit-Remaining, X-Dina-Session-ID, X-Dina-Is-New-User');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
 
-  // Check limits
-  if (userState.count >= MAX_REQUESTS_PER_WINDOW) {
-    console.warn(`Rate limit exceeded for user ${userId}: Request count`);
-    res.status(429).json({ error: 'Too Many Requests', message: 'Rate limit exceeded (request count)' });
-    return;
-  }
-  if (userState.tokens + estimatedReqTokens > MAX_TOKENS_PER_WINDOW) {
-    console.warn(`Rate limit exceeded for user ${userId}: Token count`);
-    res.status(429).json({ error: 'Too Many Requests', message: 'Rate limit exceeded (token count)' });
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
     return;
   }
 
-  // Increment counts
-  userState.count++;
-  userState.tokens += estimatedReqTokens;
-
-  // Set rate limit headers
-  res.setHeader('X-RateLimit-Limit-Requests', MAX_REQUESTS_PER_WINDOW);
-  res.setHeader('X-RateLimit-Remaining-Requests', MAX_REQUESTS_PER_WINDOW - userState.count);
-  res.setHeader('X-RateLimit-Limit-Tokens', MAX_TOKENS_PER_WINDOW);
-  res.setHeader('X-RateLimit-Remaining-Tokens', MAX_TOKENS_PER_WINDOW - userState.tokens);
-  res.setHeader('X-RateLimit-Reset', userState.lastReset + RATE_LIMIT_WINDOW_MS);
-
-  console.log(`Rate limit check for ${userId}: Requests: ${userState.count}/${MAX_REQUESTS_PER_WINDOW}, Tokens: ${userState.tokens}/${MAX_TOKENS_PER_WINDOW}`);
   next();
-}
+};
 
 // ================================
-// INPUT SANITIZATION MIDDLEWARE
+// UNIFIED AUTHENTICATION MIDDLEWARE
 // ================================
-/**
- * Sanitizes input to prevent common attacks like XSS, SQL Injection, and basic Prompt Injection.
- * This is a foundational layer; more advanced semantic filtering would be in Phase 3.
- * @param req Express Request object
- * @param res Express Response object
- * @param next NextFunction to pass control to the next middleware
- */
-export function sanitizeInput(req: Request, res: Response, next: NextFunction): void {
-  // Deep sanitize request body
-  if (req.body) {
-    req.body = deepSanitize(req.body);
-  }
-  // Sanitize query parameters
-  if (req.query) {
-    req.query = deepSanitize(req.query);
-  }
-  // Sanitize route parameters
-  if (req.params) {
-    req.params = deepSanitize(req.params);
-  }
-
-  console.log('✅ Input sanitized');
-  next();
-}
 
 /**
- * Recursively sanitizes strings within an object.
- * @param obj The object to sanitize.
- * @returns The sanitized object.
+ * Main DINA authentication middleware - replaces all previous auth
+ * Seamlessly integrates with existing system
  */
-function deepSanitize(obj: any): any {
-  if (obj === null || typeof obj !== 'object') {
-    return sanitizeString(obj); // Sanitize primitives directly
-  }
-
-  if (Array.isArray(obj)) {
-    return obj.map(item => deepSanitize(item));
-  }
-
-  const sanitizedObj: { [key: string]: any } = {};
-  for (const key in obj) {
-    if (Object.prototype.hasOwnProperty.call(obj, key)) {
-      sanitizedObj[key] = deepSanitize(obj[key]);
+export const authenticate = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const startTime = performance.now();
+  
+  try {
+    console.log(`🔐 Auth check: ${req.method} ${req.path} from ${getClientIP(req)}`);
+    
+    // Build authentication request
+    const authRequest = buildAuthRequest(req);
+    
+    // Authenticate through unified auth system
+    const authResult = await database.authenticateRequest(authRequest);
+    
+    console.log(`🔐 Auth result: ${authResult.allow ? 'ALLOW' : 'DENY'} - Trust: ${authResult.trust_level} - Score: ${authResult.user.suspicion_score || 0}`);
+    
+    // Handle denied requests
+    if (!authResult.allow) {
+      const errorResponse = {
+        success: false,
+        error: {
+          code: getErrorCode(authResult),
+          message: getErrorMessage(authResult),
+          trust_level: authResult.trust_level,
+          suspicion_reasons: authResult.suspicion_reasons,
+          dina_key: authResult.user.dina_key || null
+        },
+        rate_limit: {
+          remaining: authResult.rate_limit_remaining,
+          reset_time: getResetTime(),
+          retry_after: getRetryAfter(authResult)
+        },
+        security: {
+          session_id: authResult.session_id,
+          validation_time_ms: authResult.validation_time_ms
+        }
+      };
+      
+      const statusCode = getHttpStatusCode(authResult);
+      
+      // Set security headers
+      res.set({
+        'X-Dina-Trust-Level': authResult.trust_level,
+        'X-Dina-Rate-Limit-Remaining': authResult.rate_limit_remaining.toString(),
+        'X-Dina-Session-ID': authResult.session_id,
+        'Retry-After': getRetryAfter(authResult).toString()
+      });
+      
+      res.status(statusCode).json(errorResponse);
+      return;
     }
+    
+    // Attach auth info to request for downstream middleware
+    req.dina = {
+      user_key: authResult.user.user_key,
+      dina_key: authResult.user.dina_key,
+      trust_level: authResult.trust_level,
+      session_id: authResult.session_id,
+      rate_limit_remaining: authResult.rate_limit_remaining,
+      token_limit_remaining: authResult.token_limit_remaining,
+      is_new_user: authResult.is_new_user
+    };
+    
+    // Legacy compatibility - set user object for existing code
+    req.user = {
+      id: authResult.user.dina_key,
+      securityLevel: authResult.trust_level
+    };
+    
+    // Set response headers for successful auth
+    res.set({
+      'X-Dina-Key': authResult.user.dina_key,
+      'X-Dina-Trust-Level': authResult.trust_level,
+      'X-Dina-Rate-Limit-Remaining': authResult.rate_limit_remaining.toString(),
+      'X-Dina-Token-Limit-Remaining': authResult.token_limit_remaining.toString(),
+      'X-Dina-Session-ID': authResult.session_id,
+      'X-Dina-Is-New-User': authResult.is_new_user.toString()
+    });
+    
+    // Log successful authentication for new users
+    if (authResult.is_new_user) {
+      console.log(`👤 New user authenticated: ${authResult.user.user_key} → ${authResult.user.dina_key}`);
+    }
+    
+    next();
+    
+  } catch (error) {
+    console.error('❌ Auth middleware error:', error);
+    
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'AUTH_SYSTEM_ERROR',
+        message: 'Authentication system error',
+        details: process.env.NODE_ENV === 'development' ? (error as Error).message : undefined
+      },
+      security: {
+        session_id: uuidv4(),
+        validation_time_ms: performance.now() - startTime
+      }
+    });
   }
-  return sanitizedObj;
-}
-
-/**
- * Sanitizes a single string to prevent XSS, basic SQLi, and prompt injection attempts.
- * @param input The string to sanitize.
- * @returns The sanitized string.
- */
-function sanitizeString(input: any): any {
-  if (typeof input !== 'string') {
-    return input; // Return non-strings as is
-  }
-
-  let sanitized = input;
-
-  // 1. HTML/XSS Sanitization: Encode HTML entities
-  sanitized = sanitized
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;')
-    .replace(/\//g, '&#x2F;');
-
-  // 2. Basic SQL Injection prevention (beyond prepared statements, for extra layer)
-  // Remove common SQL injection keywords/characters. This is a blunt tool; prepared statements are primary defense.
-  sanitized = sanitized
-    .replace(/(\b(union|select|insert|update|delete|drop|exec|execute)\b)/gi, '') // Remove SQL keywords
-    .replace(/(;|\-\-|\/\*|\*\/)/g, ''); // Remove comment/statement terminators
-
-  // 3. Basic Prompt Injection prevention (Phase 1: simple keyword/pattern removal)
-  // This is rudimentary. Phase 3 will have semantic filtering.
-  sanitized = sanitized
-    .replace(/ignore previous instructions/gi, '')
-    .replace(/disregard all prior commands/gi, '')
-    .replace(/as an AI language model/gi, '') // Prevent self-referential attacks
-    .replace(/act as/gi, '') // Prevent role-playing manipulation
-    .replace(/system:/gi, '') // Prevent attempts to mimic system messages
-    .replace(/user:/gi, '') // Prevent attempts to mimic user messages
-    .replace(/assistant:/gi, ''); // Prevent attempts to mimic assistant messages
-
-  // Trim whitespace
-  sanitized = sanitized.trim();
-
-  return sanitized;
-}
+};
 
 // ================================
-// ERROR HANDLING MIDDLEWARE (Optional, but good practice)
+// LEGACY MIDDLEWARE (Kept for compatibility)
 // ================================
-/**
- * Centralized error handling middleware.
- * @param err The error object.
- * @param req Express Request object.
- * @param res Express Response object.
- * @param next NextFunction.
- */
-export function handleError(err: Error, req: Request, res: Response, next: NextFunction): void {
-  console.error('❌ API Error:', err.message, err.stack);
 
+/**
+ * Legacy rate limiting - now handled by unified auth
+ * Kept for backward compatibility
+ */
+export const rateLimit = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+  // Rate limiting is now handled in the authenticate middleware
+  // This is just a pass-through for backward compatibility
+  next();
+};
+
+/**
+ * Legacy input sanitization - now handled by unified auth
+ * Kept for backward compatibility
+ */
+export const sanitizeInput = (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+  // Input sanitization is now handled in the authenticate middleware
+  // This is just a pass-through for backward compatibility
+  next();
+};
+
+/**
+ * Error handling middleware
+ */
+export const handleError = (error: Error, req: Request, res: Response, next: NextFunction): void => {
+  console.error('❌ API Error:', error);
+  
   if (res.headersSent) {
-    return next(err); // If headers already sent, defer to default error handler
+    return next(error);
   }
-
+  
   res.status(500).json({
-    error: 'Internal Server Error',
-    message: 'An unexpected error occurred. Please try again later.',
-    details: process.env.NODE_ENV === 'development' ? err.message : undefined, // Only expose details in dev
+    success: false,
+    error: {
+      code: 'INTERNAL_SERVER_ERROR',
+      message: process.env.NODE_ENV === 'production' ? 'Internal server error' : error.message
+    },
+    timestamp: new Date().toISOString()
   });
+};
+
+// ================================
+// UTILITY FUNCTIONS
+// ================================
+
+function buildAuthRequest(req: Request): DinaAuthRequest {
+  return {
+    request_id: uuidv4(),
+    timestamp: new Date(),
+    user_key: extractUserKey(req),
+    dina_key: req.headers['x-dina-key'] as string,
+    method: req.method,
+    endpoint: req.path,
+    payload_hash: req.body ? createPayloadHash(req.body) : undefined,
+    ip_address: getClientIP(req),
+    mac_address: req.headers['x-client-mac'] as string,
+    user_agent: req.headers['user-agent'] || 'unknown',
+    headers: {
+      'accept-language': req.headers['accept-language'] || '',
+      'accept-encoding': req.headers['accept-encoding'] || '',
+      'x-forwarded-for': req.headers['x-forwarded-for'] as string || '',
+      'x-timezone': req.headers['x-timezone'] as string || '',
+      'authorization': req.headers['authorization'] || ''
+    },
+    signature: req.headers['x-dina-signature'] as string
+  };
 }
 
+function extractUserKey(req: Request): string | undefined {
+  // Check multiple sources for user key
+  return req.headers['x-user-key'] as string ||
+         req.headers['x-api-key'] as string ||
+         req.query.user_key as string ||
+         req.body?.user_key ||
+         undefined;
+}
+
+function getClientIP(req: Request): string {
+  return (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+         req.headers['x-real-ip'] as string ||
+         req.connection.remoteAddress ||
+         req.socket.remoteAddress ||
+         req.ip ||
+         'unknown';
+}
+
+function createPayloadHash(payload: any): string {
+  const payloadString = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  return crypto.createHash('sha256').update(payloadString).digest('hex');
+}
+
+function getErrorCode(authResult: any): string {
+  if (authResult.suspicion_reasons.includes('device_blocked')) return 'DEVICE_BLOCKED';
+  if (authResult.suspicion_reasons.includes('user_blocked')) return 'USER_BLOCKED';
+  if (authResult.suspicion_reasons.includes('rate_limit_exceeded')) return 'RATE_LIMITED';
+  if (authResult.trust_level === 'suspicious') return 'SUSPICIOUS_ACTIVITY';
+  return 'ACCESS_DENIED';
+}
+
+function getErrorMessage(authResult: any): string {
+  const messages: { [key: string]: string } = {
+    'DEVICE_BLOCKED': 'Device has been blocked due to suspicious activity',
+    'USER_BLOCKED': 'User access has been temporarily suspended',
+    'RATE_LIMITED': 'Request rate limit exceeded - please slow down',
+    'SUSPICIOUS_ACTIVITY': 'Request flagged for suspicious activity',
+    'ACCESS_DENIED': 'Access denied'
+  };
+  
+  const code = getErrorCode(authResult);
+  return messages[code] || 'Access denied';
+}
+
+function getHttpStatusCode(authResult: any): number {
+  if (authResult.suspicion_reasons.includes('rate_limit_exceeded')) return 429;
+  if (authResult.suspicion_reasons.includes('device_blocked')) return 403;
+  if (authResult.suspicion_reasons.includes('user_blocked')) return 403;
+  if (authResult.trust_level === 'suspicious') return 403;
+  return 401;
+}
+
+function getRetryAfter(authResult: any): number {
+  if (authResult.suspicion_reasons.includes('rate_limit_exceeded')) return 60; // 1 minute
+  if (authResult.suspicion_reasons.includes('user_blocked')) return 3600; // 1 hour
+  if (authResult.trust_level === 'blocked') return 86400; // 24 hours
+  return 300; // 5 minutes default
+}
+
+function getResetTime(): number {
+  // Return timestamp for when rate limit resets (next minute)
+  const now = new Date();
+  const nextMinute = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 
+                             now.getHours(), now.getMinutes() + 1, 0, 0);
+  return Math.floor(nextMinute.getTime() / 1000);
+}
+
+// ================================
+// OPTIONAL SPECIALIZED MIDDLEWARE
+// ================================
+
+/**
+ * Require specific trust level
+ */
+export const requireTrustLevel = (requiredLevel: 'new' | 'trusted' | 'suspicious' | 'blocked') => {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+    if (!req.dina) {
+      res.status(401).json({
+        success: false,
+        error: {
+          code: 'AUTH_REQUIRED',
+          message: 'Authentication required'
+        }
+      });
+      return;
+    }
+    
+    const trustHierarchy = { 'blocked': 0, 'suspicious': 1, 'new': 2, 'trusted': 3 };
+    const userLevel = trustHierarchy[req.dina.trust_level as keyof typeof trustHierarchy];
+    const requiredLevelValue = trustHierarchy[requiredLevel];
+    
+    if (userLevel < requiredLevelValue) {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'INSUFFICIENT_TRUST',
+          message: `Trust level '${requiredLevel}' required, current level: '${req.dina.trust_level}'`,
+          current_trust_level: req.dina.trust_level,
+          required_trust_level: requiredLevel
+        }
+      });
+      return;
+    }
+    
+    next();
+  };
+};
+
+/**
+ * Require access to specific model
+ */
+export const requireModelAccess = (modelName: string) => {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
+    if (!req.dina) {
+      res.status(401).json({
+        success: false,
+        error: {
+          code: 'AUTH_REQUIRED',
+          message: 'Authentication required'
+        }
+      });
+      return;
+    }
+    
+    // Model access by trust level
+    const modelAccess: { [key: string]: string[] } = {
+      'new': ['mxbai-embed-large'],
+      'trusted': ['mxbai-embed-large', 'mistral:7b', 'codellama:34b'],
+      'suspicious': ['mxbai-embed-large'],
+      'blocked': []
+    };
+    
+    const allowedModels = modelAccess[req.dina.trust_level] || [];
+    
+    if (!allowedModels.includes(modelName)) {
+      res.status(403).json({
+        success: false,
+        error: {
+          code: 'MODEL_ACCESS_DENIED',
+          message: `Access to model '${modelName}' requires higher trust level`,
+          allowed_models: allowedModels,
+          current_trust_level: req.dina.trust_level
+        }
+      });
+      return;
+    }
+    
+    next();
+  };
+};

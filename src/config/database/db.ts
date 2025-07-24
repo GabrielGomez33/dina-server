@@ -49,6 +49,59 @@ interface PerformancePrediction {
 }
 
 // ================================
+// UNIFIED AUTH INTERFACES
+// ================================
+export interface DinaUser {
+  unique_id: string;
+  user_key: string;
+  dina_key: string;
+  device_fingerprint: string;
+  ip_address: string;
+  mac_address?: string;
+  user_agent: string;
+  trust_level: 'new' | 'trusted' | 'suspicious' | 'blocked';
+  suspicion_score: number;
+  blocked_until?: Date;
+  first_seen: Date;
+  last_seen: Date;
+  total_requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  max_requests_per_minute: number;
+  max_tokens_per_request: number;
+  allowed_models: string[];
+  allowed_endpoints: string[];
+  current_session_id?: string;
+}
+
+export interface DinaAuthRequest {
+  request_id: string;
+  timestamp: Date;
+  user_key?: string;
+  dina_key?: string;
+  method: string;
+  endpoint: string;
+  payload_hash?: string;
+  ip_address: string;
+  mac_address?: string;
+  user_agent: string;
+  headers: Record<string, string>;
+  signature?: string;
+}
+
+export interface DinaAuthResult {
+  allow: boolean;
+  user: DinaUser;
+  is_new_user: boolean;
+  rate_limit_remaining: number;
+  token_limit_remaining: number;
+  trust_level: DinaUser['trust_level'];
+  suspicion_reasons: string[];
+  session_id: string;
+  validation_time_ms: number;
+}
+
+// ================================
 // SECURITY MODULE
 // ================================
 class SecurityModule {
@@ -108,9 +161,6 @@ class SecurityModule {
   }
 
   private containsSuspiciousContent(content: string): boolean {
-    // This is specifically for user-provided string content, not internal JSON.
-    // Relaxing this for internal logging would be complex and potentially risky.
-    // Instead, we will bypass security validation for internal logging calls.
     const suspiciousPatterns = [
       /<script[^>]*>.*?<\/script>/gi,
       /javascript:/gi,
@@ -221,7 +271,7 @@ class PerformanceMetrics {
 // OPTIMIZATION ENGINE
 // ================================
 class OptimizationEngine {
-  private database!: DinaDatabase; // Reference to DinaDatabase, marked with ! for definite assignment
+  private database!: DinaDatabase;
 
   async initialize(database: DinaDatabase): Promise<void> {
     this.database = database;
@@ -244,7 +294,6 @@ class OptimizationEngine {
         console.log(`⚠️ Found ${longQueries[0].long_query_count} slow queries in the last hour`);
       }
     } catch (error) {
-      // Optimization analysis failed, continue silently
       console.error('Error during autonomous optimization analysis:', error);
     }
   }
@@ -307,8 +356,8 @@ class BeautyModule {
 export class DinaDatabase {
   private pool: mysql.Pool | null = null;
   private config: DatabaseConfig;
-  public isConnected: boolean = false; // Made public
-  public startTime: Date = new Date(); // Added public startTime
+  public isConnected: boolean = false;
+  public startTime: Date = new Date();
   
   private securityModule: SecurityModule;
   private performanceMetrics: PerformanceMetrics;
@@ -317,6 +366,13 @@ export class DinaDatabase {
   private autonomousMode: boolean = true;
   private learningEnabled: boolean = true;
   private selfHealingEnabled: boolean = true;
+
+  // ================================
+  // UNIFIED AUTH SYSTEM
+  // ================================
+  private blockedIPs: Set<string> = new Set();
+  private blockedMACs: Set<string> = new Set();
+  private requestCache: Map<string, { count: number; windowStart: number }> = new Map();
 
   constructor() {
     console.log(BeautyModule.createVisualSeparator('DINA ENHANCED DATABASE INITIALIZATION'));
@@ -354,7 +410,6 @@ export class DinaDatabase {
 
   private calculateOptimalConnectionLimit(): number {
     try {
-      // Dynamically import 'os' to avoid issues in environments where it's not available (e.g., browser)
       const os = require('os'); 
       const cpuCores = os.cpus().length;
       const memoryGB = os.totalmem() / (1024 * 1024 * 1024);
@@ -390,22 +445,530 @@ export class DinaDatabase {
       await this.establishPerformanceBaseline();
       
       console.log('\n⚡ Phase 5: Optimization Engine Activation');
-      await this.optimizationEngine.initialize(this); // Pass 'this' reference
+      await this.optimizationEngine.initialize(this);
       
       console.log('\n🔄 Phase 6: Autonomous Monitoring Activation');
       this.activateAutonomousMonitoring();
       
+      console.log('\n🔐 Phase 7: Unified Auth System Initialization');
+      await this.initializeUnifiedAuth();
+      
       this.isConnected = true;
-      this.startTime = new Date(); // Set start time on successful initialization
+      this.startTime = new Date();
       console.log(BeautyModule.createVisualSeparator('INITIALIZATION COMPLETE'));
-      console.log('✅ DINA Enhanced Database System is ONLINE and AUTONOMOUS');
+      console.log('✅ DINA Enhanced Database System with Unified Auth is ONLINE');
       
     } catch (error) {
       console.error('❌ DINA Database initialization failed:', error);
-      await this.emergencyShutdown(); // Call the newly implemented emergencyShutdown
+      await this.emergencyShutdown();
       throw error;
     }
   }
+
+  // ================================
+  // UNIFIED AUTH METHODS
+  // ================================
+  
+  private async initializeUnifiedAuth(): Promise<void> {
+    try {
+      await this.loadBlockedDevices();
+      console.log('✅ Unified authentication system initialized');
+    } catch (error) {
+      console.error('❌ Failed to initialize auth system:', error);
+      throw error;
+    }
+  }
+
+  async authenticateRequest(request: DinaAuthRequest): Promise<DinaAuthResult> {
+    const startTime = performance.now();
+    
+    try {
+      // Check device blocks
+      if (this.isDeviceBlocked(request.ip_address, request.mac_address)) {
+        return this.createDeniedResult(request, 'device_blocked', startTime);
+      }
+      
+      // Generate device fingerprint
+      const deviceFingerprint = this.generateDeviceFingerprint(request);
+      
+      // Find or create user
+      let user = await this.findUser(request.user_key, request.dina_key, deviceFingerprint);
+      let isNewUser = false;
+      
+      if (!user) {
+        user = await this.createNewUser(request, deviceFingerprint);
+        isNewUser = true;
+        console.log(`👤 New user registered: ${user.user_key} → ${user.dina_key}`);
+      }
+      
+      // Check user blocks
+      if (user.trust_level === 'blocked' && user.blocked_until && user.blocked_until > new Date()) {
+        return this.createDeniedResult(request, 'user_blocked', startTime, user);
+      }
+      
+      // Assess suspicion
+      const suspicionAssessment = this.assessSuspicion(request, user);
+      user.suspicion_score = this.updateSuspicionScore(user.suspicion_score, suspicionAssessment.score);
+      
+      // Update trust level
+      user.trust_level = this.calculateTrustLevel(user);
+      
+      // Check rate limits
+      const rateCheck = await this.checkRateLimit(user);
+      if (!rateCheck.allowed) {
+        user.failed_requests += 1;
+        user.suspicion_score += 10;
+        await this.updateUser(user);
+        return this.createRateLimitedResult(request, rateCheck, startTime, user);
+      }
+      
+      // Make decision
+      const allow = user.trust_level !== 'blocked';
+      
+      // Update user activity
+      await this.updateUserActivity(user, request, allow);
+      
+      // Handle blocking threshold
+      if (user.suspicion_score >= 90) {
+        await this.blockUser(user, request);
+      }
+      
+      const sessionId = `dina_session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      user.current_session_id = sessionId;
+      
+      const result: DinaAuthResult = {
+        allow,
+        user,
+        is_new_user: isNewUser,
+        rate_limit_remaining: rateCheck.remaining,
+        token_limit_remaining: user.max_tokens_per_request,
+        trust_level: user.trust_level,
+        suspicion_reasons: suspicionAssessment.reasons,
+        session_id: sessionId,
+        validation_time_ms: performance.now() - startTime
+      };
+      
+      // Log security event
+      await this.logSecurityEvent({
+        event_type: allow ? 'auth_success' : 'auth_denied',
+        user_key: user.user_key,
+        dina_key: user.dina_key,
+        ip_address: request.ip_address,
+        user_agent: request.user_agent,
+        endpoint: request.endpoint,
+        timestamp: new Date(),
+        details: {
+          is_new_user: isNewUser,
+          trust_level: user.trust_level,
+          suspicion_score: user.suspicion_score,
+          suspicion_reasons: suspicionAssessment.reasons
+        },
+        severity: allow ? 'low' : (user.trust_level === 'blocked' ? 'high' : 'medium')
+      });
+      
+      return result;
+      
+    } catch (error) {
+      console.error('❌ Authentication error:', error);
+      return this.createDeniedResult(request, 'system_error', startTime);
+    }
+  }
+
+  private generateDeviceFingerprint(request: DinaAuthRequest): string {
+    const components = [
+      request.ip_address,
+      request.mac_address || 'unknown',
+      request.user_agent,
+      request.headers['accept-language'] || '',
+      request.headers['accept-encoding'] || '',
+      process.env.DINA_AUTH_FINGERPRINT_SALT || 'dina-enterprise-2025'
+    ];
+    
+    return crypto.createHash('sha256')
+      .update(components.join('|'))
+      .digest('hex');
+  }
+
+  private isDeviceBlocked(ipAddress: string, macAddress?: string): boolean {
+    if (this.blockedIPs.has(ipAddress)) return true;
+    if (macAddress && this.blockedMACs.has(macAddress)) return true;
+    return false;
+  }
+
+  private async findUser(userKey?: string, dinaKey?: string, deviceFingerprint?: string): Promise<DinaUser | null> {
+    let whereClause = '';
+    const params: any[] = [];
+    
+    if (dinaKey) {
+      whereClause = 'dina_key = ?';
+      params.push(dinaKey);
+    } else if (userKey) {
+      whereClause = 'user_key = ?';
+      params.push(userKey);
+    } else if (deviceFingerprint) {
+      whereClause = 'device_fingerprint = ?';
+      params.push(deviceFingerprint);
+    } else {
+      return null;
+    }
+    
+    const results = await this.query(
+      `SELECT * FROM dina_users WHERE ${whereClause} LIMIT 1`,
+      params,
+      true
+    );
+    
+    return results.length > 0 ? this.mapRowToUser(results[0]) : null;
+  }
+
+  private async createNewUser(request: DinaAuthRequest, deviceFingerprint: string): Promise<DinaUser> {
+    const userProvidedKey = request.user_key || 'anonymous';
+    const keyHash = crypto.createHash('md5').update(userProvidedKey).digest('hex').substring(0, 8);
+    const dinaKey = `dina_${keyHash}_${crypto.randomBytes(8).toString('hex')}`;
+    
+    const user: DinaUser = {
+      unique_id: `dina_user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      user_key: userProvidedKey,
+      dina_key: dinaKey,
+      device_fingerprint: deviceFingerprint,
+      ip_address: request.ip_address,
+      mac_address: request.mac_address,
+      user_agent: request.user_agent,
+      trust_level: 'new',
+      suspicion_score: 0,
+      first_seen: new Date(),
+      last_seen: new Date(),
+      total_requests: 0,
+      successful_requests: 0,
+      failed_requests: 0,
+      max_requests_per_minute: 10,
+      max_tokens_per_request: 100,
+      allowed_models: ['mxbai-embed-large'],
+      allowed_endpoints: ['/health', '/models/mxbai-embed-large/embeddings']
+    };
+    
+    await this.saveUser(user);
+    return user;
+  }
+
+  private assessSuspicion(request: DinaAuthRequest, user: DinaUser): { score: number; reasons: string[] } {
+    let score = 0;
+    const reasons: string[] = [];
+    
+    if (user.ip_address !== request.ip_address) {
+      score += 5;
+      reasons.push('ip_change');
+    }
+    
+    if (user.user_agent !== request.user_agent) {
+      score += 10;
+      reasons.push('user_agent_change');
+    }
+    
+    const suspiciousAgents = ['bot', 'crawler', 'scanner', 'python-requests', 'curl', 'wget'];
+    if (suspiciousAgents.some(agent => request.user_agent.toLowerCase().includes(agent))) {
+      score += 15;
+      reasons.push('automated_client');
+    }
+    
+    if (user.total_requests > 10) {
+      const failureRate = user.failed_requests / user.total_requests;
+      if (failureRate > 0.3) {
+        score += 25;
+        reasons.push('high_failure_rate');
+      }
+    }
+    
+    return { score, reasons };
+  }
+
+  private updateSuspicionScore(currentScore: number, newAssessment: number): number {
+    const weight = 0.3;
+    const updated = (currentScore * (1 - weight)) + (newAssessment * weight);
+    return Math.max(0, Math.min(100, updated));
+  }
+
+  private calculateTrustLevel(user: DinaUser): DinaUser['trust_level'] {
+    if (user.blocked_until && user.blocked_until > new Date()) {
+      return 'blocked';
+    }
+    
+    if (user.suspicion_score >= 70) {
+      return 'suspicious';
+    }
+    
+    if (user.total_requests < 10) {
+      return 'new';
+    }
+    
+    const failureRate = user.total_requests > 0 ? user.failed_requests / user.total_requests : 0;
+    const daysSinceFirstSeen = (Date.now() - user.first_seen.getTime()) / (24 * 60 * 60 * 1000);
+    
+    if (user.suspicion_score < 20 && failureRate < 0.1 && daysSinceFirstSeen > 1) {
+      return 'trusted';
+    }
+    
+    return 'new';
+  }
+
+  private async checkRateLimit(user: DinaUser): Promise<{ allowed: boolean; remaining: number }> {
+    const now = Date.now();
+    const windowStart = Math.floor(now / 60000) * 60000;
+    
+    const cacheKey = `${user.unique_id}:${windowStart}`;
+    const current = this.requestCache.get(cacheKey) || { count: 0, windowStart };
+    
+    // Cleanup old entries
+    for (const [key, value] of this.requestCache) {
+      if (value.windowStart < now - 120000) {
+        this.requestCache.delete(key);
+      }
+    }
+    
+    current.count += 1;
+    this.requestCache.set(cacheKey, current);
+    
+    const limit = user.max_requests_per_minute;
+    const allowed = current.count <= limit;
+    const remaining = Math.max(0, limit - current.count);
+    
+    return { allowed, remaining };
+  }
+
+  private async updateUserActivity(user: DinaUser, request: DinaAuthRequest, allowed: boolean): Promise<void> {
+    user.last_seen = new Date();
+    user.total_requests += 1;
+    user.ip_address = request.ip_address;
+    user.user_agent = request.user_agent;
+    
+    if (allowed) {
+      user.successful_requests += 1;
+      user.suspicion_score = Math.max(0, user.suspicion_score - 1);
+    } else {
+      user.failed_requests += 1;
+      user.suspicion_score += 20;
+    }
+    
+    // Update permissions based on trust level
+    if (user.trust_level === 'trusted') {
+      user.max_requests_per_minute = 100;
+      user.max_tokens_per_request = 1000;
+      user.allowed_models = ['mxbai-embed-large', 'mistral:7b', 'codellama:34b'];
+      user.allowed_endpoints = ['/health', '/models/*/embeddings', '/models/*/chat', '/models'];
+    } else if (user.trust_level === 'suspicious') {
+      user.max_requests_per_minute = 5;
+      user.max_tokens_per_request = 50;
+      user.allowed_models = ['mxbai-embed-large'];
+      user.allowed_endpoints = ['/health'];
+    }
+    
+    await this.updateUser(user);
+  }
+
+  private async blockUser(user: DinaUser, request: DinaAuthRequest): Promise<void> {
+    user.trust_level = 'blocked';
+    user.blocked_until = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    
+    this.blockedIPs.add(request.ip_address);
+    if (request.mac_address) {
+      this.blockedMACs.add(request.mac_address);
+    }
+    
+    console.warn(`🚨 User blocked: ${user.user_key} (score: ${user.suspicion_score})`);
+  }
+
+  private async saveUser(user: DinaUser): Promise<void> {
+    try {
+      await this.query(`
+        INSERT INTO dina_users (
+          unique_id, user_key, dina_key, device_fingerprint, ip_address, mac_address,
+          user_agent, trust_level, suspicion_score, blocked_until, first_seen, last_seen,
+          total_requests, successful_requests, failed_requests, max_requests_per_minute,
+          max_tokens_per_request, allowed_models, allowed_endpoints, current_session_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        user.unique_id,
+        user.user_key,
+        user.dina_key,
+        user.device_fingerprint,
+        user.ip_address,
+        user.mac_address || null,        // Fix: Convert undefined to null
+        user.user_agent,
+        user.trust_level,
+        user.suspicion_score,
+        user.blocked_until || null,      // Fix: Convert undefined to null
+        user.first_seen,
+        user.last_seen,
+        user.total_requests,
+        user.successful_requests,
+        user.failed_requests,
+        user.max_requests_per_minute,
+        user.max_tokens_per_request,
+        JSON.stringify(user.allowed_models || []),
+        JSON.stringify(user.allowed_endpoints || []),
+        user.current_session_id || null  // Fix: Convert undefined to null
+      ], true);
+    } catch (error) {
+      console.error('❌ Failed to save user:', error);
+      throw error;
+    }
+  }
+
+   private async updateUser(user: DinaUser): Promise<void> {
+    try {
+      await this.query(`
+        UPDATE dina_users SET
+          ip_address = ?, user_agent = ?, trust_level = ?, suspicion_score = ?,
+          blocked_until = ?, last_seen = ?, total_requests = ?, successful_requests = ?,
+          failed_requests = ?, max_requests_per_minute = ?, max_tokens_per_request = ?,
+          allowed_models = ?, allowed_endpoints = ?, current_session_id = ?
+        WHERE unique_id = ?
+      `, [
+        user.ip_address,
+        user.user_agent,
+        user.trust_level,
+        user.suspicion_score,
+        user.blocked_until || null,      // Fix: Convert undefined to null
+        user.last_seen,
+        user.total_requests,
+        user.successful_requests,
+        user.failed_requests,
+        user.max_requests_per_minute,
+        user.max_tokens_per_request,
+        JSON.stringify(user.allowed_models || []),
+        JSON.stringify(user.allowed_endpoints || []),
+        user.current_session_id || null, // Fix: Convert undefined to null
+        user.unique_id
+      ], true);
+    } catch (error) {
+      console.error('❌ Failed to update user:', error);
+      throw error;
+    }
+  }
+  private mapRowToUser(row: any): DinaUser {
+    return {
+      unique_id: row.unique_id,
+      user_key: row.user_key,
+      dina_key: row.dina_key,
+      device_fingerprint: row.device_fingerprint,
+      ip_address: row.ip_address,
+      mac_address: row.mac_address,
+      user_agent: row.user_agent,
+      trust_level: row.trust_level,
+      suspicion_score: parseFloat(row.suspicion_score),
+      blocked_until: row.blocked_until,
+      first_seen: row.first_seen,
+      last_seen: row.last_seen,
+      total_requests: row.total_requests,
+      successful_requests: row.successful_requests,
+      failed_requests: row.failed_requests,
+      max_requests_per_minute: row.max_requests_per_minute,
+      max_tokens_per_request: row.max_tokens_per_request,
+      allowed_models: JSON.parse(row.allowed_models || '[]'),
+      allowed_endpoints: JSON.parse(row.allowed_endpoints || '[]'),
+      current_session_id: row.current_session_id
+    };
+  }
+
+  private async logSecurityEvent(event: {
+    event_type: string;
+    user_key?: string;
+    dina_key?: string;
+    ip_address: string;
+    user_agent: string;
+    endpoint?: string;
+    timestamp: Date;
+    details: any;
+    severity: string;
+  }): Promise<void> {
+    const eventId = `dina_event_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    try {
+      await this.query(`
+        INSERT INTO dina_security_events (
+          event_id, event_type, user_key, dina_key, ip_address, user_agent,
+          endpoint, timestamp, details, severity
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        eventId, event.event_type, event.user_key, event.dina_key,
+        event.ip_address, event.user_agent, event.endpoint, event.timestamp,
+        JSON.stringify(event.details), event.severity
+      ], true);
+      
+      if (event.severity === 'high' || event.severity === 'critical') {
+        console.warn(`🚨 Security Event: ${event.event_type} - ${event.severity}`);
+      }
+      
+    } catch (error) {
+      console.error('❌ Failed to log security event:', error);
+    }
+  }
+
+  private async loadBlockedDevices(): Promise<void> {
+    try {
+      const blocked = await this.query(`
+        SELECT DISTINCT ip_address, mac_address 
+        FROM dina_users 
+        WHERE trust_level = 'blocked' AND (blocked_until IS NULL OR blocked_until > NOW())
+      `, [], true);
+      
+      this.blockedIPs.clear();
+      this.blockedMACs.clear();
+      
+      for (const device of blocked) {
+        this.blockedIPs.add(device.ip_address);
+        if (device.mac_address) {
+          this.blockedMACs.add(device.mac_address);
+        }
+      }
+      
+      console.log(`🔒 Loaded ${this.blockedIPs.size} blocked IPs, ${this.blockedMACs.size} blocked MACs`);
+    } catch (error) {
+      console.log('ℹ️ No blocked devices found (tables may not exist yet)');
+    }
+  }
+
+  private createDeniedResult(
+    request: DinaAuthRequest, 
+    reason: string, 
+    startTime: number,
+    user?: DinaUser
+  ): DinaAuthResult {
+    return {
+      allow: false,
+      user: user || {} as DinaUser,
+      is_new_user: false,
+      rate_limit_remaining: 0,
+      token_limit_remaining: 0,
+      trust_level: 'blocked',
+      suspicion_reasons: [reason],
+      session_id: `denied_${Date.now()}`,
+      validation_time_ms: performance.now() - startTime
+    };
+  }
+
+  private createRateLimitedResult(
+    request: DinaAuthRequest,
+    rateCheck: { allowed: boolean; remaining: number },
+    startTime: number,
+    user: DinaUser
+  ): DinaAuthResult {
+    return {
+      allow: false,
+      user,
+      is_new_user: false,
+      rate_limit_remaining: rateCheck.remaining,
+      token_limit_remaining: user.max_tokens_per_request,
+      trust_level: user.trust_level,
+      suspicion_reasons: ['rate_limit_exceeded'],
+      session_id: `rate_limited_${Date.now()}`,
+      validation_time_ms: performance.now() - startTime
+    };
+  }
+
+  // ================================
+  // EXISTING DATABASE METHODS (UNCHANGED)
+  // ================================
 
   private async establishIntelligentConnection(): Promise<void> {
     const poolConfig = {
@@ -471,9 +1034,6 @@ export class DinaDatabase {
   private async evolveSchemaIntelligently(): Promise<void> {
     console.log('🧬 Analyzing current schema state...');
     
-    // Explicitly drop and recreate specific tables to ensure latest schema
-    // This is suitable for development to ensure schema consistency.
-    // In production, consider using proper migration tools.
     await this.dropTableIfExists('dina_requests');
     await this.dropTableIfExists('neural_memory');
 
@@ -492,7 +1052,6 @@ export class DinaDatabase {
 
   private async dropTableIfExists(tableName: string): Promise<void> {
     try {
-      // Use query with skipSecurityValidation for internal schema operations
       await this.query(`DROP TABLE IF EXISTS ${tableName}`, [], true); 
       console.log(`🗑️ Dropped table: ${tableName}`);
     } catch (error) {
@@ -502,7 +1061,6 @@ export class DinaDatabase {
 
   private async checkSchemaExists(): Promise<boolean> {
     try {
-      // Use query with skipSecurityValidation for internal schema operations
       const tables = await this.query('SHOW TABLES', [], true); 
       return tables.length > 0;
     } catch (error) {
@@ -512,8 +1070,7 @@ export class DinaDatabase {
 
   private async verifySchema(): Promise<void> {
     console.log('🔍 Verifying schema integrity...');
-    const requiredTables = ['users', 'system_logs', 'system_intelligence', 'dina_requests', 'neural_memory'];
-    // Use query with skipSecurityValidation for internal schema operations
+    const requiredTables = ['users', 'system_logs', 'system_intelligence', 'dina_requests', 'neural_memory', 'dina_users', 'dina_security_events'];
     const existingTables = (await this.query('SHOW TABLES', [], true)).map((row: any) => Object.values(row)[0]);
 
     for (const table of requiredTables) {
@@ -630,6 +1187,54 @@ export class DinaDatabase {
         
         CHECK (confidence_score >= 0.0000 AND confidence_score <= 1.0000),
         CHECK (importance_weight >= 0.0000 AND importance_weight <= 1.0000)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+      dina_users: `CREATE TABLE IF NOT EXISTS dina_users (
+        unique_id VARCHAR(36) PRIMARY KEY,
+        user_key VARCHAR(255) NOT NULL,
+        dina_key VARCHAR(255) UNIQUE NOT NULL,
+        device_fingerprint VARCHAR(64) NOT NULL,
+        ip_address VARCHAR(45) NOT NULL,
+        mac_address VARCHAR(17),
+        user_agent TEXT,
+        trust_level ENUM('new', 'trusted', 'suspicious', 'blocked') DEFAULT 'new',
+        suspicion_score DECIMAL(5,2) DEFAULT 0.00,
+        blocked_until TIMESTAMP NULL,
+        first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        total_requests INT UNSIGNED DEFAULT 0,
+        successful_requests INT UNSIGNED DEFAULT 0,
+        failed_requests INT UNSIGNED DEFAULT 0,
+        max_requests_per_minute INT UNSIGNED DEFAULT 10,
+        max_tokens_per_request INT UNSIGNED DEFAULT 100,
+        allowed_models JSON,
+        allowed_endpoints JSON,
+        current_session_id VARCHAR(36),
+        
+        INDEX idx_user_key (user_key),
+        INDEX idx_dina_key (dina_key),
+        INDEX idx_device_fingerprint (device_fingerprint),
+        INDEX idx_trust_level (trust_level),
+        INDEX idx_blocked_until (blocked_until),
+        INDEX idx_ip_address (ip_address)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+      dina_security_events: `CREATE TABLE IF NOT EXISTS dina_security_events (
+        event_id VARCHAR(36) PRIMARY KEY,
+        event_type VARCHAR(50) NOT NULL,
+        user_key VARCHAR(255),
+        dina_key VARCHAR(255),
+        ip_address VARCHAR(45) NOT NULL,
+        user_agent TEXT,
+        endpoint VARCHAR(255),
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        details JSON,
+        severity ENUM('low', 'medium', 'high', 'critical') DEFAULT 'medium',
+        
+        INDEX idx_event_type (event_type),
+        INDEX idx_timestamp (timestamp),
+        INDEX idx_severity (severity),
+        INDEX idx_ip_address (ip_address)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
     };
 
@@ -640,7 +1245,6 @@ export class DinaDatabase {
 
     try {
       console.log(`🏗️ Creating table: ${tableName}`);
-      // Use query with skipSecurityValidation for internal schema operations
       await this.query(sql, [], true); 
       console.log(`✅ Table created: ${tableName}`);
     } catch (error) {
@@ -657,12 +1261,14 @@ export class DinaDatabase {
       'system_logs', 
       'system_intelligence', 
       'dina_requests', 
-      'neural_memory'
+      'neural_memory',
+      'dina_users',
+      'dina_security_events'
     ];
 
     for (const tableName of tables) {
       try {
-        await this.createTable(tableName); // Call createTable directly
+        await this.createTable(tableName);
       } catch (error) {
         console.error(`❌ Failed to create table ${tableName}:`, error);
         throw error;
@@ -671,14 +1277,12 @@ export class DinaDatabase {
 
     console.log('🔗 Adding foreign key constraints...');
     try {
-      // Use query with skipSecurityValidation for internal schema operations
       await this.query(`
         ALTER TABLE dina_requests 
         ADD CONSTRAINT fk_requests_user 
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
       `, [], true);
       
-      // Use query with skipSecurityValidation for internal schema operations
       await this.query(`
         ALTER TABLE neural_memory 
         ADD CONSTRAINT fk_memory_user 
@@ -702,7 +1306,7 @@ export class DinaDatabase {
     const startTime = performance.now();
     
     try {
-      if (!skipSecurityValidation) { // Only validate if not explicitly skipped
+      if (!skipSecurityValidation) {
         await this.securityModule.validateQuery(sql, params);
       }
       
@@ -729,7 +1333,6 @@ export class DinaDatabase {
       
     } catch (error) {
       const executionTime = performance.now() - startTime;
-      // Pass skipSecurityValidation as true to prevent recursive security errors during logging
       await this.handleQueryError(queryId, sql, params, error, executionTime, true); 
       throw error;
     }
@@ -801,6 +1404,14 @@ export class DinaDatabase {
     setInterval(async () => {
       if (this.selfHealingEnabled) {
         await this.performSelfHealing();
+      }
+    }, 60 * 60 * 1000);
+
+    setInterval(async () => {
+      try {
+        await this.loadBlockedDevices();
+      } catch (error) {
+        console.error('❌ Failed to reload blocked devices:', error);
       }
     }, 60 * 60 * 1000);
 
@@ -889,22 +1500,29 @@ export class DinaDatabase {
       {
         name: 'Old Failed Requests',
         query: 'DELETE FROM dina_requests WHERE status = "failed" AND created_at < DATE_SUB(NOW(), INTERVAL 1 DAY)',
+      },
+      {
+        name: 'Expired User Blocks',
+        query: 'UPDATE dina_users SET trust_level = "new", blocked_until = NULL WHERE trust_level = "blocked" AND blocked_until <= NOW()',
+      },
+      {
+        name: 'Old Security Events',
+        query: 'DELETE FROM dina_security_events WHERE timestamp < DATE_SUB(NOW(), INTERVAL 30 DAY)',
       }
     ];
 
     let totalCleaned = 0;
     for (const task of cleanupTasks) {
       try {
-        // Use query with skipSecurityValidation for internal cleanup operations
         const result = await this.query(task.query, [], true); 
-        const affectedRows = (result as any).affectedRows || 0; // Cast to any to access affectedRows
+        const affectedRows = (result as any).affectedRows || 0;
         totalCleaned += affectedRows;
         
         if (affectedRows > 0) {
           console.log(`🧹 ${task.name}: cleaned ${affectedRows} records`);
         }
       } catch (error) {
-        console.log(`ℹ️ Cleanup task '${task.name}' skipped (table may not exist or other error):`, (error as Error).message);
+        console.log(`ℹ️ Cleanup task '${task.name}' skipped:`, (error as Error).message);
       }
     }
 
@@ -915,14 +1533,12 @@ export class DinaDatabase {
 
   private async updateTableStatistics(): Promise<void> {
     try {
-      const tables = ['users', 'dina_requests', 'neural_memory', 'system_intelligence', 'system_logs'];
+      const tables = ['users', 'dina_requests', 'neural_memory', 'system_intelligence', 'system_logs', 'dina_users', 'dina_security_events'];
       
       for (const table of tables) {
         try {
-          // Use query with skipSecurityValidation for internal schema operations
           await this.query(`ANALYZE TABLE ${table}`, [], true); 
         } catch (error) {
-          // Table might not exist, continue
           console.warn(`Could not analyze table ${table}:`, (error as Error).message);
         }
       }
@@ -950,11 +1566,10 @@ export class DinaDatabase {
     console.error('❌ Query execution failed:', errorInfo);
 
     try {
-      // Log to system_logs, bypassing security validation for this internal log entry
       await this.query(
         'INSERT INTO system_logs (level, module, message, metadata) VALUES (?, ?, ?, ?)',
         ['error', 'database', 'Query execution failed', JSON.stringify(errorInfo)],
-        true // Skip security validation for this internal log
+        true
       );
     } catch (logError) {
       console.error('Failed to log query error:', logError);
@@ -990,11 +1605,10 @@ export class DinaDatabase {
 
   async log(level: string, module: string, message: string, metadata?: any): Promise<void> {
     try {
-      // Log to system_logs, bypassing security validation for this internal log entry
       await this.query(
         'INSERT INTO system_logs (level, module, message, metadata) VALUES (?, ?, ?, ?)',
         [level, module, message, JSON.stringify(metadata || {})],
-        true // Skip security validation for this internal log
+        true
       );
     } catch (error) {
       console.error('❌ Failed to log message to database:', error);
@@ -1020,7 +1634,7 @@ export class DinaDatabase {
           request.userId || null,
           request.source,
           request.target,
-          JSON.stringify(request.method), // Ensure method is stringified if it could be an object
+          JSON.stringify(request.method),
           JSON.stringify(request.payload),
           'pending',
           request.priority,
@@ -1039,10 +1653,9 @@ export class DinaDatabase {
     status: 'completed' | 'failed' | 'timeout',
     response?: any,
     processingTimeMs?: number,
-    errorMessage?: string // This can be undefined
+    errorMessage?: string
   ): Promise<void> {
     try {
-      // Ensure errorMessage is explicitly null if undefined
       const finalErrorMessage = errorMessage === undefined ? null : errorMessage;
 
       await this.query(
@@ -1056,54 +1669,54 @@ export class DinaDatabase {
     }
   }
 
-async storeUserMemory(memory: {
-      user_id: string;
-      module: string;
-      memory_type: 'episodic' | 'semantic' | 'procedural' | 'working' | 'emotional' | 'neural_memory';
-      data: any;
-      confidence_score: number;
-      importance_weight?: number;
-      expires_at?: Date;
-      security_classification?: string;
-      embeddings?: Buffer;
-    }): Promise<void> {
-      try {
-        await this.query(
-          `INSERT INTO neural_memory (user_id, neural_path, memory_type, data, confidence_score, importance_weight, expires_at, security_classification, embeddings)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            memory.user_id,
-            memory.module,
-            memory.memory_type,
-            JSON.stringify(memory.data),
-            memory.confidence_score,
-            memory.importance_weight || 0.5,
-            memory.expires_at || null,
-            memory.security_classification || 'public',
-            memory.embeddings || null
-          ]
-        );
-      } catch (error) {
-        console.error('❌ Failed to store user memory:', error);
-      }
+  async storeUserMemory(memory: {
+    user_id: string;
+    module: string;
+    memory_type: 'episodic' | 'semantic' | 'procedural' | 'working' | 'emotional' | 'neural_memory';
+    data: any;
+    confidence_score: number;
+    importance_weight?: number;
+    expires_at?: Date;
+    security_classification?: string;
+    embeddings?: Buffer;
+  }): Promise<void> {
+    try {
+      await this.query(
+        `INSERT INTO neural_memory (user_id, neural_path, memory_type, data, confidence_score, importance_weight, expires_at, security_classification, embeddings)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          memory.user_id,
+          memory.module,
+          memory.memory_type,
+          JSON.stringify(memory.data),
+          memory.confidence_score,
+          memory.importance_weight || 0.5,
+          memory.expires_at || null,
+          memory.security_classification || 'public',
+          memory.embeddings || null
+        ]
+      );
+    } catch (error) {
+      console.error('❌ Failed to store user memory:', error);
     }
-  
-    async getUserMemory(
-      userId: string,
-      neuralPath: string,
-      memoryType: ('episodic' | 'semantic' | 'procedural' | 'working' | 'emotional' | 'neural_memory')[]
-    ): Promise<any[]> {
-      try {
-        const results = await this.query(
-          `SELECT data, created_at FROM neural_memory WHERE user_id = ? AND neural_path = ? AND memory_type IN (?) ORDER BY created_at DESC`,
-          [userId, neuralPath, memoryType]
-        );
-        return results.map((row: any) => ({ data: JSON.parse(row.data), created_at: row.created_at }));
-      } catch (error) {
-        console.error('❌ Failed to retrieve user memory:', error);
-        return [];
-      }
+  }
+
+  async getUserMemory(
+    userId: string,
+    neuralPath: string,
+    memoryType: ('episodic' | 'semantic' | 'procedural' | 'working' | 'emotional' | 'neural_memory')[]
+  ): Promise<any[]> {
+    try {
+      const results = await this.query(
+        `SELECT data, created_at FROM neural_memory WHERE user_id = ? AND neural_path = ? AND memory_type IN (?) ORDER BY created_at DESC`,
+        [userId, neuralPath, memoryType]
+      );
+      return results.map((row: any) => ({ data: JSON.parse(row.data), created_at: row.created_at }));
+    } catch (error) {
+      console.error('❌ Failed to retrieve user memory:', error);
+      return [];
     }
+  }
 
   async getSystemStatus(): Promise<any> {
     const poolHealth = await this.checkConnectionPoolHealth();
@@ -1138,12 +1751,11 @@ async storeUserMemory(memory: {
     }
   }
 
-  // Emergency shutdown method
   private async emergencyShutdown(): Promise<void> {
     console.error('🚨 Performing emergency database shutdown...');
     if (this.pool) {
       try {
-        await this.pool.end(); // Forcefully close all connections
+        await this.pool.end();
         this.isConnected = false;
         console.log('✅ Emergency database shutdown complete.');
       } catch (error) {

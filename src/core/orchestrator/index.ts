@@ -14,7 +14,6 @@ import { redisManager } from '../../config/redis';
 import { DinaLLMManager } from '../../modules/llm/manager';
 import { ModelType, performanceOptimizer } from '../../modules/llm/intelligence'; // Added performanceOptimizer import
 
-
 // ================================
 // ENHANCED MESSAGE TYPES
 // ================================
@@ -88,6 +87,8 @@ export class DinaCore {
     console.log('🚀 Initializing Enhanced DINA Core Orchestrator...');
     try {
       await database.initialize();
+	  console.log('🔐 Unified authentication system initialized via database');
+      console.log('Authentication system initialized');
       await redisManager.initialize();
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
       console.log('🤖 PHASE 2: Multi-Model LLM System Initialization');
