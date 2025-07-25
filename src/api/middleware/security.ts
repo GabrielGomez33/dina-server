@@ -97,7 +97,7 @@ export const authenticate = async (
     
     console.log(`🔐 Auth result: ${authResult.allow ? 'ALLOW' : 'DENY'} - Trust: ${authResult.trust_level} - Score: ${authResult.user.suspicion_score || 0}`);
     
-    // Handle denied requests
+    // Handle denied requests with improved error messages
     if (!authResult.allow) {
       const errorResponse = {
         success: false,
@@ -106,12 +106,20 @@ export const authenticate = async (
           message: getErrorMessage(authResult),
           trust_level: authResult.trust_level,
           suspicion_reasons: authResult.suspicion_reasons,
-          dina_key: authResult.user.dina_key || null
+          dina_key: authResult.user.dina_key || null,
+          // ENHANCED: Better error details for rate limiting
+          details: authResult.suspicion_reasons.includes('rate_limit_exceeded') ? {
+            current_requests: authResult.user.total_requests || 0,
+            rate_limit_remaining: authResult.rate_limit_remaining,
+            window_reset_seconds: 60,
+            recommendations: authResult.recommendations || []
+          } : undefined
         },
         rate_limit: {
           remaining: authResult.rate_limit_remaining,
           reset_time: getResetTime(),
-          retry_after: getRetryAfter(authResult)
+          retry_after: getRetryAfter(authResult),
+          window_duration_seconds: 60
         },
         security: {
           session_id: authResult.session_id,
@@ -133,7 +141,7 @@ export const authenticate = async (
       return;
     }
     
-    // Attach auth info to request for downstream middleware
+    // COMPLETE: Attach auth info to request for downstream middleware
     req.dina = {
       user_key: authResult.user.user_key,
       dina_key: authResult.user.dina_key,
@@ -184,6 +192,7 @@ export const authenticate = async (
     });
   }
 };
+
 
 // ================================
 // LEGACY MIDDLEWARE (Kept for compatibility)

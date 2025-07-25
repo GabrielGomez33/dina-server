@@ -1,12 +1,28 @@
-// API Routes Setup with Base Path Support (Enhanced with Unified Auth)
+// API Routes Setup with Base Path Support (Enhanced with Unified Auth) - COMPLETE WITH FIXES
 // File: src/api/routes/index.ts
 
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express'; // FIXED: Added NextFunction
 import { DinaCore } from '../../core/orchestrator';
 import { authenticate, rateLimit, sanitizeInput, handleError, requireTrustLevel, corsMiddleware, AuthenticatedRequest } from '../middleware/security';
 import { DinaUniversalMessage, createDinaMessage, MessagePriority, SecurityLevel } from '../../core/protocol';
 import { v4 as uuidv4 } from 'uuid';
 import { database } from '../../config/database/db';
+
+// FIXED: Add helper function to map trust levels to security clearances
+function mapTrustLevelToSecurityLevel(trustLevel: string): SecurityLevel {
+  switch (trustLevel) {
+    case 'new':
+      return SecurityLevel.PUBLIC;
+    case 'trusted':
+      return SecurityLevel.RESTRICTED;
+    case 'suspicious':
+      return SecurityLevel.PUBLIC;
+    case 'blocked':
+      return SecurityLevel.PUBLIC;
+    default:
+      return SecurityLevel.PUBLIC;
+  }
+}
 
 export function setupAPI(app: express.Application, dina: DinaCore, basePath: string = ''): void {
   const apiPath = `${basePath}/api/v1`;
@@ -14,14 +30,32 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // API-specific middleware
   const apiRouter = express.Router();
 
-  // Add response timeout handling
+  // FIXED: Enhanced timeout handling to prevent headers already sent error
   apiRouter.use((req: Request, res: Response, next) => {
-    res.setTimeout(60000, () => {
-      console.error(`⏰ Request timeout: ${req.method} ${req.path}`);
-      if (!res.headersSent) {
-        res.status(408).json({ error: 'Request timeout' });
+    // ENHANCED: Track if response has been sent
+    let timeoutHandled = false;
+    
+    const timeout = setTimeout(() => {
+      if (!res.headersSent && !timeoutHandled) {
+        timeoutHandled = true;
+        console.error(`⏰ Request timeout: ${req.method} ${req.path}`);
+        res.status(408).json({ 
+          error: 'Request timeout',
+          message: 'The request took too long to process',
+          timeout_ms: 60000
+        });
       }
+    }, 60000);
+
+    // Clear timeout when response finishes
+    res.on('finish', () => {
+      clearTimeout(timeout);
     });
+    
+    res.on('close', () => {
+      clearTimeout(timeout);
+    });
+
     next();
   });
   
@@ -188,14 +222,14 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
 
-      // Create a DUMP message
+      // FIXED: Create a DUMP message with proper security clearance mapping
       const dinaMessage: DinaUniversalMessage = createDinaMessage({
         source: { module: source, version: '1.0.0' },
         target: { module: target, method: method, priority: priority as MessagePriority || 5 },
         security: { 
           user_id: userId, 
           session_id: req.dina!.session_id, 
-          clearance: securityLevel as SecurityLevel, 
+          clearance: mapTrustLevelToSecurityLevel(securityLevel), // FIXED: Use mapping function
           sanitized: true 
         },
         payload: payload
@@ -314,14 +348,14 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
 
-      // Create a DUMP message for LLM chat generation
+      // FIXED: Create a DUMP message for LLM chat generation with proper security clearance mapping
       const dinaMessage: DinaUniversalMessage = createDinaMessage({
         source: { module: 'api', version: '1.0.0' },
         target: { module: 'llm', method: 'llm_generate', priority: 7 },
         security: { 
           user_id: userId, 
           session_id: req.dina!.session_id, 
-          clearance: req.dina!.trust_level as SecurityLevel, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level), // FIXED: Use mapping function
           sanitized: true 
         },
         payload: {
@@ -359,8 +393,8 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
-  // Embeddings generation endpoint (most users have access)
-  apiRouter.post('/models/:modelId/embeddings', async (req: AuthenticatedRequest, res: Response) => {
+  // FIXED: Embeddings generation endpoint with proper dimension counting and error handling
+  apiRouter.post('/models/:modelId/embeddings', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { modelId } = req.params;
       const { text, options } = req.body;
@@ -397,13 +431,14 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
 
+      // FIXED: Create DUMP message with proper security clearance mapping
       const dinaMessage: DinaUniversalMessage = createDinaMessage({
         source: { module: 'api', version: '1.0.0' },
         target: { module: 'llm', method: 'llm_embed', priority: 6 },
         security: { 
           user_id: userId, 
           session_id: req.dina!.session_id, 
-          clearance: req.dina!.trust_level as SecurityLevel, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level), // FIXED: Use mapping function
           sanitized: true 
         },
         payload: {
@@ -416,25 +451,71 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
       });
 
       console.log(`🔢 Embeddings request: ${modelId} from ${req.dina!.trust_level} user`);
-      const embeddingResponse = await dina.handleIncomingMessage(dinaMessage); 
+      const embeddingResponse = await dina.handleIncomingMessage(dinaMessage);
       
-      res.json({
-        ...embeddingResponse.payload.data,
-        auth_info: {
-          trust_level: req.dina?.trust_level,
-          rate_limit_remaining: req.dina?.rate_limit_remaining
+      // ENHANCED: Better response handling with proper embedding format
+      if (embeddingResponse.status === 'success' && embeddingResponse.payload?.data) {
+        const responseData = embeddingResponse.payload.data;
+        
+        // FIXED: Extract actual embedding dimensions
+        let dimensions = 0;
+        if (responseData.response && Array.isArray(responseData.response) && responseData.response.length > 0) {
+          if (Array.isArray(responseData.response[0])) {
+            dimensions = responseData.response[0].length;
+          }
         }
-      });
+        
+        // ENHANCED: Structured response format
+        const structuredResponse = {
+          id: responseData.id,
+          model: responseData.model || modelId,
+          embeddings: responseData.response, // Keep original embeddings array
+          dimensions: dimensions, // FIXED: Actual dimension count
+          tokens: responseData.tokens || { input: 0, output: 0, total: 0 },
+          performance: responseData.performance || {},
+          confidence: responseData.confidence || 0.9,
+          metadata: {
+            ...responseData.metadata,
+            actual_dimensions: dimensions, // Double confirmation
+            embedding_format: 'array_of_arrays',
+            processing_successful: true
+          },
+          auth_info: {
+            trust_level: req.dina?.trust_level,
+            rate_limit_remaining: req.dina?.rate_limit_remaining
+          }
+        };
+        
+        console.log(`✅ Embedding dimensions: ${dimensions}, model: ${modelId}`);
+        res.json(structuredResponse);
+        return;
+        
+      } else {
+        // Handle error responses
+        console.error('❌ LLM embedding failed:', embeddingResponse);
+        res.status(500).json({
+          error: 'Embedding generation failed',
+          message: embeddingResponse.payload?.data?.message || 'Unknown error',
+          auth_info: {
+            trust_level: req.dina?.trust_level
+          }
+        });
+        return;
+      }
 
     } catch (error) {
       console.error('❌ Error in LLM embeddings generation:', error);
-      res.status(500).json({
-        error: 'LLM Embeddings Error',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        auth_info: {
-          trust_level: req.dina?.trust_level
-        }
-      });
+      
+      // ENHANCED: Ensure response hasn't been sent before responding
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: 'LLM Embeddings Error',
+          message: error instanceof Error ? error.message : 'Unknown error',
+          auth_info: {
+            trust_level: req.dina?.trust_level
+          }
+        });
+      }
     }
   });
 
@@ -610,11 +691,58 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
-  // Apply the centralized error handling middleware last
-  apiRouter.use(handleError);
+  // FIXED: Apply the enhanced error handling middleware last
+  apiRouter.use(enhancedErrorHandler);
 
   // Mount the API router at the specified base path
   app.use(apiPath, apiRouter);
   console.log(`🌐 DINA API v2 with Unified Auth routes mounted at: ${apiPath}`);
   console.log(`🔐 Authentication: Auto-registration enabled, Progressive trust system active`);
 }
+
+// FIXED: Enhanced error handler placed outside the setupAPI function
+const enhancedErrorHandler = (error: Error, req: Request, res: Response, next: NextFunction): void => {
+  console.error('❌ API Error:', error);
+  
+  // CRITICAL: Check if headers already sent
+  if (res.headersSent) {
+    console.error('⚠️ Headers already sent, cannot send error response');
+    return next(error);
+  }
+  
+  // Enhanced error categorization
+  let statusCode = 500;
+  let errorCode = 'INTERNAL_SERVER_ERROR';
+  let message = 'Internal server error';
+  
+  if (error.message.includes('timeout')) {
+    statusCode = 408;
+    errorCode = 'REQUEST_TIMEOUT';
+    message = 'Request timeout';
+  } else if (error.message.includes('Redis')) {
+    statusCode = 503;
+    errorCode = 'SERVICE_UNAVAILABLE';
+    message = 'Cache service temporarily unavailable';
+  } else if (error.message.includes('validation')) {
+    statusCode = 400;
+    errorCode = 'VALIDATION_ERROR';
+    message = 'Request validation failed';
+  }
+  
+  const errorResponse = {
+    success: false,
+    error: {
+      code: errorCode,
+      message: message,
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    },
+    timestamp: new Date().toISOString(),
+    request_id: `error_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  };
+  
+  try {
+    res.status(statusCode).json(errorResponse);
+  } catch (sendError) {
+    console.error('❌ Failed to send error response:', sendError);
+  }
+};

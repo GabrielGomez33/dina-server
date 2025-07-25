@@ -93,12 +93,14 @@ export interface DinaAuthResult {
   allow: boolean;
   user: DinaUser;
   is_new_user: boolean;
+  is_returning_user?: boolean;    
   rate_limit_remaining: number;
   token_limit_remaining: number;
   trust_level: DinaUser['trust_level'];
   suspicion_reasons: string[];
   session_id: string;
   validation_time_ms: number;
+  recommendations?: string[];    // ENHANCED: Add recommendations array
 }
 
 // ================================
@@ -621,35 +623,36 @@ export class DinaDatabase {
     return results.length > 0 ? this.mapRowToUser(results[0]) : null;
   }
 
-  private async createNewUser(request: DinaAuthRequest, deviceFingerprint: string): Promise<DinaUser> {
-    const userProvidedKey = request.user_key || 'anonymous';
-    const keyHash = crypto.createHash('md5').update(userProvidedKey).digest('hex').substring(0, 8);
-    const dinaKey = `dina_${keyHash}_${crypto.randomBytes(8).toString('hex')}`;
-    
-    const user: DinaUser = {
-      unique_id: `dina_user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      user_key: userProvidedKey,
-      dina_key: dinaKey,
-      device_fingerprint: deviceFingerprint,
-      ip_address: request.ip_address,
-      mac_address: request.mac_address,
-      user_agent: request.user_agent,
-      trust_level: 'new',
-      suspicion_score: 0,
-      first_seen: new Date(),
-      last_seen: new Date(),
-      total_requests: 0,
-      successful_requests: 0,
-      failed_requests: 0,
-      max_requests_per_minute: 10,
-      max_tokens_per_request: 100,
-      allowed_models: ['mxbai-embed-large'],
-      allowed_endpoints: ['/health', '/models/mxbai-embed-large/embeddings']
-    };
-    
-    await this.saveUser(user);
-    return user;
-  }
+private async createNewUser(request: DinaAuthRequest, deviceFingerprint: string): Promise<DinaUser> {
+  const userProvidedKey = request.user_key || 'anonymous';
+  const keyHash = crypto.createHash('md5').update(userProvidedKey).digest('hex').substring(0, 8);
+  const dinaKey = `dina_${keyHash}_${crypto.randomBytes(8).toString('hex')}`;
+  
+  const user: DinaUser = {
+    unique_id: `dina_user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    user_key: userProvidedKey,
+    dina_key: dinaKey,
+    device_fingerprint: deviceFingerprint,
+    ip_address: request.ip_address,
+    mac_address: request.mac_address,
+    user_agent: request.user_agent,
+    trust_level: 'new',
+    suspicion_score: 0,
+    first_seen: new Date(),
+    last_seen: new Date(),
+    total_requests: 0,
+    successful_requests: 0,
+    failed_requests: 0,
+    // ENHANCED: More reasonable limits for testing/development
+    max_requests_per_minute: 20, // Increased from 10
+    max_tokens_per_request: 200, // Increased from 100
+    allowed_models: ['mxbai-embed-large'],
+    allowed_endpoints: ['/health', '/status', '/models', '/models/mxbai-embed-large/embeddings']
+  };
+  
+  await this.saveUser(user);
+  return user;
+}
 
   private assessSuspicion(request: DinaAuthRequest, user: DinaUser): { score: number; reasons: string[] } {
     let score = 0;
@@ -713,24 +716,43 @@ export class DinaDatabase {
 
   private async checkRateLimit(user: DinaUser): Promise<{ allowed: boolean; remaining: number }> {
     const now = Date.now();
-    const windowStart = Math.floor(now / 60000) * 60000;
+    const windowStart = Math.floor(now / 60000) * 60000; // 1-minute window
     
     const cacheKey = `${user.unique_id}:${windowStart}`;
-    const current = this.requestCache.get(cacheKey) || { count: 0, windowStart };
+    let current = this.requestCache.get(cacheKey);
     
-    // Cleanup old entries
+    if (!current) {
+      current = { count: 0, windowStart };
+    }
+    
+    // Cleanup old entries (older than 2 minutes)
     for (const [key, value] of this.requestCache) {
       if (value.windowStart < now - 120000) {
         this.requestCache.delete(key);
       }
     }
     
+    // Calculate limit based on trust level and usage pattern
+    let limit = user.max_requests_per_minute;
+    
+    // ENHANCED: More generous limits for testing and development
+    if (user.trust_level === 'new') {
+      // More generous for new users during testing
+      limit = Math.max(20, user.max_requests_per_minute);
+    } else if (user.trust_level === 'trusted') {
+      limit = Math.max(100, user.max_requests_per_minute);
+    }
+    
+    // For health checks and basic endpoints, be more lenient
+    limit = Math.max(limit, 15); // Minimum 15 requests per minute
+    
     current.count += 1;
     this.requestCache.set(cacheKey, current);
     
-    const limit = user.max_requests_per_minute;
     const allowed = current.count <= limit;
     const remaining = Math.max(0, limit - current.count);
+    
+    console.log(`🔢 Rate check: ${current.count}/${limit}, remaining: ${remaining}, user: ${user.trust_level}`);
     
     return { allowed, remaining };
   }
@@ -845,31 +867,33 @@ export class DinaDatabase {
       throw error;
     }
   }
-  private mapRowToUser(row: any): DinaUser {
-    return {
-      unique_id: row.unique_id,
-      user_key: row.user_key,
-      dina_key: row.dina_key,
-      device_fingerprint: row.device_fingerprint,
-      ip_address: row.ip_address,
-      mac_address: row.mac_address,
-      user_agent: row.user_agent,
-      trust_level: row.trust_level,
-      suspicion_score: parseFloat(row.suspicion_score),
-      blocked_until: row.blocked_until,
-      first_seen: row.first_seen,
-      last_seen: row.last_seen,
-      total_requests: row.total_requests,
-      successful_requests: row.successful_requests,
-      failed_requests: row.failed_requests,
-      max_requests_per_minute: row.max_requests_per_minute,
-      max_tokens_per_request: row.max_tokens_per_request,
-      allowed_models: JSON.parse(row.allowed_models || '[]'),
-      allowed_endpoints: JSON.parse(row.allowed_endpoints || '[]'),
-      current_session_id: row.current_session_id
-    };
-  }
-
+private mapRowToUser(row: any): DinaUser {
+  return {
+    unique_id: row.unique_id,
+    user_key: row.user_key,
+    dina_key: row.dina_key,
+    device_fingerprint: row.device_fingerprint,
+    ip_address: row.ip_address,
+    mac_address: row.mac_address,
+    user_agent: row.user_agent,
+    trust_level: row.trust_level,
+    suspicion_score: parseFloat(row.suspicion_score),
+    blocked_until: row.blocked_until,
+    first_seen: row.first_seen,
+    last_seen: row.last_seen,
+    total_requests: row.total_requests,
+    successful_requests: row.successful_requests,
+    failed_requests: row.failed_requests,
+    max_requests_per_minute: row.max_requests_per_minute,
+    max_tokens_per_request: row.max_tokens_per_request,
+    
+    // FIXED: Safe JSON parsing with proper fallbacks
+    allowed_models: this.safeParseJSONArray(row.allowed_models, ['mxbai-embed-large']),
+    allowed_endpoints: this.safeParseJSONArray(row.allowed_endpoints, ['/health']),
+    
+    current_session_id: row.current_session_id
+  };
+}
   private async logSecurityEvent(event: {
     event_type: string;
     user_key?: string;
@@ -957,12 +981,18 @@ export class DinaDatabase {
       allow: false,
       user,
       is_new_user: false,
+      is_returning_user: true,
       rate_limit_remaining: rateCheck.remaining,
       token_limit_remaining: user.max_tokens_per_request,
       trust_level: user.trust_level,
       suspicion_reasons: ['rate_limit_exceeded'],
       session_id: `rate_limited_${Date.now()}`,
-      validation_time_ms: performance.now() - startTime
+      validation_time_ms: performance.now() - startTime,
+      recommendations: [
+        'Rate limit exceeded. Please wait before making more requests.',
+        'Current limit resets every minute.',
+        user.trust_level === 'new' ? 'Build trust by using the system responsibly to get higher limits.' : 'Consider upgrading your plan for higher limits.'
+      ]
     };
   }
 
@@ -1079,6 +1109,44 @@ export class DinaDatabase {
         await this.createTable(table);
       }
     }
+  }
+
+  private safeParseJSONArray(value: any, fallback: string[]): string[] {
+    // If null or undefined, return fallback
+    if (value == null) {
+      return fallback;
+    }
+    
+    // If already an array, return it
+    if (Array.isArray(value)) {
+      return value;
+    }
+    
+    // If it's a string, try to parse it
+    if (typeof value === 'string') {
+      // Empty string case
+      if (value.trim() === '') {
+        return fallback;
+      }
+      
+      // Check if it looks like JSON array
+      if (value.startsWith('[') && value.endsWith(']')) {
+        try {
+          const parsed = JSON.parse(value);
+          return Array.isArray(parsed) ? parsed : fallback;
+        } catch (error) {
+          console.warn(`⚠️ Failed to parse JSON array: ${value}`,  (error as Error).message);
+          return fallback;
+        }
+      }
+      
+      // Single string value (like "mxbai-embed-large") - convert to array
+      return [value];
+    }
+    
+    // For any other type, return fallback
+    console.warn(`⚠️ Unexpected type for JSON array field: ${typeof value}, value: ${value}`);
+    return fallback;
   }
 
   private async createTable(tableName: string): Promise<void> {
@@ -1766,3 +1834,4 @@ export class DinaDatabase {
 }
 
 export const database = new DinaDatabase();
+
