@@ -1,6 +1,7 @@
-// File: src/config/redis.ts
+// File: src/config/redis.ts - FIXED VERSION
 import { createClient, RedisClientType } from 'redis';
 import { DinaUniversalMessage, DinaResponse, QUEUE_NAMES } from '../core/protocol'; 
+
 export class DinaRedisManager {
   private client: RedisClientType;
   private publisher: RedisClientType;
@@ -10,14 +11,14 @@ export class DinaRedisManager {
   private maxReconnectAttempts: number = 5;
   private responseHandlers: Map<string, (response: DinaResponse) => void> = new Map();
   private queueMonitoringInterval: NodeJS.Timeout | null = null;
-  private healthCheckInterval: NodeJS.Timeout | null = null; // ENHANCED: Health monitoring
+  private healthCheckInterval: NodeJS.Timeout | null = null;
 
   constructor() {
     this.client = createClient({
       url: process.env.REDIS_URL || 'redis://localhost:6379',
       socket: {
         reconnectStrategy: (retries) => Math.min(retries * 50, 500),
-        connectTimeout: 3000 // ENHANCED: Shorter connect timeout
+        connectTimeout: 5000 // ENHANCED: Longer connect timeout
       }
     });
 
@@ -39,14 +40,14 @@ export class DinaRedisManager {
       ]);
       
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Redis initialization timeout')), 5000);
+        setTimeout(() => reject(new Error('Redis initialization timeout')), 8000);
       });
       
       await Promise.race([initPromise, timeoutPromise]);
 
       await this.setupQueues();
       this.startQueueMonitoring();
-      this.startHealthCheck(); // ENHANCED: Start health monitoring
+      this.startHealthCheck();
 
       this.subscriber.on('message', (channel, message) => {
         if (channel.startsWith('dina:response:')) {
@@ -70,7 +71,6 @@ export class DinaRedisManager {
     } catch (error) {
       this.isConnected = false;
       console.error('❌ Failed to initialize Redis:', error);
-      // ENHANCED: Don't throw error, continue without Redis
       console.log('🔄 Continuing without Redis - system will work in fallback mode');
     }
   }
@@ -98,22 +98,60 @@ export class DinaRedisManager {
     });
   }
 
-  // ENHANCED: Health check to detect connection issues proactively
+  // ENHANCED: Robust health check with retries
   private startHealthCheck(): void {
     this.healthCheckInterval = setInterval(async () => {
       if (this.isConnected) {
         try {
-          await Promise.race([
-            this.client.ping(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Health check timeout')), 1000))
-          ]);
+          await this.performHealthCheck();
         } catch (error) {
-          console.warn('⚠️ Redis health check failed, marking as disconnected');
+          console.warn('⚠️ Redis health check failed after all attempts, marking as disconnected');
           this.isConnected = false;
           this.attemptReconnect();
         }
       }
-    }, 30000); // Check every 30 seconds
+    }, 45000); // Check every 45 seconds (less frequent)
+  }
+
+  // NEW: Robust health check method
+  private async performHealthCheck(): Promise<void> {
+    let success = false;
+    let lastError = null;
+    
+    // Try health check up to 3 times with increasing timeouts
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const timeout = attempt * 10000; // 3s, 6s, 9s timeouts
+        
+        await Promise.race([
+          // Test all three connections
+          Promise.all([
+            this.client.ping(),
+            this.publisher.ping(),
+            this.subscriber.ping()
+          ]),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`Health check timeout attempt ${attempt}`)), timeout)
+          )
+        ]);
+        
+        success = true;
+        break; // Success, exit retry loop
+        
+      } catch (error) {
+        lastError = error;
+        console.warn(`⚠️ Redis health check attempt ${attempt}/3 failed:`, error instanceof Error ? error.message : error);
+        
+        if (attempt < 3) {
+          // Wait before retry (progressive delay)
+          await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+        }
+      }
+    }
+    
+    if (!success) {
+      throw lastError || new Error('All health check attempts failed');
+    }
   }
 
   private async setupQueues(): Promise<void> {
@@ -138,8 +176,6 @@ export class DinaRedisManager {
     this.queueMonitoringInterval = setInterval(async () => {
       try {
         const stats = await this.getQueueStats();
-
-        // FIX: Map the queue names to simple properties
         const high = stats[QUEUE_NAMES.HIGH] || 0;
         const medium = stats[QUEUE_NAMES.MEDIUM] || 0;
         const low = stats[QUEUE_NAMES.LOW] || 0;
@@ -150,7 +186,7 @@ export class DinaRedisManager {
       } catch (error) {
         console.error('❌ Error getting queue stats during monitoring:', error);
       }
-    }, 10000);
+    }, 15000); // Check every 15 seconds (less frequent)
   }
 
   async enqueueMessage(message: DinaUniversalMessage): Promise<void> {
@@ -165,12 +201,21 @@ export class DinaRedisManager {
         queued_at: Date.now()
       };
 
-      await this.publisher.rPush(queueName, JSON.stringify(queuedMessage));
+      // ENHANCED: Add timeout to enqueue operations
+      await Promise.race([
+        this.publisher.rPush(queueName, JSON.stringify(queuedMessage)),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Enqueue timeout')), 3000)
+        )
+      ]);
 
       console.log(`📨 Message queued: ${message.id} → ${queueName}`);
 
     } catch (error) {
       console.error('❌ Failed to enqueue message:', error);
+      if (error instanceof Error && error.message === 'Enqueue timeout') {
+        this.isConnected = false;
+      }
       throw error;
     }
   }
@@ -203,22 +248,17 @@ export class DinaRedisManager {
   }
 
   async retrieveMessage(queueName: string): Promise<DinaUniversalMessage | null> {
-    // ADD THIS CHECK at the beginning:
     if (!this.isConnected) {
-      // Don't log here to avoid spam - let the caller handle it
       return null;
     }
 
     try {
-      // BLPOP = blocking left pop (waits for message if queue empty)
-      // Using 0.1s timeout for non-blocking behavior in intervals
       const result = await this.client.blPop(queueName, 0.1);
 
       if (!result) {
-        return null; // Timeout, no message available
+        return null;
       }
 
-      // Parse message and add queue time to trace
       const message: DinaUniversalMessage & { queued_at?: number } = JSON.parse(result.element);
 
       if (typeof message.queued_at === 'number' && message.trace) {
@@ -232,7 +272,6 @@ export class DinaRedisManager {
 
     } catch (error) {
       console.error(`❌ Error retrieving message from ${queueName}:`, error);
-      // Mark as disconnected if Redis error
       this.isConnected = false;
       return null;
     }
@@ -263,10 +302,19 @@ export class DinaRedisManager {
     }
     const channel = `dina:response:${connectionId}`;
     try {
-      await this.publisher.publish(channel, JSON.stringify(response));
+      // ENHANCED: Add timeout to publish operations
+      await Promise.race([
+        this.publisher.publish(channel, JSON.stringify(response)),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Publish timeout')), 2000)
+        )
+      ]);
       console.log(`📢 Published response for request ${response.request_id} to channel ${channel}`);
     } catch (error) {
       console.error(`❌ Failed to publish response to ${channel}:`, error);
+      if (error instanceof Error && error.message === 'Publish timeout') {
+        this.isConnected = false;
+      }
     }
   }
 
@@ -281,8 +329,23 @@ export class DinaRedisManager {
 
     this.responseHandlers.set(connectionId, responseHandler);
 
-    await this.subscriber.subscribe(channel, () => {});
-    console.log(`👂 Subscribed to response channel: ${channel}`);
+    // ENHANCED: Add timeout to subscribe operations
+    try {
+      await Promise.race([
+        this.subscriber.subscribe(channel, () => {}),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Subscribe timeout')), 3000)
+        )
+      ]);
+      console.log(`👂 Subscribed to response channel: ${channel}`);
+    } catch (error) {
+      console.error(`❌ Failed to subscribe to ${channel}:`, error);
+      this.responseHandlers.delete(connectionId);
+      if (error instanceof Error && error.message === 'Subscribe timeout') {
+        this.isConnected = false;
+      }
+      throw error;
+    }
   }
 
   async unsubscribeFromResponses(connectionId: string): Promise<void> {
@@ -294,14 +357,21 @@ export class DinaRedisManager {
 
     this.responseHandlers.delete(connectionId);
 
-    await this.subscriber.unsubscribe(channel);
-    console.log(`🚫 Unsubscribed from response channel: ${channel}`);
+    try {
+      await Promise.race([
+        this.subscriber.unsubscribe(channel),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Unsubscribe timeout')), 2000)
+        )
+      ]);
+      console.log(`🚫 Unsubscribed from response channel: ${channel}`);
+    } catch (error) {
+      console.warn(`⚠️ Failed to unsubscribe ${connectionId}:`, error);
+    }
   }
 
   async getQueueStats(): Promise<{ [key: string]: number }> {
-    // ADD THIS CHECK:
     if (!this.isConnected) {
-      // Return empty stats silently when Redis is disconnected
       return {
         [QUEUE_NAMES.HIGH]: 0,
         [QUEUE_NAMES.MEDIUM]: 0,
@@ -313,13 +383,11 @@ export class DinaRedisManager {
       const stats: { [key: string]: number } = {};
       for (const queueName of Object.values(QUEUE_NAMES)) {
         const count = await this.client.lLen(queueName);
-        // FIX: Ensure count is always a number, never undefined
         stats[queueName] = count || 0;
       }
       return stats;
     } catch (error) {
       console.error('❌ Error getting queue stats:', error);
-      // Mark as disconnected if Redis error
       this.isConnected = false;
       return {
         [QUEUE_NAMES.HIGH]: 0,
@@ -330,17 +398,15 @@ export class DinaRedisManager {
     }
   }
 
-  // ENHANCED: Improved cache operations with shorter timeouts
   async getExactCachedResponse(key: string): Promise<any | null> {
     if (!this.isConnected) {
       return null;
     }
     
     try {
-      // ENHANCED: Much shorter timeout for cache operations
       const getPromise = this.client.get(`cache:${key}`);
       const timeoutPromise = new Promise<null>((_, reject) => {
-        setTimeout(() => reject(new Error('Redis get timeout')), 1000); // 1 second timeout
+        setTimeout(() => reject(new Error('Redis get timeout')), 2000); // 2 second timeout
       });
       
       const serializedData = await Promise.race([getPromise, timeoutPromise]);
@@ -355,10 +421,6 @@ export class DinaRedisManager {
       if (error instanceof Error && error.message === 'Redis get timeout') {
         console.warn(`⚠️ Redis cache timeout for key: ${key.substring(0, 50)}...`);
         this.isConnected = false;
-        // ENHANCED: Don't attempt reconnect on every timeout
-        if (this.reconnectAttempts === 0) {
-          setTimeout(() => this.attemptReconnect(), 5000);
-        }
       }
       return null;
     }
@@ -370,16 +432,14 @@ export class DinaRedisManager {
     }
     
     try {
-      // ENHANCED: Non-blocking cache set with very short timeout
       const setPromise = this.client.setEx(`cache:${key}`, ttlSeconds, JSON.stringify(data));
       const timeoutPromise = new Promise<void>((_, reject) => {
-        setTimeout(() => reject(new Error('Redis set timeout')), 500); // 0.5 second timeout
+        setTimeout(() => reject(new Error('Redis set timeout')), 1000);
       });
       
       await Promise.race([setPromise, timeoutPromise]);
       
     } catch (error) {
-      // ENHANCED: Silent failure for cache sets - don't log spam
       if (error instanceof Error && error.message === 'Redis set timeout') {
         this.isConnected = false;
       }
@@ -404,7 +464,6 @@ export class DinaRedisManager {
     }
   }
 
-  // Added to resolve TypeScript error in src/modules/llm/manager.ts
   async getCacheSize(): Promise<number> {
     if (!this.isConnected) {
       console.warn('Redis not connected. Cannot get cache size.');
@@ -421,23 +480,20 @@ export class DinaRedisManager {
     }
   }
 
-  // ENHANCED: Improved reconnection logic
   private async attemptReconnect(): Promise<void> {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.log('⚠️ Max Redis reconnection attempts reached, will retry later');
-      // ENHANCED: Reset attempts after a longer delay
-      setTimeout(() => { this.reconnectAttempts = 0; }, 300000); // Reset after 5 minutes
+      setTimeout(() => { this.reconnectAttempts = 0; }, 300000);
       return;
     }
 
     this.reconnectAttempts++;
-    const delay = Math.min(this.reconnectAttempts * 2000, 10000);
+    const delay = Math.min(this.reconnectAttempts * 3000, 15000); // Longer delays
 
     console.log(`🔄 Redis reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
 
     setTimeout(async () => {
       try {
-        // ENHANCED: Try to reconnect each client individually
         if (!this.client.isOpen) {
           await this.client.connect();
         }
@@ -461,7 +517,6 @@ export class DinaRedisManager {
     console.log('🛑 Shutting down Redis with cleanup...');
     
     try {
-      // ENHANCED: Clear all intervals
       if (this.queueMonitoringInterval) {
         clearInterval(this.queueMonitoringInterval);
         this.queueMonitoringInterval = null;
