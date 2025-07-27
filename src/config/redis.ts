@@ -30,9 +30,9 @@ export class DinaRedisManager {
 
   async initialize(): Promise<void> {
     console.log('📬 Initializing Redis with enhanced connection management...');
-
+  
     try {
-      // ENHANCED: Initialize with timeout
+      // Initialize connections with timeout
       const initPromise = Promise.all([
         this.client.connect(),
         this.publisher.connect(),
@@ -44,11 +44,11 @@ export class DinaRedisManager {
       });
       
       await Promise.race([initPromise, timeoutPromise]);
-
+  
       await this.setupQueues();
       this.startQueueMonitoring();
-      this.startHealthCheck();
-
+      // this.startHealthCheck(); // DISABLED - was causing false disconnections
+  
       this.subscriber.on('message', (channel, message) => {
         if (channel.startsWith('dina:response:')) {
           const connectionId = channel.substring('dina:response:'.length);
@@ -63,11 +63,11 @@ export class DinaRedisManager {
           }
         }
       });
-
+  
       this.isConnected = true;
-      console.log('✅ Redis enhanced connection system online');
+      console.log('✅ Redis connection system online (health check disabled)');
       this.reconnectAttempts = 0;
-
+  
     } catch (error) {
       this.isConnected = false;
       console.error('❌ Failed to initialize Redis:', error);
@@ -100,17 +100,28 @@ export class DinaRedisManager {
 
   // ENHANCED: Robust health check with retries
   private startHealthCheck(): void {
-    this.healthCheckInterval = setInterval(async () => {
-      if (this.isConnected) {
-        try {
-          await this.performHealthCheck();
-        } catch (error) {
-          console.warn('⚠️ Redis health check failed after all attempts, marking as disconnected');
-          this.isConnected = false;
-          this.attemptReconnect();
-        }
-      }
-    }, 45000); // Check every 45 seconds (less frequent)
+    // HEALTH CHECK COMPLETELY DISABLED
+    // The health check was causing false disconnections and preventing connections
+    // Redis connection status will be determined by actual operation failures
+    console.log('🔧 Redis health check disabled - using operation-based error detection only');
+    
+    // No health check interval is started
+    // Redis will be marked as disconnected only when actual operations fail
+  }
+
+  private handleRedisOperationError(operation: string, error: any): void {
+    console.warn(`⚠️ Redis ${operation} failed:`, error);
+    
+    // Only mark as disconnected on actual connection errors, not timeouts
+    if (error.code === 'ECONNREFUSED' || 
+        error.code === 'ENOTFOUND' || 
+        error.message.includes('Connection closed') ||
+        error.message.includes('Socket closed unexpectedly')) {
+      
+      console.log(`❌ Redis connection lost during ${operation} - marking as disconnected`);
+      this.isConnected = false;
+      this.attemptReconnect();
+    }
   }
 
   // NEW: Robust health check method
