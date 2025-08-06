@@ -5,7 +5,14 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { IncomingMessage } from 'http';
 import { Server as HTTPSServer } from 'https';
 import { v4 as uuidv4 } from 'uuid';
-import { DinaUniversalMessage, DinaResponse, DinaProtocol, ConnectionState, SecurityLevel, createDinaMessage } from '../../core/protocol';
+import { 
+  DinaUniversalMessage, 
+  DinaResponse, 
+  DinaProtocol, 
+  ConnectionState, 
+  SecurityLevel, 
+  createDinaMessage 
+} from '../../core/protocol';
 import { redisManager } from '../redis';
 
 interface ConnectionInfo {
@@ -132,7 +139,7 @@ export class DinaWebSocketManager {
   }
 
   /**
-   * ENHANCED: Handle incoming messages with Redis fallback
+   * FIXED: Handle incoming messages with proper module extraction
    */
   private async handleIncomingMessage(ws: WebSocket, connectionId: string, data: Buffer): Promise<void> {
     const connectionInfo = this.connections.get(connectionId);
@@ -144,20 +151,41 @@ export class DinaWebSocketManager {
       const rawMessage = data.toString();
       const messageData = JSON.parse(rawMessage);
 
+      console.log('🔍 RAW MESSAGE DATA:', {
+        source: messageData.source,
+        target: messageData.target,
+        sourceType: typeof messageData.source,
+        targetType: typeof messageData.target
+      });
+
       this.updateConnectionActivity(connectionId);
       connectionInfo.state.message_count++;
 
+      // ✅ EXTRACT MODULE STRINGS PROPERLY
+      const sourceModule = this.extractModuleString(messageData.source, 'websocket');
+      const targetModule = this.extractModuleString(messageData.target, 'core');
+      const targetMethod = this.extractMethodString(messageData.target, messageData.method, 'process_data');
+      const targetPriority = this.extractPriorityNumber(messageData.target, messageData.priority, 5);
+
+      console.log('🔧 EXTRACTED VALUES:', {
+        sourceModule,
+        targetModule, 
+        targetMethod,
+        targetPriority
+      });
+
       dinaMessage = createDinaMessage({
         source: {
-          module: messageData.source || 'websocket',
+          module: sourceModule,                     // ✅ Now a string
           instance: connectionId,
           version: '1.0.0'
         },
         target: {
-          module: messageData.target || 'core',
-          method: messageData.method || 'process_data',
-          priority: messageData.priority || 5
+          module: targetModule,                     // ✅ Now a string
+          method: targetMethod,                     // ✅ Now a string
+          priority: targetPriority                  // ✅ Now a number
         },
+        payload: messageData.payload || messageData,
         qos: {
           delivery_mode: messageData.qos?.delivery_mode || 'at_least_once',
           timeout_ms: messageData.qos?.timeout_ms || 30000,
@@ -170,13 +198,16 @@ export class DinaWebSocketManager {
           session_id: connectionInfo.state.session_id,
           clearance: messageData.security?.clearance || SecurityLevel.PUBLIC,
           sanitized: false
-        },
-        payload: {
-          data: messageData.payload || messageData
         }
       });
 
       console.log(`📨 Message from ${connectionId}: ${dinaMessage.target.method}`);
+      console.log('✅ FINAL DINA MESSAGE STRUCTURE:', {
+        sourceModule: dinaMessage.source.module,
+        sourceModuleType: typeof dinaMessage.source.module,
+        targetModule: dinaMessage.target.module,
+        targetModuleType: typeof dinaMessage.target.module
+      });
 
       // ENHANCED: Try Redis first, fall back to direct processing
       await this.processMessage(ws, connectionId, dinaMessage, connectionInfo);
@@ -199,6 +230,62 @@ export class DinaWebSocketManager {
 
       this.sendResponse(ws, errorResponse);
     }
+  }
+
+  /**
+   * NEW: Extract module string from source/target object or use fallback
+   */
+  private extractModuleString(moduleData: any, fallback: string): string {
+    // If moduleData is already a string, use it
+    if (typeof moduleData === 'string') {
+      return moduleData;
+    }
+    
+    // If moduleData is an object with a module property, extract it
+    if (moduleData && typeof moduleData === 'object' && typeof moduleData.module === 'string') {
+      console.log(`🔧 Extracting module from object: ${JSON.stringify(moduleData)} → "${moduleData.module}"`);
+      return moduleData.module;
+    }
+    
+    // Use fallback
+    console.log(`🔧 Using fallback module: "${fallback}"`);
+    return fallback;
+  }
+
+  /**
+   * NEW: Extract method string from target object or message root
+   */
+  private extractMethodString(targetData: any, rootMethod: any, fallback: string): string {
+    // Check root method first
+    if (typeof rootMethod === 'string') {
+      return rootMethod;
+    }
+    
+    // Check target.method
+    if (targetData && typeof targetData === 'object' && typeof targetData.method === 'string') {
+      return targetData.method;
+    }
+    
+    // Use fallback
+    return fallback;
+  }
+
+  /**
+   * NEW: Extract priority number from target object or message root
+   */
+  private extractPriorityNumber(targetData: any, rootPriority: any, fallback: number): number {
+    // Check root priority first
+    if (typeof rootPriority === 'number') {
+      return rootPriority;
+    }
+    
+    // Check target.priority
+    if (targetData && typeof targetData === 'object' && typeof targetData.priority === 'number') {
+      return targetData.priority;
+    }
+    
+    // Use fallback
+    return fallback;
   }
 
   /**

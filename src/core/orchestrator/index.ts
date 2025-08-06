@@ -13,6 +13,8 @@ import { database } from '../../config/database/db';
 import { redisManager } from '../../config/redis';
 import { DinaLLMManager } from '../../modules/llm/manager';
 import { ModelType, performanceOptimizer } from '../../modules/llm/intelligence'; // Added performanceOptimizer import
+import { digiMOrchestrator} from '../../modules/digim';
+import { isDigiMMessage } from '../../modules/digim/types';
 
 // ================================
 // ENHANCED MESSAGE TYPES
@@ -79,60 +81,75 @@ export class DinaCore {
   }
 
   async initialize(): Promise<void> {
-    if (this.initialized) {
-      console.log('ℹ️ DINA Core already initialized.');
-      return;
-    }
+      if (this.initialized) {
+        console.log('ℹ️ DINA Core already initialized.');
+        return;
+      }
+  
+      console.log('🚀 Initializing Enhanced DINA Core Orchestrator...');
+      try {
+        await database.initialize();
+        console.log('🔐 Unified authentication system initialized via database');
+        
+        await redisManager.initialize();
+        
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('🤖 PHASE 2: Multi-Model LLM System Initialization');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        await this.llmManager.initialize();
+        console.log('✅ LLM System initialization complete');
+        
+        // ADD DIGIM INITIALIZATION HERE:
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('🧠 PHASE 1.5: DIGIM Intelligence Module Initialization');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📊 Step 1: Loading DIGIM Foundation...');
+        
+        await digiMOrchestrator.initialize();
+        
+        console.log('🎯 Step 2: DIGIM Integration Check...');
+        const digiMStatus = digiMOrchestrator.moduleStatus;
+        console.log(`📈 DIGIM Health: ${digiMStatus === 'healthy' ? '✅ Operational' : '⚠️ Degraded'}`);
+        console.log(`🔄 DIGIM Sources: ${digiMOrchestrator.getActiveSources().length} configured`);
+        console.log(`✨ DIGIM Foundation: ${digiMOrchestrator.isInitialized ? 'READY' : 'FAILED'}`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('✅ DIGIM PHASE 1 INITIALIZATION COMPLETE');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('DIGIM Phase 1 Features:');
+        console.log('  ✅ DUMP Protocol Integration');
+        console.log('  ✅ Database Schema Foundation');
+        console.log('  ✅ Source Management Framework');
+        console.log('  ✅ Security Framework (Basic)');
+        console.log('  ✅ Health Monitoring System');
+        console.log('  ✅ Natural Language Query Interface');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-    console.log('🚀 Initializing Enhanced DINA Core Orchestrator...');
-    try {
-      await database.initialize();
-	  console.log('🔐 Unified authentication system initialized via database');
-      console.log('Authentication system initialized');
-      await redisManager.initialize();
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log('🤖 PHASE 2: Multi-Model LLM System Initialization');
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log('🧠 Step 1: Loading LLM Intelligence Engine...');
-      console.log('⚡ Step 2: Connecting to Ollama Server...');
-      
-      // Fixed: Call public initialize method
-      await this.llmManager.initialize();
-      
-      console.log('🎯 Step 3: Model Availability Check...');
-      const llmStatus = await this.llmManager.getSystemStatus();
-      console.log(`📊 Available Models: ${llmStatus.availableModels.length}`);
-      console.log(`🔥 Loaded Models: ${llmStatus.loadedModels.length}`);
-      console.log(`💾 Memory Usage: ${llmStatus.memoryUsage}`);
-      console.log(`🩺 Ollama Health: ${llmStatus.ollamaHealthy ? '✅ Healthy' : '❌ Unhealthy'}`);
-      console.log(`🎉 Multi-Model AI System: ${llmStatus.ollamaHealthy && llmStatus.loadedModels.length > 0 ? 'FULLY OPERATIONAL' : 'DEGRADED'}`);
-      console.log('✅ LLM System initialization complete');
-      console.log('🔄 Phase 4: Advanced Message Processing Activation');
-      this.startQueueProcessors();
-      console.log('✅ Enhanced queue processing active');
-      console.log('⚡ Advanced optimization systems activated');
-      this.initialized = true;
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log('✅ DINA PHASE 2 INITIALIZATION COMPLETE');
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log('Phase 2 Enhanced Features:');
-      console.log('  ✅ Multi-Model AI Intelligence (3 Models)');
-      console.log('  ✅ Query Complexity Analysis');
-      console.log('  ✅ Context Memory System');
-      console.log('  ✅ Performance Optimization');
-      console.log('  ✅ DUMP Protocol Compliance');
-      console.log('  ✅ Smart Model Routing & Fallbacks');
-      console.log('  ✅ Enterprise Message Queuing');
-      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-      console.log('🎯 DINA Enhanced Core ready for intelligent processing!');
-      await database.log('info', 'core', 'DINA Enhanced Core initialized successfully', { phase: '2-complete' });
-    } catch (error) {
-      console.error('❌ Failed to initialize DINA Core:', error);
-      this.initialized = false;
-      await database.log('critical', 'core', 'DINA Enhanced Core initialization failed', { error: (error as Error).message });
-      throw error;
+
+        // ADD MIRROR INITIALIZATION HERE:
+       
+        
+        console.log('🔄 Phase 4: Advanced Message Processing Activation');
+        this.startQueueProcessors();
+        
+        this.initialized = true;
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('✅ DINA ENHANCED CORE INITIALIZATION COMPLETE');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        await database.log('info', 'core', 'DINA Enhanced Core with DIGIM initialized successfully', { 
+          phase: '2-complete-with-digim',
+          digim_status: digiMStatus,
+          digim_sources: digiMOrchestrator.getActiveSources().length
+        });
+        
+      } catch (error) {
+        console.error('❌ Failed to initialize DINA Core:', error);
+        this.initialized = false;
+        await database.log('critical', 'core', 'DINA Enhanced Core initialization failed', { error: (error as Error).message });
+        throw error;
+      }
     }
-  }
 
 private startQueueProcessors(): void {
   const queueIntervals: { [key: string]: number } = {
@@ -214,73 +231,152 @@ private startQueueProcessors(): void {
     this.queueProcessors.set(queueName, processor);
   }
 }
-
+  private isMirrorMessage(message: DinaUniversalMessage): boolean {
+    const validMirrorMethods = [
+      'mirror_submit_profile',
+      'mirror_get_insights', 
+      'mirror_get_patterns',
+      'mirror_answer_question',
+      'deep_facial_analysis',
+      'detect_patterns',
+      'temporal_analysis',
+      'mirror_feedback'
+    ];
+    
+    return validMirrorMethods.includes(message.target.method);
+  }
 
   public async handleIncomingMessage(message: DinaUniversalMessage): Promise<DinaResponse> {
-    const startTime = performance.now();
-    let responsePayload: any;
-    let responseStatus: DinaResponse['status'] = 'success';
-    let errorMessage: string | undefined;
+      const startTime = performance.now();
+      let responsePayload: any;
+      let responseStatus: DinaResponse['status'] = 'success';
+      let errorMessage: string | undefined;
+    
+      const requestId = await database.logRequest({
+        source: message.source.module,
+        target: message.target.module,
+        method: message.target.method,
+        payload: message.payload.data,
+        priority: message.target.priority,
+        userId: message.security.user_id,
+        securityContext: message.security
+      });
+    
+      try {
+        console.log(`🔍 Validating message ${requestId}`);
+        
+        // ENHANCED DEBUGGING: Log the original message structure
+        console.log(`📋 Original message structure:`, {
+          source: message.source,
+          target: message.target,
+          targetModule: message.target?.module,
+          targetModuleType: typeof message.target?.module,
+          fullMessage: JSON.stringify(message, null, 2)
+        });
+        
+        if (!DinaProtocol.validateMessage(message)) {
+          throw new Error('Invalid DINA message: Protocol validation failed');
+        }
+    
+        const sanitizedMessage = DinaProtocol.sanitizeMessage(message);
+        
+        // ENHANCED DEBUGGING: Log the sanitized message structure
+        console.log(`🧹 Sanitized message structure:`, {
+          source: sanitizedMessage.source,
+          target: sanitizedMessage.target,
+          targetModule: sanitizedMessage.target?.module,
+          targetModuleType: typeof sanitizedMessage.target?.module,
+          isTargetModuleString: typeof sanitizedMessage.target?.module === 'string',
+          sanitizedTargetKeys: Object.keys(sanitizedMessage.target || {}),
+          fullSanitizedMessage: JSON.stringify(sanitizedMessage, null, 2)
+        });
+    
+        // SAFETY CHECK: Ensure target.module is a string
+        if (!sanitizedMessage.target || typeof sanitizedMessage.target.module !== 'string') {
+          throw new Error(
+            `Invalid target module format. Expected string, got: ${typeof sanitizedMessage.target?.module}. ` +
+            `Value: ${JSON.stringify(sanitizedMessage.target?.module)}. ` +
+            `Full target: ${JSON.stringify(sanitizedMessage.target)}`
+          );
+        }
+    
+        const targetModule = sanitizedMessage.target.module;
+        console.log(`🎯 Processing target module: "${targetModule}" (type: ${typeof targetModule})`);
+    
+        // ADD DIGIM ROUTING HERE:
+        switch (targetModule) {
+          case 'core':
+            console.log('🏛️ Routing to CORE module');
+            responsePayload = await this.processCoreRequest(sanitizedMessage);
+            break;
+          case 'llm':
+            console.log('🤖 Routing to LLM module');
+            responsePayload = await this.processLLMRequest(sanitizedMessage);
+            break;
+          case 'database':
+            console.log('🗄️ Routing to DATABASE module');
+            responsePayload = await this.processDatabaseRequest(sanitizedMessage);
+            break;
+          case 'system':
+            console.log('⚙️ Routing to SYSTEM module');
+            responsePayload = await this.processSystemRequest(sanitizedMessage);
+            break;
+          // ADD DIGIM CASE:
+          case 'digim':
+            console.log(`🧠 Routing to DIGIM: ${sanitizedMessage.target.method}`);
+            if (!isDigiMMessage(sanitizedMessage)) {
+              throw new Error('Invalid DIGIM message format');
+            }
+            const digiMResponse = await digiMOrchestrator.handleIncomingMessage(sanitizedMessage);
+            responsePayload = digiMResponse.payload.data;
+            break;
 
-    const requestId = await database.logRequest({
-      source: message.source.module,
-      target: message.target.module,
-      method: message.target.method,
-      payload: message.payload.data,
-      priority: message.target.priority,
-      userId: message.security.user_id,
-      securityContext: message.security
-    });
-    console.log(`📝 Logged request ${requestId} for ${message.target.module}:${message.target.method}`);
-
-    try {
-      console.log(`🔍 Validating message ${requestId}`);
-      if (!DinaProtocol.validateMessage(message)) {
-        throw new Error('Invalid DINA message: Protocol validation failed');
+          default:
+            // ENHANCED ERROR: Provide more detailed information
+            const availableModules = ['core', 'llm', 'database', 'system', 'digim'];
+            throw new Error(
+              `Unknown target module: "${targetModule}" (type: ${typeof targetModule}). ` +
+              `Available modules: ${availableModules.join(', ')}. ` +
+              `Full target object: ${JSON.stringify(sanitizedMessage.target)}`
+            );
+        }
+      } catch (error) {
+        responseStatus = 'error';
+        errorMessage = (error as Error).message;
+        responsePayload = {
+          status: 'error',
+          message: errorMessage,
+          // ENHANCED ERROR PAYLOAD: Include debugging info
+          debug: {
+            originalTargetModule: message.target?.module,
+            targetModuleType: typeof message.target?.module,
+            timestamp: new Date().toISOString(),
+            requestId
+          }
+        };
+        console.error(`❌ Error processing message ${requestId}:`, error);
+        
+        // Log the full error context
+        console.error(`🔍 Error context:`, {
+          originalMessage: JSON.stringify(message, null, 2),
+          errorMessage: (error as Error).message,
+          errorStack: (error as Error).stack
+        });
       }
-      console.log(`✅ Message ${requestId} validated successfully`);
-
-      const sanitizedMessage = DinaProtocol.sanitizeMessage(message);
-      console.log(`🧼 Message ${requestId} sanitized, sanitized flag: ${sanitizedMessage.security.sanitized}`);
-
-      switch (sanitizedMessage.target.module) {
-        case 'core':
-          responsePayload = await this.processCoreRequest(sanitizedMessage);
-          break;
-        case 'llm':
-          responsePayload = await this.processLLMRequest(sanitizedMessage);
-          break;
-        case 'database':
-          responsePayload = await this.processDatabaseRequest(sanitizedMessage);
-          break;
-        case 'system':
-          responsePayload = await this.processSystemRequest(sanitizedMessage);
-          break;
-        default:
-          throw new Error(`Unknown target module: ${sanitizedMessage.target.module}`);
-      }
-    } catch (error) {
-      responseStatus = 'error';
-      errorMessage = (error as Error).message;
-      responsePayload = {
-        status: 'error',
-        message: errorMessage
-      };
-      console.error(`❌ Error processing message ${requestId} for ${message.target.module}:${message.target.method}:`, error);
+    
+      const processingTime = performance.now() - startTime;
+      
+      const dinaResponse: DinaResponse = createDinaResponse({
+        request_id: requestId,
+        status: responseStatus,
+        payload: responsePayload,
+        metrics: { processing_time_ms: processingTime }
+      });
+    
+      console.log(`📤 Generated response for message ${requestId}:`, JSON.stringify(dinaResponse, null, 2));
+      
+      return dinaResponse;
     }
-
-    const processingTime = performance.now() - startTime;
-
-    const dinaResponse: DinaResponse = createDinaResponse({
-      request_id: requestId,
-      status: responseStatus,
-      payload: responsePayload,
-      metrics: { processing_time_ms: processingTime }
-    });
-
-    console.log(`✅ Generated response for request ${requestId}:`, JSON.stringify(dinaResponse, null, 2));
-    return dinaResponse;
-  }
 
   private async processCoreRequest(message: DinaUniversalMessage): Promise<any> {
     switch (message.target.method) {
@@ -431,12 +527,25 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
     const dbStatus = await database.getSystemStatus();
     const redisStatus = { isConnected: redisManager.isConnected, queueStats: await redisManager.getQueueStats() };
     const llmStatus = await this.llmManager.getSystemStatus();
-
+    
+    // ADD DIGIM STATUS:
+    const digiMStatus = {
+      initialized: digiMOrchestrator.isInitialized,
+      health: digiMOrchestrator.moduleStatus,
+      active_sources: digiMOrchestrator.getActiveSources().length,
+      phase: 'foundation'
+    };
+  
     return {
-      overallHealth: dbStatus.status === 'online' && redisStatus.isConnected && llmStatus.ollamaHealthy ? 'healthy' : 'degraded',
+      overallHealth: dbStatus.status === 'online' && 
+                     redisStatus.isConnected && 
+                     llmStatus.ollamaHealthy && 
+                     digiMOrchestrator.moduleStatus === 'healthy' ? 'healthy' : 'degraded',
       database: dbStatus,
       redis: redisStatus,
       llm_system: llmStatus,
+      // ADD DIGIM STATUS:
+      digim: digiMStatus,
       core: {
         initialized: this.initialized,
         uptime: Date.now() - this.startTime.getTime(),
@@ -476,7 +585,10 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
       'llm-system': this.llmManager.isInitialized ? 'active' : 'unavailable',
       'redis': redisManager.isConnected ? 'active' : 'inactive',
       'mirror-module': 'pending',
-      'phase': '2-complete'
+      'mirror':'active-foundation',
+      'digim': digiMOrchestrator.isInitialized ? 
+        `${digiMOrchestrator.moduleStatus}-phase1` : 'inactive',
+      'phase': '2-complete-with-digim'
     };
   }
 
@@ -491,11 +603,20 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
       this.queueProcessors.forEach(interval => clearInterval(interval));
       this.queueProcessors.clear();
       console.log('✅ Stopped all queue processors');
+      
       await this.llmManager.shutdown();
+      
+      // ADD DIGIM SHUTDOWN LOGIC:
+      await digiMOrchestrator.shutdown();
+      console.log('✅ DIGIM shutdown complete');
+
+      // ADD MIRROR SHUTDOWN LOGIC
+
+      
       await redisManager.shutdown();
       await database.close();
       this.initialized = false;
-      console.log('✅ Enhanced DINA Core shutdown complete');
+      console.log('✅ Enhanced DINA Core with DIGIM shutdown complete');
     } catch (error) {
       console.error('❌ Enhanced shutdown error:', error);
       throw error;

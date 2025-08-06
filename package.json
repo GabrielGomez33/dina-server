@@ -20,6 +20,7 @@
   "author": "DINA Development Team",
   "license": "MIT",
   "dependencies": {
+    "@types/node-fetch": "^2.6.2",
     "@types/ws": "^8.18.1",
     "bcryptjs": "^2.4.3",
     "compression": "^1.8.0",
@@ -31,6 +32,7 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "mysql2": "^3.14.1",
+    "node-fetch": "^2.6.7",
     "redis": "^5.6.0",
     "uuid": "^9.0.1",
     "winston": "^3.11.0",

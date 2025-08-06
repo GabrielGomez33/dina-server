@@ -1172,16 +1172,14 @@ private mapRowToUser(row: any): DinaUser {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
       system_logs: `CREATE TABLE IF NOT EXISTS system_logs (
-        id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
-        level ENUM('debug','info','warn','error','critical') NOT NULL,
-        module VARCHAR(50) NOT NULL,
-        message TEXT NOT NULL,
-        metadata JSON,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        
-        INDEX idx_level_time (level, created_at),
-        INDEX idx_module_time (module, created_at),
-        INDEX idx_created_at (created_at)
+          id BIGINT AUTO_INCREMENT PRIMARY KEY,
+          level ENUM('debug','info','warn','error','critical') NOT NULL,
+          module VARCHAR(50) NOT NULL,
+          message TEXT NOT NULL,
+          metadata JSON,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_level_time (level, created_at),
+          INDEX idx_module_time (module, created_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
       system_intelligence: `CREATE TABLE IF NOT EXISTS system_intelligence (
@@ -1207,7 +1205,7 @@ private mapRowToUser(row: any): DinaUser {
       dina_requests: `CREATE TABLE IF NOT EXISTS dina_requests (
         id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
         user_id VARCHAR(36),
-        source VARCHAR(50) NOT NULL,
+        source VARCHAR(200) NOT NULL,
         target VARCHAR(50) NOT NULL,
         method VARCHAR(100) NOT NULL,
         payload JSON NOT NULL,
@@ -1303,7 +1301,12 @@ private mapRowToUser(row: any): DinaUser {
         INDEX idx_timestamp (timestamp),
         INDEX idx_severity (severity),
         INDEX idx_ip_address (ip_address)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+      
+      
+
+      
     };
 
     const sql = tableDefinitions[tableName];
@@ -1331,7 +1334,11 @@ private mapRowToUser(row: any): DinaUser {
       'dina_requests', 
       'neural_memory',
       'dina_users',
-      'dina_security_events'
+      'dina_security_events',
+      'digim_sources',
+      'digim_content',
+      'digim_intelligence',
+      'digim_clusters'
     ];
 
     for (const tableName of tables) {
