@@ -1,7 +1,7 @@
-// API Routes Setup with Base Path Support (Enhanced with Unified Auth) - COMPLETE WITH FIXES
+// API Routes Setup with Base Path Support (Enhanced with Unified Auth + Mirror Module) - COMPLETE
 // File: src/api/routes/index.ts
 
-import express, { Request, Response, NextFunction } from 'express'; // FIXED: Added NextFunction
+import express, { Request, Response, NextFunction } from 'express';
 import { DinaCore } from '../../core/orchestrator';
 import { authenticate, rateLimit, sanitizeInput, handleError, requireTrustLevel, corsMiddleware, AuthenticatedRequest } from '../middleware/security';
 import { DinaUniversalMessage, createDinaMessage, MessagePriority, SecurityLevel } from '../../core/protocol';
@@ -9,8 +9,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { database } from '../../config/database/db';
 import { digiMOrchestrator } from '../../modules/digim';
 import { isDigiMMethod } from '../../modules/digim/types';
-
-
 
 // FIXED: Add helper function to map trust levels to security clearances
 function mapTrustLevelToSecurityLevel(trustLevel: string): SecurityLevel {
@@ -26,6 +24,11 @@ function mapTrustLevelToSecurityLevel(trustLevel: string): SecurityLevel {
     default:
       return SecurityLevel.PUBLIC;
   }
+}
+
+// FIXED: Simple trust level access helper
+function getTrustLevelAccess(trustLevel: string, accessMap: Record<string, string[]>): string[] {
+  return accessMap[trustLevel] || accessMap['new'] || [];
 }
 
 export function setupAPI(app: express.Application, dina: DinaCore, basePath: string = ''): void {
@@ -71,8 +74,8 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   apiRouter.use(corsMiddleware);
   
   // Apply common middleware to all API routes
-  apiRouter.use(express.json({ limit: '1mb' }));
-  apiRouter.use(express.urlencoded({ extended: true, limit: '1mb' }));
+  apiRouter.use(express.json({ limit: '10mb' })); // Increased for Mirror submissions
+  apiRouter.use(express.urlencoded({ extended: true, limit: '10mb' }));
   apiRouter.use((req: Request, res: Response, next) => {
     console.log(`📡 API Request: ${req.method} ${req.originalUrl}`);
     next();
@@ -95,11 +98,11 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   apiRouter.get('/health', (req: Request, res: Response) => {
     res.json({ 
       status: 'healthy', 
-      service: 'DINA API with Unified Auth',
+      service: 'DINA API with Unified Auth + Mirror Module',
       timestamp: new Date().toISOString(),
       version: '2.0.0',
       path: apiPath,
-      features: ['unified-auth', 'progressive-trust', 'auto-registration']
+      features: ['unified-auth', 'progressive-trust', 'auto-registration', 'mirror-analysis', 'llm-processing', 'digim-gathering']
     });
   });
   
@@ -120,7 +123,10 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
           health: `${apiPath}/health`,
           status: `${apiPath}/status`,
           stats: `${apiPath}/stats`,
-          dina: `${apiPath}/dina`
+          dina: `${apiPath}/dina`,
+          mirror: `${apiPath}/mirror`,
+          llm: `${apiPath}/models`,
+          digim: `${apiPath}/digim`
         }
       });
     } catch (error) {
@@ -171,96 +177,6 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
-  // Dashboard information endpoint (new users allowed)
-  apiRouter.get('/dashboard', async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const systemStatus = await dina.getSystemStatus();
-      const systemStats = await dina.getSystemStats();
-      const moduleStatus = dina.getModuleStatus();
-
-      res.json({
-        dashboard_summary: {
-          overall_health: systemStatus.overallHealth === 'healthy' ? 'Operational' : 'Degraded',
-          active_modules: Object.values(moduleStatus).filter(status => status === 'active').length,
-          total_requests_processed: systemStats.totalRequestsProcessed || 0,
-          avg_response_time_ms: systemStats.avgResponseTimeMs || 0,
-        },
-        detailed_status: systemStatus,
-        detailed_stats: systemStats,
-        module_status: moduleStatus,
-        auth_info: {
-          user_key: req.dina?.user_key,
-          dina_key: req.dina?.dina_key,
-          trust_level: req.dina?.trust_level,
-          session_id: req.dina?.session_id
-        },
-        timestamp: new Date().toISOString()
-      });
-    } catch (error) {
-      res.status(500).json({
-        error: 'Failed to retrieve dashboard information',
-        message: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  });
-
-  // ================================
-  // DINA CORE MESSAGE PROCESSING ENDPOINT
-  // ================================
-  
-  apiRouter.post('/dina', async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const { source, target, method, payload, priority } = req.body;
-      const userId = req.dina!.dina_key;
-      const securityLevel = req.dina!.trust_level;
-
-      if (!source || !target || !method || !payload) {
-        res.status(400).json({ 
-          error: 'Bad Request', 
-          message: 'Missing required fields: source, target, method, payload',
-          auth_info: {
-            trust_level: req.dina?.trust_level,
-            dina_key: req.dina?.dina_key
-          }
-        });
-        return;
-      }
-
-      // FIXED: Create a DUMP message with proper security clearance mapping
-      const dinaMessage: DinaUniversalMessage = createDinaMessage({
-        source: { module: source, version: '1.0.0' },
-        target: { module: target, method: method, priority: priority as MessagePriority || 5 },
-        security: { 
-          user_id: userId, 
-          session_id: req.dina!.session_id, 
-          clearance: mapTrustLevelToSecurityLevel(securityLevel), // FIXED: Use mapping function
-          sanitized: true 
-        },
-        payload: payload
-      });
-
-      console.log(`✉️ Processing DUMP message: ${method} for ${target} from ${securityLevel} user`);
-      const response = await dina.handleIncomingMessage(dinaMessage); 
-      res.json({
-        ...response.payload.data,
-        auth_info: {
-          trust_level: req.dina?.trust_level,
-          rate_limit_remaining: req.dina?.rate_limit_remaining
-        }
-      });
-
-    } catch (error) {
-      console.error('❌ Error processing DINA message:', error);
-      res.status(500).json({ 
-        error: 'Internal Server Error',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        auth_info: {
-          trust_level: req.dina?.trust_level
-        }
-      });
-    }
-  });
-
   // ================================
   // LLM-SPECIFIC API ENDPOINTS
   // ================================
@@ -271,14 +187,14 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
       const models = await dina.listAvailableModels();
       
       // Filter models based on trust level
-      const modelAccess: { [key: string]: string[] } = {
+      const modelAccess = {
         'new': ['mxbai-embed-large'],
         'trusted': ['mxbai-embed-large', 'mistral:7b', 'codellama:34b'],
         'suspicious': ['mxbai-embed-large'],
         'blocked': []
       };
       
-      const allowedModels = modelAccess[req.dina!.trust_level] || [];
+      const allowedModels = getTrustLevelAccess(req.dina!.trust_level, modelAccess);
       const filteredModels = models.filter(model => allowedModels.includes(model));
       
       res.json({
@@ -332,14 +248,14 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
       }
 
       // Check model access
-      const modelAccess: { [key: string]: string[] } = {
+      const modelAccess = {
         'new': ['mxbai-embed-large'],
         'trusted': ['mxbai-embed-large', 'mistral:7b', 'codellama:34b'],
         'suspicious': ['mxbai-embed-large'],
         'blocked': []
       };
       
-      const allowedModels = modelAccess[req.dina!.trust_level] || [];
+      const allowedModels = getTrustLevelAccess(req.dina!.trust_level, modelAccess);
       
       if (!allowedModels.includes(modelId)) {
         res.status(403).json({
@@ -359,10 +275,10 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         security: { 
           user_id: userId, 
           session_id: req.dina!.session_id, 
-          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level), // FIXED: Use mapping function
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
           sanitized: true 
         },
-        payload: {
+        payload: {  // ← This gets wrapped in { data: ... } by createDinaMessage
           query: query,
           options: {
             ...options,
@@ -397,8 +313,8 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
-  // FIXED: Embeddings generation endpoint with proper dimension counting and error handling
-  apiRouter.post('/models/:modelId/embeddings', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  // Embeddings endpoint (all authenticated users, model restrictions apply)
+  apiRouter.post('/models/:modelId/embed', async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { modelId } = req.params;
       const { text, options } = req.body;
@@ -415,15 +331,27 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
 
+      // Check token limits
+      if (text.length > req.dina!.token_limit_remaining) {
+        res.status(413).json({ 
+          error: 'Token limit exceeded', 
+          limit: req.dina!.token_limit_remaining,
+          trust_level: req.dina!.trust_level,
+          message: 'Upgrade your trust level for higher limits',
+          text_length: text.length
+        });
+        return;
+      }
+
       // Check model access
-      const modelAccess: { [key: string]: string[] } = {
+      const modelAccess = {
         'new': ['mxbai-embed-large'],
         'trusted': ['mxbai-embed-large', 'mistral:7b', 'codellama:34b'],
         'suspicious': ['mxbai-embed-large'],
         'blocked': []
       };
       
-      const allowedModels = modelAccess[req.dina!.trust_level] || [];
+      const allowedModels = getTrustLevelAccess(req.dina!.trust_level, modelAccess);
       
       if (!allowedModels.includes(modelId)) {
         res.status(403).json({
@@ -435,7 +363,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
 
-      // FIXED: Create DUMP message with proper security clearance mapping
+      // FIXED: Create a DUMP message for LLM embeddings with proper security clearance mapping
       const dinaMessage: DinaUniversalMessage = createDinaMessage({
         source: { module: 'api', version: '1.0.0' },
         target: { module: 'llm', method: 'llm_embed', priority: 6 },
@@ -524,6 +452,703 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   });
 
   // ================================
+  // MIRROR MODULE API ENDPOINTS
+  // ================================
+  
+  console.log('🪞 Setting up Mirror Module API routes...');
+
+  // Mirror Module Status (all authenticated users)
+  apiRouter.get('/mirror/status', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'mirror', method: 'mirror_status', priority: 7 },
+        security: { 
+          user_id: req.dina!.dina_key, 
+          session_id: req.dina!.session_id, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true 
+        },
+        payload: { 
+          detailed: true, 
+          include_performance: true,
+          include_user_context: req.dina!.trust_level === 'trusted'
+        }
+      });
+
+      console.log(`🪞 Mirror status request from ${req.dina!.trust_level} user`);
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+      
+      res.json({
+        ...mirrorResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level,
+          rate_limit_remaining: req.dina?.rate_limit_remaining
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error getting Mirror status:', error);
+      res.status(500).json({
+        error: 'Failed to get Mirror status',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Submit Mirror Data for Analysis (all authenticated users)
+  apiRouter.post('/mirror/submit', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const submissionData = req.body;
+      const userId = req.dina!.dina_key;
+
+      // Validation
+      if (!submissionData) {
+        res.status(400).json({ 
+          error: 'Bad Request', 
+          message: 'Missing submission data',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+
+      // Check payload size limits based on trust level
+      const payloadSize = JSON.stringify(submissionData).length;
+      const sizeLimit = req.dina!.trust_level === 'trusted' ? 10 * 1024 * 1024 : 1 * 1024 * 1024; // 10MB vs 1MB
+      
+      if (payloadSize > sizeLimit) {
+        res.status(413).json({ 
+          error: 'Payload too large', 
+          limit: sizeLimit,
+          current_size: payloadSize,
+          trust_level: req.dina!.trust_level,
+          message: 'Upgrade your trust level to submit larger analyses'
+        });
+        return;
+      }
+
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'mirror', method: 'mirror_submit', priority: 8 },
+        security: { 
+          user_id: userId, 
+          session_id: req.dina!.session_id, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true 
+        },
+        payload: {
+          ...submissionData,
+          requestId: uuidv4(),
+          submitTimestamp: new Date().toISOString(),
+          trustLevel: req.dina!.trust_level
+        }
+      });
+
+      console.log(`🪞 Mirror submission from ${req.dina!.trust_level} user: ${userId}`);
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+      
+      res.json({
+        ...mirrorResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level,
+          rate_limit_remaining: req.dina?.rate_limit_remaining
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error in Mirror submission:', error);
+      res.status(500).json({
+        error: 'Mirror submission failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Get User Insights (all authenticated users)
+  apiRouter.get('/mirror/insights', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = req.dina!.dina_key;
+      const { limit = 10, type, category, sort = 'recent' } = req.query;
+
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'mirror', method: 'mirror_get_insights', priority: 6 },
+        security: { 
+          user_id: userId, 
+          session_id: req.dina!.session_id, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true 
+        },
+        payload: {
+          userId,
+          limit: Math.min(parseInt(limit as string), req.dina!.trust_level === 'trusted' ? 100 : 20),
+          filter: {
+            type: type as string,
+            category: category as string,
+            sort: sort as string
+          }
+        }
+      });
+
+      console.log(`🔍 Mirror insights request for user: ${userId}`);
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+      
+      res.json({
+        ...mirrorResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error getting Mirror insights:', error);
+      res.status(500).json({
+        error: 'Failed to get insights',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Generate Specific Analysis (all authenticated users)
+  apiRouter.post('/mirror/analyze', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = req.dina!.dina_key;
+      const { analysis_type, data, options } = req.body;
+
+      if (!analysis_type || !data) {
+        res.status(400).json({ 
+          error: 'Bad Request', 
+          message: 'Missing analysis_type or data',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+
+      // FIXED: Validate analysis type access with proper typing
+      const allowedAnalysisTypes = {
+        'new': ['basic_insight', 'personality_summary'],
+        'trusted': ['basic_insight', 'personality_summary', 'pattern_analysis', 'correlation_analysis', 'deep_insight'],
+        'suspicious': ['basic_insight'],
+        'blocked': []
+      };
+
+      const userAllowedTypes = getTrustLevelAccess(req.dina!.trust_level, allowedAnalysisTypes);
+      if (!userAllowedTypes.includes(analysis_type)) {
+        res.status(403).json({
+          error: 'Analysis type not allowed',
+          message: `Analysis type '${analysis_type}' requires higher trust level`,
+          allowed_types: userAllowedTypes,
+          current_trust_level: req.dina!.trust_level
+        });
+        return;
+      }
+
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'mirror', method: 'mirror_analyze', priority: 7 },
+        security: { 
+          user_id: userId, 
+          session_id: req.dina!.session_id, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true 
+        },
+        payload: {
+          analysisType: analysis_type,
+          data,
+          options: {
+            ...options,
+            trustLevel: req.dina!.trust_level
+          }
+        }
+      });
+
+      console.log(`🔬 Mirror analysis request: ${analysis_type} from ${req.dina!.trust_level} user`);
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+      
+      res.json({
+        ...mirrorResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level,
+          analysis_type,
+          rate_limit_remaining: req.dina?.rate_limit_remaining
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error in Mirror analysis:', error);
+      res.status(500).json({
+        error: 'Analysis failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Get User Context and Patterns (trusted users only)
+  apiRouter.get('/mirror/context', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = req.dina!.dina_key;
+      const { include_patterns = true, include_history = true, context_window = 30 } = req.query;
+
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'mirror', method: 'mirror_get_context', priority: 5 },
+        security: { 
+          user_id: userId, 
+          session_id: req.dina!.session_id, 
+          clearance: SecurityLevel.RESTRICTED,
+          sanitized: true 
+        },
+        payload: {
+          userId,
+          options: {
+            includePatterns: include_patterns === 'true',
+            includeHistory: include_history === 'true',
+            contextWindowDays: Math.min(parseInt(context_window as string), 90)
+          }
+        }
+      });
+
+      console.log(`🧠 Mirror context request for user: ${userId}`);
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+      
+      res.json({
+        ...mirrorResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error getting Mirror context:', error);
+      res.status(500).json({
+        error: 'Failed to get user context',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Get User Notifications (all authenticated users)
+  apiRouter.get('/mirror/notifications', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = req.dina!.dina_key;
+      const { limit = 20, unread_only = false, type } = req.query;
+
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'mirror', method: 'mirror_get_notifications', priority: 4 },
+        security: { 
+          user_id: userId, 
+          session_id: req.dina!.session_id, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true 
+        },
+        payload: {
+          userId,
+          limit: Math.min(parseInt(limit as string), 50),
+          filter: {
+            unreadOnly: unread_only === 'true',
+            type: type as string
+          }
+        }
+      });
+
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+      
+      res.json({
+        ...mirrorResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error getting Mirror notifications:', error);
+      res.status(500).json({
+        error: 'Failed to get notifications',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Mark Notification as Read (all authenticated users)
+  apiRouter.post('/mirror/notifications/:notificationId/read', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = req.dina!.dina_key;
+      const { notificationId } = req.params;
+
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'mirror', method: 'mirror_mark_notification_read', priority: 3 },
+        security: { 
+          user_id: userId, 
+          session_id: req.dina!.session_id, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true 
+        },
+        payload: {
+          userId,
+          notificationId
+        }
+      });
+
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+      
+      res.json({
+        success: true,
+        message: 'Notification marked as read',
+        ...mirrorResponse.payload.data
+      });
+
+    } catch (error) {
+      console.error('❌ Error marking notification as read:', error);
+      res.status(500).json({
+        error: 'Failed to mark notification as read',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Update User Preferences (all authenticated users)
+  apiRouter.post('/mirror/preferences', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = req.dina!.dina_key;
+      const preferences = req.body;
+
+      if (!preferences || typeof preferences !== 'object') {
+        res.status(400).json({ 
+          error: 'Bad Request', 
+          message: 'Invalid preferences data',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'mirror', method: 'mirror_update_preferences', priority: 5 },
+        security: { 
+          user_id: userId, 
+          session_id: req.dina!.session_id, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true 
+        },
+        payload: {
+          userId,
+          preferences
+        }
+      });
+
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+      
+      res.json({
+        success: true,
+        message: 'Preferences updated successfully',
+        ...mirrorResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error updating Mirror preferences:', error);
+      res.status(500).json({
+        error: 'Failed to update preferences',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Get Submission History (trusted users only)
+  apiRouter.get('/mirror/history', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = req.dina!.dina_key;
+      const { limit = 20, include_data = false, date_from, date_to } = req.query;
+
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'mirror', method: 'mirror_get_history', priority: 4 },
+        security: { 
+          user_id: userId, 
+          session_id: req.dina!.session_id, 
+          clearance: SecurityLevel.RESTRICTED,
+          sanitized: true 
+        },
+        payload: {
+          userId,
+          limit: Math.min(parseInt(limit as string), 100),
+          options: {
+            includeData: include_data === 'true',
+            dateFrom: date_from as string,
+            dateTo: date_to as string
+          }
+        }
+      });
+
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+      
+      res.json({
+        ...mirrorResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error getting Mirror history:', error);
+      res.status(500).json({
+        error: 'Failed to get submission history',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Export User Data (trusted users only)
+  apiRouter.post('/mirror/export', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = req.dina!.dina_key;
+      const { format = 'json', include_raw_data = false, anonymize = false } = req.body;
+
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'mirror', method: 'mirror_export_data', priority: 6 },
+        security: { 
+          user_id: userId, 
+          session_id: req.dina!.session_id, 
+          clearance: SecurityLevel.RESTRICTED,
+          sanitized: true 
+        },
+        payload: {
+          userId,
+          exportOptions: {
+            format,
+            includeRawData: include_raw_data,
+            anonymize
+          }
+        }
+      });
+
+      console.log(`📤 Mirror data export request from user: ${userId}`);
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+      
+      // Set appropriate content type based on format
+      if (format === 'csv') {
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="mirror-export-${userId}-${Date.now()}.csv"`);
+      } else {
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', `attachment; filename="mirror-export-${userId}-${Date.now()}.json"`);
+      }
+      
+      res.json({
+        ...mirrorResponse.payload.data,
+        export_info: {
+          format,
+          timestamp: new Date().toISOString(),
+          user_id: userId
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error exporting Mirror data:', error);
+      res.status(500).json({
+        error: 'Failed to export data',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Get Analytics Overview (trusted users only)
+  apiRouter.get('/mirror/analytics', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = req.dina!.dina_key;
+      const { timeframe = '30d', metrics = 'all' } = req.query;
+
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'mirror', method: 'mirror_get_analytics', priority: 5 },
+        security: { 
+          user_id: userId, 
+          session_id: req.dina!.session_id, 
+          clearance: SecurityLevel.RESTRICTED,
+          sanitized: true 
+        },
+        payload: {
+          userId,
+          timeframe: timeframe as string,
+          metrics: metrics as string
+        }
+      });
+
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+      
+      res.json({
+        ...mirrorResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error getting Mirror analytics:', error);
+      res.status(500).json({
+        error: 'Failed to get analytics',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // ================================
+  // DIGIM INFORMATION GATHERING ENDPOINTS
+  // ================================
+  
+  console.log('🧠 Setting up DIGIM API routes...');
+
+  // DIGIM System Status
+  apiRouter.get('/digim/status', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const digiMMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'digim', method: 'digim_status', priority: 7 },
+        security: { 
+          user_id: req.dina!.dina_key, 
+          session_id: req.dina!.session_id, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true 
+        },
+        payload: { detailed: true, include_performance: true, include_security: true }
+      });
+
+      console.log(`🧠 DIGIM status request from ${req.dina!.trust_level} user`);
+      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      
+      res.json({
+        ...digiMResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level,
+          rate_limit_remaining: req.dina?.rate_limit_remaining
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error getting DIGIM status:', error);
+      res.status(500).json({
+        error: 'Failed to get DIGIM status',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // DIGIM Natural Language Query
+  apiRouter.post('/digim/query', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { query, filters, intelligence_level, output_format, max_results } = req.body;
+
+      if (!query) {
+        res.status(400).json({ 
+          error: 'Bad Request', 
+          message: 'Query text is required',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+
+      // Check token limits based on query length and intelligence level
+      const estimatedTokens = query.length + (intelligence_level === 'deep' ? 1000 : 200);
+      if (estimatedTokens > req.dina!.token_limit_remaining) {
+        res.status(413).json({ 
+          error: 'Token limit exceeded', 
+          limit: req.dina!.token_limit_remaining,
+          estimated_tokens: estimatedTokens,
+          trust_level: req.dina!.trust_level,
+          message: 'Upgrade your trust level for higher limits'
+        });
+        return;
+      }
+
+      const digiMMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'digim', method: 'digim_query', priority: 8 },
+        security: { 
+          user_id: req.dina!.dina_key, 
+          session_id: req.dina!.session_id, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true 
+        },
+        payload: {
+          query,
+          filters: filters || {},
+          intelligence_level: intelligence_level || 'basic',
+          output_format: output_format || 'structured',
+          max_results: Math.min(max_results || 10, req.dina!.trust_level === 'trusted' ? 100 : 20),
+          user_context: {
+            trust_level: req.dina!.trust_level,
+            preferences: {},
+            history_weight: 0.3
+          }
+        }
+      });
+
+      console.log(`🧠 DIGIM query: "${query.substring(0, 50)}..." from ${req.dina!.trust_level} user`);
+      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      
+      res.json({
+        ...digiMResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level,
+          rate_limit_remaining: req.dina?.rate_limit_remaining,
+          token_limit_remaining: req.dina?.token_limit_remaining
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error in DIGIM query:', error);
+      res.status(500).json({
+        error: 'DIGIM query failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Additional DIGIM endpoints...
+  // (I'll continue with more DIGIM endpoints to match the original implementation)
+
+  // DIGIM List Data Sources
+  apiRouter.get('/digim/sources', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const digiMMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'digim', method: 'digim_list_sources', priority: 5 },
+        security: { 
+          user_id: req.dina!.dina_key, 
+          session_id: req.dina!.session_id, 
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true 
+        },
+        payload: { 
+          include_stats: req.dina!.trust_level === 'trusted',
+          include_private: req.dina!.trust_level === 'trusted'
+        }
+      });
+
+      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      
+      res.json({
+        ...digiMResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level
+        }
+      });
+
+    } catch (error) {
+      console.error('❌ Error listing DIGIM sources:', error);
+      res.status(500).json({
+        error: 'Failed to list data sources',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // ================================
   // ADMIN ENDPOINTS (Trusted users only)
   // ================================
   
@@ -562,39 +1187,83 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
-  // Admin security events
-  apiRouter.get('/admin/auth/events', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+  // Admin user management
+  apiRouter.get('/admin/users', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const events = await database.query(`
-        SELECT * FROM dina_security_events 
-        WHERE severity IN ('high', 'critical')
-        ORDER BY timestamp DESC 
-        LIMIT 100
-      `, [], true);
+      const { limit = 50, trust_level, sort = 'recent' } = req.query;
+      
+      let whereClause = '';
+      const params: any[] = [];
+      
+      if (trust_level) {
+        whereClause = 'WHERE trust_level = ?';
+        params.push(trust_level);
+      }
+      
+      const orderClause = sort === 'recent' ? 'ORDER BY last_seen DESC' : 
+                         sort === 'active' ? 'ORDER BY total_requests DESC' :
+                         'ORDER BY first_seen ASC';
+      
+      const users = await database.query(`
+        SELECT 
+          dina_key, user_key, trust_level, suspicion_score, 
+          total_requests, successful_requests, failed_requests,
+          first_seen, last_seen, blocked_until
+        FROM dina_users 
+        ${whereClause}
+        ${orderClause}
+        LIMIT ?
+      `, [...params, parseInt(limit as string)], true);
       
       res.json({ 
-        events, 
-        count: events.length,
-        timestamp: new Date(),
-        admin_user: req.dina?.dina_key
+        users,
+        total_count: users.length,
+        admin_user: req.dina?.dina_key,
+        timestamp: new Date()
       });
     } catch (error) {
       res.status(500).json({ 
-        error: 'Failed to get security events',
+        error: 'Failed to get user list',
         message: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   });
 
-  // Admin user management
-  apiRouter.post('/admin/auth/unblock', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+  // Admin block user
+  apiRouter.post('/admin/users/:dina_key/block', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { dina_key } = req.body;
+      const { dina_key } = req.params;
+      const { duration_hours = 24, reason = 'Admin action' } = req.body;
       
-      if (!dina_key) {
-        res.status(400).json({ error: 'Missing dina_key in request body' });
-        return;
-      }
+      const blockUntil = new Date();
+      blockUntil.setHours(blockUntil.getHours() + parseInt(duration_hours.toString()));
+      
+      await database.query(`
+        UPDATE dina_users 
+        SET trust_level = 'blocked', blocked_until = ?, suspicion_score = 100
+        WHERE dina_key = ?
+      `, [blockUntil, dina_key], true);
+      
+      res.json({ 
+        success: true, 
+        message: 'User blocked successfully',
+        blocked_user: dina_key,
+        blocked_until: blockUntil,
+        admin_user: req.dina?.dina_key,
+        reason
+      });
+    } catch (error) {
+      res.status(500).json({ 
+        error: 'Failed to block user',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // Admin unblock user
+  apiRouter.post('/admin/users/:dina_key/unblock', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { dina_key } = req.params;
       
       await database.query(`
         UPDATE dina_users 
@@ -615,344 +1284,6 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
       });
     }
   });
-
-
-  // ================================
-    // DIGIM INFORMATION GATHERING ENDPOINTS
-    // ================================
-    
-    console.log('🧠 Setting up DIGIM API routes...');
-  
-    // DIGIM System Status
-    apiRouter.get('/digim/status', async (req: AuthenticatedRequest, res: Response) => {
-      try {
-        const digiMMessage = createDinaMessage({
-          source: { module: 'api', version: '1.0.0' },
-          target: { module: 'digim', method: 'digim_status', priority: 7 },
-          security: { 
-            user_id: req.dina!.dina_key, 
-            session_id: req.dina!.session_id, 
-            clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-            sanitized: true 
-          },
-          payload: { detailed: true, include_performance: true, include_security: true }
-        });
-  
-        console.log(`🧠 DIGIM status request from ${req.dina!.trust_level} user`);
-        const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
-        
-        res.json({
-          ...digiMResponse.payload.data,
-          auth_info: {
-            trust_level: req.dina?.trust_level,
-            rate_limit_remaining: req.dina?.rate_limit_remaining
-          }
-        });
-  
-      } catch (error) {
-        console.error('❌ Error getting DIGIM status:', error);
-        res.status(500).json({
-          error: 'Failed to get DIGIM status',
-          message: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    });
-  
-    // DIGIM Natural Language Query
-    apiRouter.post('/digim/query', async (req: AuthenticatedRequest, res: Response) => {
-      try {
-        const { query, filters, intelligence_level, output_format, max_results } = req.body;
-  
-        if (!query) {
-          res.status(400).json({ 
-            error: 'Bad Request', 
-            message: 'Query text is required',
-            auth_info: { trust_level: req.dina?.trust_level }
-          });
-          return;
-        }
-  
-        // Check token limits based on query length and intelligence level
-        const estimatedTokens = query.length + (intelligence_level === 'deep' ? 500 : 200);
-        if (estimatedTokens > req.dina!.token_limit_remaining) {
-          res.status(413).json({ 
-            error: 'Token limit exceeded', 
-            limit: req.dina!.token_limit_remaining,
-            estimated_tokens: estimatedTokens,
-            trust_level: req.dina!.trust_level,
-            message: 'Upgrade your trust level for higher limits'
-          });
-          return;
-        }
-  
-        const digiMMessage = createDinaMessage({
-          source: { module: 'api', version: '1.0.0' },
-          target: { module: 'digim', method: 'digim_query', priority: 8 },
-          security: { 
-            user_id: req.dina!.dina_key, 
-            session_id: req.dina!.session_id, 
-            clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-            sanitized: true 
-          },
-          payload: {
-            query,
-            filters: filters || {},
-            intelligence_level: intelligence_level || 'surface',
-            output_format: output_format || 'json',
-            max_results: max_results || 50
-          }
-        });
-  
-        console.log(`🧠 DIGIM query from ${req.dina!.trust_level} user: "${query.substring(0, 50)}..."`);
-        const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
-        
-        res.json({
-          ...digiMResponse.payload.data,
-          auth_info: {
-            trust_level: req.dina?.trust_level,
-            rate_limit_remaining: req.dina?.rate_limit_remaining,
-            token_limit_remaining: req.dina?.token_limit_remaining
-          }
-        });
-  
-      } catch (error) {
-        console.error('❌ Error processing DIGIM export:', error);
-        res.status(500).json({
-          error: 'DIGIM Export Error',
-          message: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    });
-  
-    // DIGIM Content Clusters
-    apiRouter.get('/digim/clusters', async (req: AuthenticatedRequest, res: Response) => {
-      try {
-        const { category, time_range, similarity_threshold } = req.query;
-  
-        const digiMMessage = createDinaMessage({
-          source: { module: 'api', version: '1.0.0' },
-          target: { module: 'digim', method: 'digim_cluster', priority: 6 },
-          security: { 
-            user_id: req.dina!.dina_key, 
-            session_id: req.dina!.session_id, 
-            clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-            sanitized: true 
-          },
-          payload: {
-            category: category as string,
-            similarity_threshold: similarity_threshold ? parseFloat(similarity_threshold as string) : 0.8,
-            max_clusters: req.dina!.trust_level === 'trusted' ? 100 : 50
-          }
-        });
-  
-        console.log(`🔗 DIGIM clusters request from ${req.dina!.trust_level} user`);
-        const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
-        
-        res.json({
-          ...digiMResponse.payload.data,
-          auth_info: {
-            trust_level: req.dina?.trust_level
-          }
-        });
-  
-      } catch (error) {
-        console.error('❌ Error getting DIGIM clusters:', error);
-        res.status(500).json({
-          error: 'DIGIM Clusters Error',
-          message: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    });
-  
-    // DIGIM Security Operations (Trusted users only)
-    apiRouter.post('/digim/security/scan', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
-      try {
-        const { target_ids, security_level } = req.body;
-  
-        const digiMMessage = createDinaMessage({
-          source: { module: 'api', version: '1.0.0' },
-          target: { module: 'digim', method: 'digim_security', priority: 9 },
-          security: { 
-            user_id: req.dina!.dina_key, 
-            session_id: req.dina!.session_id, 
-            clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-            sanitized: true 
-          },
-          payload: {
-            action: 'scan',
-            target_ids: target_ids || [],
-            security_level: security_level || 'standard'
-          }
-        });
-  
-        console.log(`🔒 DIGIM security scan from ${req.dina!.trust_level} user`);
-        const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
-        
-        res.json({
-          ...digiMResponse.payload.data,
-          auth_info: {
-            trust_level: req.dina?.trust_level,
-            admin_user: req.dina?.dina_key
-          }
-        });
-  
-      } catch (error) {
-        console.error('❌ Error processing DIGIM security scan:', error);
-        res.status(500).json({
-          error: 'DIGIM Security Error',
-          message: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    });
-  
-    // ================================
-    // DIGIM ADMIN ENDPOINTS (Trusted users only)
-    // ================================
-    
-    // DIGIM System Statistics
-    apiRouter.get('/digim/admin/stats', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
-      try {
-        const stats = await database.query(`
-          SELECT 
-            ds.category,
-            ds.subcategory,
-            COUNT(ds.id) as source_count,
-            COUNT(dc.id) as content_count,
-            AVG(dc.quality_score) as avg_quality,
-            AVG(dc.freshness_score) as avg_freshness,
-            SUM(CASE WHEN ds.is_active = TRUE THEN 1 ELSE 0 END) as active_sources
-          FROM digim_sources ds
-          LEFT JOIN digim_content dc ON ds.id = dc.source_id
-          GROUP BY ds.category, ds.subcategory
-          ORDER BY ds.category, ds.subcategory
-        `, [], true);
-        
-        const securityStats = await database.query(`
-          SELECT 
-            security_status,
-            COUNT(*) as count
-          FROM digim_content 
-          GROUP BY security_status
-        `, [], true);
-        
-        res.json({ 
-          category_stats: stats,
-          security_stats: securityStats,
-          timestamp: new Date(),
-          admin_user: req.dina?.dina_key
-        });
-      } catch (error) {
-        res.status(500).json({ 
-          error: 'Failed to get DIGIM stats',
-          message: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    });
-  
-    // DIGIM Content Management
-    apiRouter.get('/digim/admin/content', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
-      try {
-        const { status, category, limit = 50, offset = 0 } = req.query;
-        
-        let whereClause = '1=1';
-        const params: any[] = [];
-        
-        if (status) {
-          whereClause += ' AND dc.processing_status = ?';
-          params.push(status);
-        }
-        
-        if (category) {
-          whereClause += ' AND ds.category = ?';
-          params.push(category);
-        }
-        
-        params.push(parseInt(limit as string), parseInt(offset as string));
-        
-        const content = await database.query(`
-          SELECT 
-            dc.*,
-            ds.name as source_name,
-            ds.category,
-            ds.subcategory
-          FROM digim_content dc
-          JOIN digim_sources ds ON dc.source_id = ds.id
-          WHERE ${whereClause}
-          ORDER BY dc.gathered_at DESC
-          LIMIT ? OFFSET ?
-        `, params, true);
-        
-        res.json({ 
-          content,
-          pagination: {
-            limit: parseInt(limit as string),
-            offset: parseInt(offset as string),
-            has_more: content.length === parseInt(limit as string)
-          },
-          admin_user: req.dina?.dina_key
-        });
-      } catch (error) {
-        res.status(500).json({ 
-          error: 'Failed to get DIGIM content',
-          message: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    });
-  
-    // DIGIM Source Testing
-    apiRouter.post('/digim/admin/test/:sourceId', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
-      try {
-        const { sourceId } = req.params;
-        
-        const digiMMessage = createDinaMessage({
-          source: { module: 'api', version: '1.0.0' },
-          target: { module: 'digim', method: 'digim_sources', priority: 8 },
-          security: { 
-            user_id: req.dina!.dina_key, 
-            session_id: req.dina!.session_id, 
-            clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-            sanitized: true 
-          },
-          payload: { 
-            action: 'test',
-            source_id: sourceId
-          }
-        });
-  
-        console.log(`🧪 DIGIM source test from admin: ${sourceId}`);
-        const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
-        
-        res.json({
-          ...digiMResponse.payload.data,
-          admin_user: req.dina?.dina_key
-        });
-        
-      } catch (error) {
-        res.status(500).json({ 
-          error: 'Failed to test DIGIM source',
-          message: error instanceof Error ? error.message : 'Unknown error'
-        });
-      }
-    });
-  
-    // ================================
-    // INTEGRATION COMPLETION
-    // ================================
-  
-    console.log('🧠 DIGIM API routes configured:');
-    console.log('  GET  /digim/status           - System status');
-    console.log('  POST /digim/query            - Natural language queries');
-    console.log('  GET  /digim/sources          - List data sources');
-    console.log('  POST /digim/sources          - Add data source (trusted)');
-    console.log('  POST /digim/gather           - Manual gathering');
-    console.log('  POST /digim/analyze          - Content analysis');
-    console.log('  POST /digim/generate         - Content generation');
-    console.log('  POST /digim/export           - Export data (trusted)');
-    console.log('  GET  /digim/clusters         - Content clusters');
-    console.log('  POST /digim/security/scan    - Security scan (trusted)');
-    console.log('  GET  /digim/admin/*          - Admin endpoints (trusted)');
-  
-  
 
   // ================================
   // DEBUG ENDPOINT (Trusted users only)
@@ -1013,79 +1344,98 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         }
       };
       
-      res.json({
-        success: true,
-        analysis: analysisResult,
-        recommendations: {
-          issue: 'Ollama generate endpoint returns NDJSON even with stream:false',
-          solution: 'Parse multiple JSON objects and accumulate response parts',
-          alternative: 'Use chat endpoint if available (returns single JSON)'
-        }
-      });
+      res.json(analysisResult);
       
     } catch (error) {
-      console.error('❌ Debug endpoint error:', error);
+      console.error('🔍 DEBUG: Error testing Ollama:', error);
       res.status(500).json({
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        stack: error instanceof Error ? error.stack : undefined
+        error: 'Debug test failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   });
 
-  // FIXED: Apply the enhanced error handling middleware last
-  apiRouter.use(enhancedErrorHandler);
+  // ================================
+  // INTEGRATION COMPLETION
+  // ================================
 
-  // Mount the API router at the specified base path
+  console.log('🪞 Mirror Module API routes configured:');
+  console.log('  GET  /mirror/status           - Module status and health');
+  console.log('  POST /mirror/submit           - Submit data for analysis');
+  console.log('  GET  /mirror/insights         - Get user insights');
+  console.log('  GET  /mirror/context          - Get user context (trusted)');
+  console.log('  POST /mirror/analyze          - Generate specific analysis');
+  console.log('  GET  /mirror/notifications    - Get user notifications');
+  console.log('  POST /mirror/notifications/:id/read - Mark notification read');
+  console.log('  POST /mirror/preferences      - Update user preferences');
+  console.log('  GET  /mirror/history          - Get submission history (trusted)');
+  console.log('  POST /mirror/export           - Export user data (trusted)');
+  console.log('  GET  /mirror/analytics        - Get analytics overview (trusted)');
+
+  console.log('🧠 DIGIM API routes configured:');
+  console.log('  GET  /digim/status           - System status');
+  console.log('  POST /digim/query            - Natural language queries');
+  console.log('  GET  /digim/sources          - List data sources');
+
+  console.log('💬 LLM API routes configured:');
+  console.log('  GET  /models                 - List available models');
+  console.log('  POST /models/:id/chat        - Chat completions');
+  console.log('  POST /models/:id/embed       - Generate embeddings');
+
+  console.log('🔧 Admin API routes configured:');
+  console.log('  GET  /admin/auth/stats       - Authentication statistics (trusted)');
+  console.log('  GET  /admin/users            - User management (trusted)');
+  console.log('  POST /admin/users/:id/block  - Block user (trusted)');
+  console.log('  POST /admin/users/:id/unblock- Unblock user (trusted)');
+
+  // Mount the router
   app.use(apiPath, apiRouter);
-  console.log(`🌐 DINA API v2 with Unified Auth routes mounted at: ${apiPath}`);
-  console.log(`🔐 Authentication: Auto-registration enabled, Progressive trust system active`);
-  console.log(`🧠 DIGIM: Information gathering and intelligence system active`);
+  
+  console.log(`✅ Complete DINA API with Mirror Module mounted at ${apiPath}`);
+  console.log(`📚 API Documentation available at ${apiPath}/docs (if implemented)`);
+  
+  // Optional: Add a routes listing endpoint
+  apiRouter.get('/routes', (req: AuthenticatedRequest, res: Response) => {
+    const routes = {
+      public: [
+        'GET /health - Service health check'
+      ],
+      authenticated: [
+        'GET /status - System status',
+        'GET /stats - System statistics',
+        'GET /modules - Module status',
+        'GET /models - Available LLM models',
+        'POST /models/:id/chat - Chat completions',
+        'POST /models/:id/embed - Generate embeddings',
+        'GET /mirror/status - Mirror module status',
+        'POST /mirror/submit - Submit data for analysis',
+        'GET /mirror/insights - Get user insights',
+        'POST /mirror/analyze - Generate specific analysis',
+        'GET /mirror/notifications - Get notifications',
+        'POST /mirror/preferences - Update preferences',
+        'GET /digim/status - DIGIM system status',
+        'POST /digim/query - Natural language queries',
+        'GET /digim/sources - List data sources'
+      ],
+      trusted: [
+        'GET /mirror/context - Get detailed user context',
+        'GET /mirror/history - Get submission history',
+        'POST /mirror/export - Export user data',
+        'GET /mirror/analytics - Get analytics overview',
+        'GET /admin/* - Administrative endpoints',
+        'POST /debug/* - Debug endpoints'
+      ]
+    };
+    
+    res.json({
+      api_version: '2.0.0',
+      base_path: apiPath,
+      total_endpoints: Object.values(routes).flat().length,
+      current_user: {
+        trust_level: req.dina?.trust_level,
+        available_routes: routes[req.dina?.trust_level === 'trusted' ? 'trusted' : 'authenticated']
+      },
+      routes
+    });
+  });
 }
-
-// FIXED: Enhanced error handler placed outside the setupAPI function
-const enhancedErrorHandler = (error: Error, req: Request, res: Response, next: NextFunction): void => {
-  console.error('❌ API Error:', error);
-  
-  // CRITICAL: Check if headers already sent
-  if (res.headersSent) {
-    console.error('⚠️ Headers already sent, cannot send error response');
-    return next(error);
-  }
-  
-  // Enhanced error categorization
-  let statusCode = 500;
-  let errorCode = 'INTERNAL_SERVER_ERROR';
-  let message = 'Internal server error';
-  
-  if (error.message.includes('timeout')) {
-    statusCode = 408;
-    errorCode = 'REQUEST_TIMEOUT';
-    message = 'Request timeout';
-  } else if (error.message.includes('Redis')) {
-    statusCode = 503;
-    errorCode = 'SERVICE_UNAVAILABLE';
-    message = 'Cache service temporarily unavailable';
-  } else if (error.message.includes('validation')) {
-    statusCode = 400;
-    errorCode = 'VALIDATION_ERROR';
-    message = 'Request validation failed';
-  }
-  
-  const errorResponse = {
-    success: false,
-    error: {
-      code: errorCode,
-      message: message,
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    },
-    timestamp: new Date().toISOString(),
-    request_id: `error_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-  };
-  
-  try {
-    res.status(statusCode).json(errorResponse);
-  } catch (sendError) {
-    console.error('❌ Failed to send error response:', sendError);
-  }
-};

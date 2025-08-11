@@ -357,9 +357,28 @@ export class DinaProtocol {
         console.warn('Invalid DINA message: missing payload data');
         return false;
       }
-      if (message.target.module === 'llm' && message.target.method === 'llm_generate' && !message.payload.data?.query) {
-        console.warn('Invalid DINA message: missing query for llm_generate');
-        return false;
+     // Enhanced LLM method validation with flexible payload structure
+      if (message.target.module === 'llm') {
+        const method = message.target.method;
+        
+        if (method === 'llm_generate') {
+          // Handle both direct payload and nested data structure
+          const query = message.payload.query || message.payload.data?.query || message.payload.data?.data?.query;
+          if (!query) {
+            console.warn('Invalid DINA message: missing query for llm_generate');
+            console.warn('Payload structure:', JSON.stringify(message.payload, null, 2));
+            return false;
+          }
+        }
+        
+        if (method === 'llm_embed') {
+          const text = message.payload.text || message.payload.data?.text || message.payload.data?.data?.text;
+          if (!text) {
+            console.warn('Invalid DINA message: missing text for llm_embed');
+            console.warn('Payload structure:', JSON.stringify(message.payload, null, 2));
+            return false;
+          }
+        }
       }
       if (!message.qos || typeof message.qos.delivery_mode === 'undefined' || typeof message.qos.timeout_ms === 'undefined' || typeof message.qos.retry_count === 'undefined' || typeof message.qos.max_retries === 'undefined' || typeof message.qos.require_ack === 'undefined') {
         console.warn('Invalid DINA message: missing QoS details');

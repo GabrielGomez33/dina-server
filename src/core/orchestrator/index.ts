@@ -15,6 +15,8 @@ import { DinaLLMManager } from '../../modules/llm/manager';
 import { ModelType, performanceOptimizer } from '../../modules/llm/intelligence'; // Added performanceOptimizer import
 import { digiMOrchestrator} from '../../modules/digim';
 import { isDigiMMessage } from '../../modules/digim/types';
+import { v4 as uuidv4 } from 'uuid';
+import { performance } from 'perf_hooks';
 
 // ================================
 // ENHANCED MESSAGE TYPES
@@ -248,136 +250,182 @@ private startQueueProcessors(): void {
 
   public async handleIncomingMessage(message: DinaUniversalMessage): Promise<DinaResponse> {
       const startTime = performance.now();
-      let responsePayload: any;
-      let responseStatus: DinaResponse['status'] = 'success';
-      let errorMessage: string | undefined;
+      
+      // CRITICAL: Prevent recursive loops and stack overflow
+      const callDepth = (message as any).__callDepth || 0;
+      if (callDepth > 5) {
+        console.error('❌ Maximum call depth exceeded, preventing stack overflow');
+        return this.createErrorResponse(message.id, 'RECURSION_ERROR', 'Maximum recursion depth exceeded');
+      }
+      
+      (message as any).__callDepth = callDepth + 1;
     
-      const requestId = await database.logRequest({
-        source: message.source.module,
-        target: message.target.module,
-        method: message.target.method,
-        payload: message.payload.data,
-        priority: message.target.priority,
-        userId: message.security.user_id,
-        securityContext: message.security
-      });
+      let responsePayload: any;
+      let responseStatus: 'success' | 'error' | 'processing' | 'queued' = 'success';
+      let errorMessage: string | undefined;
+      
+      const requestId = `dina_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
       try {
-        console.log(`🔍 Validating message ${requestId}`);
-        
-        // ENHANCED DEBUGGING: Log the original message structure
-        console.log(`📋 Original message structure:`, {
-          source: message.source,
-          target: message.target,
-          targetModule: message.target?.module,
-          targetModuleType: typeof message.target?.module,
-          fullMessage: JSON.stringify(message, null, 2)
+        await database.logRequest({
+          source: message.source.module,
+          target: message.target.module,
+          method: message.target.method,
+          payload: message.payload,
+          priority: message.target.priority,
+          userId: message.security.user_id,
+          securityContext: message.security
         });
-        
+    
+        console.log(`🔍 Processing message ${requestId}: ${message.target.module}.${message.target.method}`);
+    
         if (!DinaProtocol.validateMessage(message)) {
           throw new Error('Invalid DINA message: Protocol validation failed');
         }
     
         const sanitizedMessage = DinaProtocol.sanitizeMessage(message);
-        
-        // ENHANCED DEBUGGING: Log the sanitized message structure
-        console.log(`🧹 Sanitized message structure:`, {
-          source: sanitizedMessage.source,
-          target: sanitizedMessage.target,
-          targetModule: sanitizedMessage.target?.module,
-          targetModuleType: typeof sanitizedMessage.target?.module,
-          isTargetModuleString: typeof sanitizedMessage.target?.module === 'string',
-          sanitizedTargetKeys: Object.keys(sanitizedMessage.target || {}),
-          fullSanitizedMessage: JSON.stringify(sanitizedMessage, null, 2)
-        });
+        console.log(`🧹 Message sanitized successfully for ${requestId}`);
     
-        // SAFETY CHECK: Ensure target.module is a string
         if (!sanitizedMessage.target || typeof sanitizedMessage.target.module !== 'string') {
           throw new Error(
-            `Invalid target module format. Expected string, got: ${typeof sanitizedMessage.target?.module}. ` +
-            `Value: ${JSON.stringify(sanitizedMessage.target?.module)}. ` +
-            `Full target: ${JSON.stringify(sanitizedMessage.target)}`
+            `Invalid target module format. Expected string, got: ${typeof sanitizedMessage.target?.module}`
           );
         }
     
         const targetModule = sanitizedMessage.target.module;
-        console.log(`🎯 Processing target module: "${targetModule}" (type: ${typeof targetModule})`);
+        console.log(`🎯 Routing to module: "${targetModule}" with method: "${sanitizedMessage.target.method}"`);
     
-        // ADD DIGIM ROUTING HERE:
+        // Enhanced routing with proper error handling
         switch (targetModule) {
           case 'core':
-            console.log('🏛️ Routing to CORE module');
+            console.log('🏛️ Processing CORE request');
             responsePayload = await this.processCoreRequest(sanitizedMessage);
             break;
+            
           case 'llm':
-            console.log('🤖 Routing to LLM module');
+            console.log('🤖 Processing LLM request');
             responsePayload = await this.processLLMRequest(sanitizedMessage);
             break;
+            
           case 'database':
-            console.log('🗄️ Routing to DATABASE module');
+            console.log('🗄️ Processing DATABASE request');
             responsePayload = await this.processDatabaseRequest(sanitizedMessage);
             break;
+            
           case 'system':
-            console.log('⚙️ Routing to SYSTEM module');
+            console.log('⚙️ Processing SYSTEM request');
             responsePayload = await this.processSystemRequest(sanitizedMessage);
             break;
-          // ADD DIGIM CASE:
+            
           case 'digim':
-            console.log(`🧠 Routing to DIGIM: ${sanitizedMessage.target.method}`);
+            console.log('🧠 Processing DIGIM request');
             if (!isDigiMMessage(sanitizedMessage)) {
               throw new Error('Invalid DIGIM message format');
             }
             const digiMResponse = await digiMOrchestrator.handleIncomingMessage(sanitizedMessage);
             responsePayload = digiMResponse.payload.data;
             break;
-
+            
           default:
-            // ENHANCED ERROR: Provide more detailed information
             const availableModules = ['core', 'llm', 'database', 'system', 'digim'];
             throw new Error(
-              `Unknown target module: "${targetModule}" (type: ${typeof targetModule}). ` +
-              `Available modules: ${availableModules.join(', ')}. ` +
-              `Full target object: ${JSON.stringify(sanitizedMessage.target)}`
+              `Unknown target module: "${targetModule}". ` +
+              `Available modules: ${availableModules.join(', ')}`
             );
         }
+    
+        console.log(`✅ Successfully processed ${requestId} in ${(performance.now() - startTime).toFixed(2)}ms`);
+    
       } catch (error) {
+        console.error(`❌ Error processing message ${requestId}:`, error);
+        
         responseStatus = 'error';
         errorMessage = (error as Error).message;
         responsePayload = {
           status: 'error',
           message: errorMessage,
-          // ENHANCED ERROR PAYLOAD: Include debugging info
           debug: {
             originalTargetModule: message.target?.module,
             targetModuleType: typeof message.target?.module,
             timestamp: new Date().toISOString(),
-            requestId
+            requestId: requestId,
+            callDepth: callDepth
           }
         };
-        console.error(`❌ Error processing message ${requestId}:`, error);
-        
-        // Log the full error context
-        console.error(`🔍 Error context:`, {
-          originalMessage: JSON.stringify(message, null, 2),
-          errorMessage: (error as Error).message,
-          errorStack: (error as Error).stack
-        });
+    
+        // ✅ CORRECTED: Log error with proper method signature
+        try {
+          await database.log('error', 'orchestrator', errorMessage, {
+            request_id: requestId,
+            target_module: message.target?.module,
+            target_method: message.target?.method,
+            user_id: message.security?.user_id,
+            error_type: (error as Error).name,
+            call_depth: callDepth,
+            stack_trace: process.env.NODE_ENV === 'development' ? (error as Error).stack : undefined
+          });
+        } catch (dbError) {
+          console.error('❌ Failed to log error to database:', dbError);
+        }
       }
     
       const processingTime = performance.now() - startTime;
-      
+    
       const dinaResponse: DinaResponse = createDinaResponse({
         request_id: requestId,
         status: responseStatus,
         payload: responsePayload,
-        metrics: { processing_time_ms: processingTime }
+        metrics: { 
+          processing_time_ms: processingTime,
+          queue_time_ms: message.trace.queue_time_ms || 0
+        },
+        error: errorMessage ? {
+          code: responseStatus === 'error' ? 'PROCESSING_ERROR' : 'UNKNOWN_ERROR',
+          message: errorMessage,
+          details: {
+            target_module: message.target?.module,
+            target_method: message.target?.method,
+            processing_time: processingTime
+          }
+        } : undefined
       });
     
-      console.log(`📤 Generated response for message ${requestId}:`, JSON.stringify(dinaResponse, null, 2));
+      console.log(`📤 Response generated for ${requestId}: status=${responseStatus}, time=${processingTime.toFixed(2)}ms`);
       
       return dinaResponse;
     }
 
+  private createErrorResponse(
+    requestId: string, 
+    errorCode: string = 'PROCESSING_ERROR', 
+    message: string = 'An error occurred during processing',
+    details?: any
+  ): DinaResponse {
+    
+    return {
+      request_id: requestId,
+      id: uuidv4(), // Make sure to import { v4 as uuidv4 } from 'uuid';
+      timestamp: new Date().toISOString(),
+      status: 'error',
+      payload: {
+        data: null,
+        metadata: {
+          error: true,
+          error_code: errorCode
+        }
+      },
+      error: {
+        code: errorCode,
+        message: message,
+        details: details
+      },
+      metrics: {
+        processing_time_ms: 0,
+        queue_time_ms: 0
+      }
+    };
+  }
+    
   private async processCoreRequest(message: DinaUniversalMessage): Promise<any> {
     switch (message.target.method) {
       case 'ping':
@@ -393,90 +441,111 @@ private startQueueProcessors(): void {
 
 private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
   const { method } = message.target;
-  const { query, text, code_request, analysis_query, options } = message.payload.data;
-  console.log(`🤖 Processing LLM request: ${method}, query: ${query || text || code_request || analysis_query}`);
+  console.log(`🤖 Processing LLM request: ${method}`);
 
-  // ADD THIS DEBUG LOG:
-  console.log(`🔍 DEBUG: About to switch on method: ${method}`);
+  // CRITICAL: Flexible payload extraction for different nesting levels
+  const extractPayloadData = (payload: any, field: string): any => {
+    // Direct access (correct structure)
+    if (payload[field] !== undefined) {
+      console.log(`✅ Found ${field} at direct level`);
+      return payload[field];
+    }
+    
+    // Nested data access (current structure from API)
+    if (payload.data && payload.data[field] !== undefined) {
+      console.log(`✅ Found ${field} at data level`);
+      return payload.data[field];
+    }
+    
+    // Double-nested access (backward compatibility)
+    if (payload.data && payload.data.data && payload.data.data[field] !== undefined) {
+      console.log(`✅ Found ${field} at data.data level`);
+      return payload.data.data[field];
+    }
+    
+    return undefined;
+  };
 
+  // Extract data with flexible handling
+  const query = extractPayloadData(message.payload, 'query');
+  const text = extractPayloadData(message.payload, 'text');
+  const code_request = extractPayloadData(message.payload, 'code_request');
+  const analysis_query = extractPayloadData(message.payload, 'analysis_query');
+  const options = extractPayloadData(message.payload, 'options') || {};
+
+  console.log(`🔍 Extracted data: query=${!!query}, text=${!!text}, code_request=${!!code_request}, analysis_query=${!!analysis_query}`);
+
+  // Enhanced validation with helpful error messages
   if (method === 'llm_generate' && !query) {
+    console.error('❌ Missing query for llm_generate');
+    console.error('Payload structure:', JSON.stringify(message.payload, null, 2));
     throw new Error('Missing required field: query for llm_generate');
   }
-  if (method === 'llm_code' && !code_request) {
-    throw new Error('Missing required field: code_request for llm_code');
-  }
-  if (method === 'llm_analysis' && !analysis_query) {
-    throw new Error('Missing required field: analysis_query for llm_analysis');
-  }
+  
   if (method === 'llm_embed' && !text) {
+    console.error('❌ Missing text for llm_embed');
+    console.error('Payload structure:', JSON.stringify(message.payload, null, 2));
     throw new Error('Missing required field: text for llm_embed');
   }
 
-  // ADD THIS DEBUG LOG:
-  console.log(`🔍 DEBUG: Validation passed, creating cache key...`);
-
-  const cacheKey = `${method}:${message.security.user_id || 'default'}:${message.security.session_id || 'default'}:${query || text || code_request || analysis_query}`;
-  
-  // ADD THIS DEBUG LOG:
-  console.log(`🔍 DEBUG: Cache key created: ${cacheKey}`);
-  
+  // Cache handling
+  const cacheKey = `llm:${method}:${message.security.user_id || 'default'}:${query || text || code_request || analysis_query}`;
   const cachedResponse = await redisManager.getExactCachedResponse(cacheKey);
 
-  // ADD THIS DEBUG LOG:
-  console.log(`🔍 DEBUG: Cache check complete, cached: ${!!cachedResponse}`);
-
   if (cachedResponse) {
-    console.log(`⚡ Serving cached LLM response for method: ${method}, key: ${cacheKey}`);
+    console.log(`⚡ Serving cached LLM response for method: ${method}`);
     return { ...cachedResponse, metadata: { ...cachedResponse.metadata, cached: true } };
   }
 
   let llmResponse: any;
   try {
-    // ADD THIS DEBUG LOG:
-    console.log(`🔍 DEBUG: About to switch to method handler: ${method}`);
+    console.log(`🚀 Processing LLM method: ${method}`);
     
     switch (method) {
       case 'llm_generate':
-        console.log(`🔍 DEBUG: Entering llm_generate case`);
-        console.log(`🚀 Calling llmManager.generate with query: ${query}, model: ${options?.model_preference}`);
-        llmResponse = await this.llmManager.generate(query!, {
+        console.log(`🧠 Generating response for query: "${query.substring(0, 50)}..."`);
+        llmResponse = await this.llmManager.generate(query, {
           user_id: message.security.user_id,
           conversation_id: options?.conversation_id,
-          model_preference: options?.model_preference as ModelType,
+          model_preference: options?.model_preference,
           streaming: options?.streaming,
           max_tokens: options?.max_tokens,
           temperature: options?.temperature,
           include_context: options?.include_context
         });
-        console.log(`🔍 DEBUG: llm_generate completed`);
         break;
         
       case 'llm_embed':
-        console.log(`🔍 DEBUG: Entering llm_embed case`);
-        console.log(`🚀 Calling llmManager.embed with text: ${text}`);
-        // ADD THIS DEBUG LOG IMMEDIATELY BEFORE THE CALL:
-        console.log(`🔍 DEBUG: About to call this.llmManager.embed() - THIS IS WHERE IT MIGHT HANG`);
-        
-        llmResponse = await this.llmManager.embed(text!, {
+        console.log(`🔢 Generating embedding for text: "${text.substring(0, 50)}..."`);
+        llmResponse = await this.llmManager.embed(text, {
           user_id: message.security.user_id,
           conversation_id: options?.conversation_id,
           model_preference: options?.model_preference
         });
-        
-        console.log(`🔍 DEBUG: llm_embed completed`);
         break;
         
-      // ... other cases
+      case 'llm_code':
+        if (!code_request) throw new Error('Missing required field: code_request for llm_code');
+        llmResponse = await this.llmManager.generateCode(code_request, options);
+        break;
+        
+      case 'llm_analysis':
+        if (!analysis_query) throw new Error('Missing required field: analysis_query for llm_analysis');
+        llmResponse = await this.llmManager.analyze(analysis_query, options);
+        break;
+        
+      default:
+        throw new Error(`Unsupported LLM method: ${method}`);
+    }
+
+    console.log(`✅ LLM processing completed for ${method}`);
+
+    // Cache successful responses
+    if (llmResponse && llmResponse.status !== 'error') {
+      await redisManager.setExactCachedResponse(cacheKey, llmResponse, 3600);
+      console.log(`💾 Cached LLM response for method: ${method}`);
     }
     
-    // ADD THIS DEBUG LOG:
-    console.log(`🔍 DEBUG: Method handler completed, checking response...`);
-
-    if (llmResponse && llmResponse.status !== 'error') {
-      const ttlSeconds = 3600;
-      await redisManager.setExactCachedResponse(cacheKey, llmResponse, ttlSeconds);
-      console.log(`💾 Cached LLM response for method: ${method}, key: ${cacheKey}`);
-    }
   } catch (error) {
     console.error(`❌ LLM processing failed for ${method}:`, error);
     throw error;

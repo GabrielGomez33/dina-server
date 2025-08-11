@@ -203,14 +203,35 @@ export class DinaLLMManager {
 
   async processLLMRequest(message: DinaUniversalMessage): Promise<LLMResponse | null> {
     console.log(`🤖 Processing LLM request: query="${message.payload.data.query?.substring(0, 50)}...", method=${message.target.method}`);
+
+	const extractPayloadData = (payload: any, field: string): any => {
+		  // Try direct access first
+		  if (payload[field] !== undefined) return payload[field];
+		  // Try nested data access
+		  if (payload.data && payload.data[field] !== undefined) return payload.data[field];
+		  // Try double-nested access (for backward compatibility)
+		  if (payload.data && payload.data.data && payload.data.data[field] !== undefined) return payload.data.data[field];
+		  return undefined;
+ 	};	
+
     try {
       const startTime = performance.now();
       let response: LLMResponse | null = null;
 
       switch (message.target.method) {
         case 'llm_generate':
-          response = await this.generate(message.payload.data.query, message.payload.data.options);
-          break;
+              const query = extractPayloadData(message.payload, 'query');
+              const options = extractPayloadData(message.payload, 'options') || {};
+              
+              if (!query) {
+                console.error('❌ Missing query in llm_generate request');
+                console.error('Payload structure:', JSON.stringify(message.payload, null, 2));
+                return null;
+              }
+              
+              console.log(`🧠 Processing query: "${query.substring(0, 50)}..."`);
+              response = await this.generate(query, options);
+              break;
         case 'llm_code':
           response = await this.generateCode(message.payload.data.code_request, message.payload.data.options);
           break;
@@ -218,8 +239,18 @@ export class DinaLLMManager {
           response = await this.analyze(message.payload.data.analysis_query, message.payload.data.options);
           break;
         case 'llm_embed':
-          response = await this.embed(message.payload.data.text, message.payload.data.options);
-          break;
+              const text = extractPayloadData(message.payload, 'text');
+              const embedOptions = extractPayloadData(message.payload, 'options') || {};
+              
+              if (!text) {
+                console.error('❌ Missing text in llm_embed request');
+                console.error('Payload structure:', JSON.stringify(message.payload, null, 2));
+                return null;
+              }
+              
+              console.log(`🔢 Processing embed for text: "${text.substring(0, 50)}..."`);
+              response = await this.embed(text, embedOptions);
+              break;
         default:
           console.error(`❌ Unsupported method: ${message.target.method}`);
           return null;
