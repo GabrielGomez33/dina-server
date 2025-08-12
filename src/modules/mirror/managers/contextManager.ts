@@ -59,7 +59,7 @@ export class MirrorContextManager extends EventEmitter {
     console.log('🧠 Initializing Mirror Context Manager...');
     
     this.redis = redisManager;  // FIXED: Use singleton
-    this.llmManager = new DinaLLMManager();  // FIXED: Proper instantiation
+    this.llmManager = new DinaLLMManager();  // FIXED: Add this line
     this.setupEventHandlers();
   }
 

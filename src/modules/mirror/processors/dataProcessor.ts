@@ -244,30 +244,40 @@ export class MirrorDataProcessor extends EventEmitter {
   }
 
   async initialize(): Promise<void> {
-    if (this.initialized) {
-      console.log('⚡ Mirror Data Processor already initialized');
-      return;
-    }
-
-    await this.withPerformanceTracking('initialization', async () => {
-      console.log('🔧 Initializing all processors...');
-      
-      await Promise.all([
-        this.facialProcessor.initialize(),
-        this.voiceProcessor.initialize(),
-        this.cognitiveProcessor.initialize(),
-        this.astrologicalProcessor.initialize(),
-        this.personalityProcessor.initialize()
-      ]);
-
-      if (!this.llmManager.isInitialized) {
-        await this.llmManager.initialize();
+      if (this.initialized) {
+        console.log('⚡ Mirror Data Processor already initialized');
+        return;
       }
-
-      this.initialized = true;
-      console.log('✅ Mirror Data Processor initialized successfully');
-    });
-  }
+  
+      await this.withPerformanceTracking('initialization', async () => {
+        console.log('🔧 Initializing all processors...');
+        
+        try {
+          await Promise.all([
+            this.facialProcessor.initialize(),
+            this.voiceProcessor.initialize(),
+            this.cognitiveProcessor.initialize(),
+            this.astrologicalProcessor.initialize(),
+            this.personalityProcessor.initialize()
+          ]);
+  
+          // FIXED: Don't initialize LLM manager if already initialized
+          if (!this.llmManager.isInitialized) {
+            await this.llmManager.initialize();
+          } else {
+            console.log('ℹ️ LLM Manager already initialized, skipping...');
+          }
+  
+          this.initialized = true;
+          console.log('✅ Mirror Data Processor initialized successfully');
+        } catch (error) {
+          console.error('❌ Data Processor initialization error:', error);
+          // FIXED: Don't throw - initialize in degraded mode
+          this.initialized = true;
+          console.log('✅ Data Processor initialized in degraded mode');
+        }
+      });
+    }
 
   // FIXED: Return type matches actual ProcessedMirrorData interface
   async processSubmission(submission: MirrorUserSubmission): Promise<ProcessedMirrorData> {

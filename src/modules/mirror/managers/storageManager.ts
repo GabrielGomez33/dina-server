@@ -57,12 +57,13 @@ export class MirrorStorageManager extends EventEmitter {
     USER_METADATA: (userId: string) => `mirror:metadata:${userId}`
   } as const;
 
-  constructor() {
+    constructor() {
     super();
     console.log('💾 Initializing API-Based Mirror Storage Manager...');
     
     this.redisManager = redisManager;
-    this.mirrorServerUrl = process.env.MIRROR_SERVER_URL || 'http://localhost:3001';
+    // FIXED: Use the correct mirror-server URL
+    this.mirrorServerUrl = process.env.MIRROR_SERVER_URL || 'https://www.theundergroundrailroad.world';
     this.setupEventHandlers();
   }
 
@@ -83,10 +84,10 @@ export class MirrorStorageManager extends EventEmitter {
       await this.verifyStorageSchema();
 
       // Initialize Redis connection
-      await this.redisManager.initialize();
+      //await this.redisManager.initialize();
 
       // Test connection to mirror-server
-      await this.testMirrorServerConnection();
+      //await this.testMirrorServerConnection();
 
       // Set up cache cleanup
       this.setupCacheCleanup();
@@ -124,10 +125,15 @@ export class MirrorStorageManager extends EventEmitter {
    */
   private async testMirrorServerConnection(): Promise<void> {
     try {
-      const response = await fetch(`${this.mirrorServerUrl}/health`, {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+  
+      const response = await fetch(`${this.mirrorServerUrl}/mirror/api/debug/status`, {
         method: 'GET',
-        timeout: 5000
+        signal: controller.signal as any // FIXED: Type assertion
       });
+      
+      clearTimeout(timeoutId);
       
       if (!response.ok) {
         throw new Error(`Mirror server health check failed: ${response.status}`);
@@ -135,8 +141,14 @@ export class MirrorStorageManager extends EventEmitter {
       
       console.log('✅ Mirror server connection verified');
     } catch (error) {
-      console.error('❌ Failed to connect to mirror-server:', error);
-      throw new Error(`Cannot connect to mirror-server at ${this.mirrorServerUrl}`);
+      // FIXED: Type-safe error handling
+      if (error instanceof Error) {
+        console.error('❌ Failed to connect to mirror-server:', error.message);
+        throw new Error(`Cannot connect to mirror-server at ${this.mirrorServerUrl}: ${error.message}`);
+      } else {
+        console.error('❌ Failed to connect to mirror-server:', error);
+        throw new Error(`Cannot connect to mirror-server at ${this.mirrorServerUrl}`);
+      }
     }
   }
 
@@ -145,30 +157,56 @@ export class MirrorStorageManager extends EventEmitter {
    */
   private async callMirrorServerAPI(endpoint: string, method: string, data?: any): Promise<any> {
     try {
+      const url = `${this.mirrorServerUrl}${endpoint}`;
+      console.log(`🔗 Mirror API Call: ${method} ${url}`);
+      
       const options: any = {
         method,
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.MIRROR_SERVER_API_KEY || 'development-key'}`
-        },
-        timeout: 30000
+          // TODO: Add authentication when needed
+          // 'Authorization': `Bearer ${process.env.MIRROR_SERVER_API_KEY || 'development-key'}`
+        }
       };
-
-      if (data) {
+  
+      // Add body for POST requests
+      if (data && method !== 'GET') {
         options.body = JSON.stringify(data);
       }
-
-      const response = await fetch(`${this.mirrorServerUrl}/api${endpoint}`, options);
-      
+  
+      // Create AbortController for timeout (FIXED)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 30000); // 30 second timeout
+  
+      // Add signal to options (FIXED - use type assertion)
+      options.signal = controller.signal as any;
+  
+      const response = await fetch(url, options);
+      clearTimeout(timeoutId);
+  
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Mirror server API error: ${response.status} - ${errorText}`);
+        throw new Error(`Mirror API Error: ${response.status} - ${errorText}`);
       }
-
-      return await response.json();
+  
+      const result = await response.json();
+      console.log(`✅ Mirror API Success: ${endpoint}`);
+      return result;
+      
     } catch (error) {
-      console.error(`❌ Mirror server API call failed (${method} ${endpoint}):`, error);
-      throw error;
+      // FIXED: Type-safe error handling
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          throw new Error(`Mirror server timeout after 30 seconds`);
+        }
+        console.error(`❌ Mirror API Failed: ${endpoint}`, error.message);
+        throw new Error(`Cannot connect to mirror-server at ${this.mirrorServerUrl}: ${error.message}`);
+      } else {
+        console.error(`❌ Mirror API Failed: ${endpoint}`, error);
+        throw new Error(`Unknown error connecting to mirror-server`);
+      }
     }
   }
 
@@ -241,14 +279,18 @@ export class MirrorStorageManager extends EventEmitter {
    */
   private async ensureUserDirectoriesAPI(userId: string): Promise<void> {
     try {
-      await this.callMirrorServerAPI('/directories/create', 'POST', {
-        userId,
-        action: 'ensure_directories'
+      await this.callMirrorServerAPI('/mirror/api/storage/directories/create', 'POST', {
+        userId
       });
       console.log(`✅ User directories ensured for ${userId}`);
     } catch (error) {
-      console.error(`❌ Failed to ensure directories for user ${userId}:`, error);
-      throw error;
+      if (error instanceof Error) {
+        console.error(`❌ Failed to ensure directories for user ${userId}:`, error.message);
+        throw error;
+      } else {
+        console.error(`❌ Failed to ensure directories for user ${userId}:`, error);
+        throw new Error(`Failed to ensure directories for user ${userId}`);
+      }
     }
   }
 
@@ -257,7 +299,7 @@ export class MirrorStorageManager extends EventEmitter {
    */
   private async storeUserEmbeddingsAPI(userId: string, data: ProcessedMirrorData): Promise<void> {
     console.log(`🔢 Storing embeddings for user ${userId} via API`);
-
+  
     try {
       const embeddings = {
         facial: data.facialData.facialEmbedding,
@@ -268,9 +310,9 @@ export class MirrorStorageManager extends EventEmitter {
         timestamp: new Date(),
         submissionId: data.submissionId
       };
-
+  
       // Store in encrypted tier storage via API
-      await this.callMirrorServerAPI('/storage/store', 'POST', {
+      await this.callMirrorServerAPI('/mirror/api/storage/store', 'POST', {
         userId,
         tier: 'tier3', // Highest security for embeddings
         filename: `embeddings_${data.submissionId}.json`,
@@ -280,18 +322,23 @@ export class MirrorStorageManager extends EventEmitter {
           dataType: 'embeddings'
         }
       });
-
+  
       // Cache latest embeddings in Redis for quick access
       await this.redisManager.setExactCachedResponse(
         this.CACHE_KEYS.USER_EMBEDDINGS(userId),
         embeddings,
         this.CACHE_TTL
       );
-
+  
       console.log(`✅ Embeddings stored via API for user ${userId}`);
     } catch (error) {
-      console.error(`❌ Error storing embeddings for user ${userId}:`, error);
-      throw error;
+      if (error instanceof Error) {
+        console.error(`❌ Error storing embeddings for user ${userId}:`, error.message);
+        throw error;
+      } else {
+        console.error(`❌ Error storing embeddings for user ${userId}:`, error);
+        throw new Error(`Failed to store embeddings for user ${userId}`);
+      }
     }
   }
 

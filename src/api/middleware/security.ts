@@ -36,22 +36,29 @@ export interface AuthenticatedRequest extends Request {
  * CORS middleware for browser testing
  */
 export const corsMiddleware = (req: Request, res: Response, next: NextFunction): void => {
-  // Allow requests from remote domains and localhost for testing
+  // FIXED: Added www domains to allowed origins
   const allowedOrigins = [
     'http://localhost:3000',
     'http://localhost:8080',
     'http://localhost:8445',
     'https://localhost:8445',
+    // FIXED: Added both www and non-www versions
     'https://theundergroundrailroad.world',
-    'https://theundergroundrailroad.world:8445',
+    'https://www.theundergroundrailroad.world',    // ✅ ADDED
     'http://theundergroundrailroad.world',
+    'http://www.theundergroundrailroad.world',     // ✅ ADDED
+    'https://theundergroundrailroad.world:8445',
+    'https://www.theundergroundrailroad.world:8445', // ✅ ADDED
     'http://theundergroundrailroad.world:8445',
+    'http://www.theundergroundrailroad.world:8445',  // ✅ ADDED
     'http://127.0.0.1:3000',
     'https://127.0.0.1:8445',
     'null' // For file:// protocol testing
   ];
 
   const origin = req.headers.origin;
+  console.log(`🌐 CORS Check: Origin="${origin}" | Allowed: ${allowedOrigins.includes(origin as string)}`);
+  
   if (allowedOrigins.includes(origin as string) || !origin) {
     res.setHeader('Access-Control-Allow-Origin', origin || '*');
   }
@@ -64,6 +71,7 @@ export const corsMiddleware = (req: Request, res: Response, next: NextFunction):
 
   // Handle preflight requests
   if (req.method === 'OPTIONS') {
+    console.log(`✅ CORS Preflight: ${req.method} ${req.path} from ${origin}`);
     res.status(200).end();
     return;
   }

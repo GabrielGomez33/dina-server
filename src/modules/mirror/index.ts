@@ -174,6 +174,10 @@ export class MirrorModule extends EventEmitter {
     }
   }
 
+  public get isInitialized(): boolean {
+    return this.initialized;
+  }
+  
   private setupErrorHandling(): void {
     this.on('error', (error: Error) => {
       console.error('🚨 Mirror Module Error:', error);
@@ -764,4 +768,8 @@ async processSubmission(
   }
 }
 
-export default MirrorModule;
+
+export const mirrorModule = new MirrorModule();
+export default mirrorModule;
+
+console.log('🪞 Mirror Module singleton instance created and exported');

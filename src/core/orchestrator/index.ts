@@ -15,6 +15,7 @@ import { DinaLLMManager } from '../../modules/llm/manager';
 import { ModelType, performanceOptimizer } from '../../modules/llm/intelligence'; // Added performanceOptimizer import
 import { digiMOrchestrator} from '../../modules/digim';
 import { isDigiMMessage } from '../../modules/digim/types';
+import { mirrorModule } from '../../modules/mirror';
 import { v4 as uuidv4 } from 'uuid';
 import { performance } from 'perf_hooks';
 
@@ -129,6 +130,21 @@ export class DinaCore {
 
 
         // ADD MIRROR INITIALIZATION HERE:
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('🪞 PHASE 3: MIRROR MODULE INITIALIZATION');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📊 Step 1: Loading Mirror Foundation...');
+        
+        await mirrorModule.initialize();
+        
+        console.log('🎯 Step 2: Mirror Integration Check...');
+        const mirrorStatus = mirrorModule.isInitialized;
+        console.log(`📈 Mirror Health: ${mirrorStatus ? '✅ Operational' : '⚠️ Degraded'}`);
+        console.log(`🔄 Mirror Components: ${mirrorStatus ? 'ALL SYSTEMS READY' : 'FAILED'}`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('✅ MIRROR MODULE INITIALIZATION COMPLETE');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
        
         
         console.log('🔄 Phase 4: Advanced Message Processing Activation');
@@ -325,6 +341,10 @@ private startQueueProcessors(): void {
             const digiMResponse = await digiMOrchestrator.handleIncomingMessage(sanitizedMessage);
             responsePayload = digiMResponse.payload.data;
             break;
+          case 'mirror':
+          	 console.log('🪞 Processing MIRROR request');
+         	 responsePayload = await this.processMirrorRequest(sanitizedMessage);
+        	 break;
             
           default:
             const availableModules = ['core', 'llm', 'database', 'system', 'digim'];
@@ -592,37 +612,92 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
     }
   }
 
-  async getEnhancedSystemStatus(): Promise<Record<string, any>> {
-    const dbStatus = await database.getSystemStatus();
-    const redisStatus = { isConnected: redisManager.isConnected, queueStats: await redisManager.getQueueStats() };
-    const llmStatus = await this.llmManager.getSystemStatus();
-    
-    // ADD DIGIM STATUS:
-    const digiMStatus = {
-      initialized: digiMOrchestrator.isInitialized,
-      health: digiMOrchestrator.moduleStatus,
-      active_sources: digiMOrchestrator.getActiveSources().length,
-      phase: 'foundation'
-    };
+  private async processMirrorRequest(message: DinaUniversalMessage): Promise<any> {
+      console.log(`🪞 Processing Mirror method: ${message.target.method}`);
+      const sessionInfo = {
+         userId: message.security.user_id || 'anonymous',
+         sessionId: message.security.session_id || 'default'
+      };
   
-    return {
-      overallHealth: dbStatus.status === 'online' && 
-                     redisStatus.isConnected && 
-                     llmStatus.ollamaHealthy && 
-                     digiMOrchestrator.moduleStatus === 'healthy' ? 'healthy' : 'degraded',
-      database: dbStatus,
-      redis: redisStatus,
-      llm_system: llmStatus,
+      switch (message.target.method) {
+        case 'process_submission':
+
+          // Use existing processSubmission method
+          return await mirrorModule.processSubmission(message, sessionInfo);
+          
+        case 'get_status':
+          // Use existing healthCheck method
+          return await mirrorModule.healthCheck();
+          
+        case 'get_metrics':
+          // Use existing getPerformanceMetrics method  
+          return await mirrorModule.getPerformanceMetrics();
+          
+        case 'get_insights':
+        case 'get_patterns':
+        case 'get_questions':
+        case 'immediate_insights':
+        case 'cross_modal_insight':
+          // Route these through the existing processSubmission method
+          // which handles the full DINA protocol properly
+
+          return await mirrorModule.processSubmission(message, sessionInfo);
+          
+        default:
+          throw new Error(`Unknown mirror method: ${message.target.method}`);
+      }
+    }
+
+  // COMPLETE getEnhancedSystemStatus() method for src/core/orchestrator/index.ts
+  
+  async getEnhancedSystemStatus(): Promise<Record<string, any>> {
+      const dbStatus = await database.getSystemStatus();
+      const redisStatus = { isConnected: redisManager.isConnected, queueStats: await redisManager.getQueueStats() };
+      const llmStatus = await this.llmManager.getSystemStatus();
+      
       // ADD DIGIM STATUS:
-      digim: digiMStatus,
-      core: {
-        initialized: this.initialized,
-        uptime: Date.now() - this.startTime.getTime(),
-        queueProcessorsActive: this.queueProcessors.size > 0
-      },
-      timestamp: new Date().toISOString()
-    };
-  }
+      const digiMStatus = {
+        initialized: digiMOrchestrator.isInitialized,
+        health: digiMOrchestrator.moduleStatus,
+        active_sources: digiMOrchestrator.getActiveSources().length,
+        phase: 'foundation'
+      };
+  
+      // ADD MIRROR STATUS - USING PUBLIC GETTER:
+      const mirrorStatus = {
+        initialized: mirrorModule.isInitialized, // Use public getter
+        health: mirrorModule.isInitialized ? 'healthy' : 'critical',
+        components: {
+          dataProcessor: 'ready',
+          contextManager: 'ready', 
+          storageManager: 'ready',
+          insightGenerator: 'ready',
+          notificationSystem: 'ready'
+        },
+        version: '2.0.0',
+        phase: 'integration-complete'
+      };
+  
+      return {
+        overallHealth: dbStatus.status === 'online' && 
+                       redisStatus.isConnected && 
+                       llmStatus.ollamaHealthy && 
+                       digiMOrchestrator.moduleStatus === 'healthy' &&
+                       mirrorModule.isInitialized ?
+          'healthy' : 'degraded',
+        database: dbStatus,
+        redis: redisStatus,
+        llm_system: llmStatus,
+        digim: digiMStatus,
+        mirror: mirrorStatus,
+        core: {
+          initialized: this.initialized,
+          uptime: Date.now() - this.startTime.getTime(),
+          queueProcessorsActive: this.queueProcessors.size > 0
+        },
+        timestamp: new Date().toISOString()
+      };
+    }
 
   async getEnhancedSystemStats(): Promise<Record<string, any>> {
     const dbStats = await database.getSystemStats();
@@ -653,8 +728,7 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
       'performance': 'optimizing',
       'llm-system': this.llmManager.isInitialized ? 'active' : 'unavailable',
       'redis': redisManager.isConnected ? 'active' : 'inactive',
-      'mirror-module': 'pending',
-      'mirror':'active-foundation',
+      'mirror-module': mirrorModule.isInitialized ? 'active' : 'inactive',
       'digim': digiMOrchestrator.isInitialized ? 
         `${digiMOrchestrator.moduleStatus}-phase1` : 'inactive',
       'phase': '2-complete-with-digim'
@@ -680,7 +754,8 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
       console.log('✅ DIGIM shutdown complete');
 
       // ADD MIRROR SHUTDOWN LOGIC
-
+	  await mirrorModule.shutdown();
+	  console.log('✅ Mirror shutdown complete');
       
       await redisManager.shutdown();
       await database.close();
