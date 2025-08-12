@@ -462,7 +462,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     try {
       const mirrorMessage = createDinaMessage({
         source: { module: 'api', version: '1.0.0' },
-        target: { module: 'mirror', method: 'mirror_status', priority: 7 },
+        target: { module: 'mirror', method: 'get_status', priority: 7 },
         security: { 
           user_id: req.dina!.dina_key, 
           session_id: req.dina!.session_id, 
@@ -529,7 +529,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
 
       const mirrorMessage = createDinaMessage({
         source: { module: 'api', version: '1.0.0' },
-        target: { module: 'mirror', method: 'mirror_submit', priority: 8 },
+        target: { module: 'mirror', method: 'process_submission', priority: 8 },
         security: { 
           user_id: userId, 
           session_id: req.dina!.session_id, 
