@@ -16,7 +16,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 // FIXED: Correct imports
 import { redisManager } from '../../../config/redis';
-import { DinaLLMManager } from '../../llm/manager';  // FIXED: Correct import path
+import {DinaLLMManager} from '../../llm/manager';  // FIXED: Correct import path
 import { database as DB } from '../../../config/database/db';
 
 // Type imports

@@ -14,7 +14,7 @@ import { performance } from 'perf_hooks';
 import { v4 as uuidv4 } from 'uuid';
 
 // Core imports
-import { DinaLLMManager } from '../../llm/manager';
+import {DinaLLMManager} from '../../llm/manager';
 
 // Type imports
 import {

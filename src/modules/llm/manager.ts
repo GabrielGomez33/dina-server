@@ -531,4 +531,3 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
     return capabilities;
   }
 }
-

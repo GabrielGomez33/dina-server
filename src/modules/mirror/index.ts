@@ -23,7 +23,7 @@ import {
   createDinaMessage,
   createDinaResponse
 } from '../../core/protocol/index'; 
-import { DinaLLMManager } from '../llm/manager';
+import {DinaLLMManager} from '../llm/manager';
 import { redisManager } from '../../config/redis';
 import { database } from '../../config/database/db';
 
