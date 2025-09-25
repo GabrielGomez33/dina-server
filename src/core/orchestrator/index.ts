@@ -94,7 +94,7 @@ export class DinaCore {
         await database.initialize();
         console.log('🔐 Unified authentication system initialized via database');
                 
-        await redisManager.initialize();
+        //await redisManager.initialize();
                 
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('🤖 PHASE 2: Multi-Model LLM System Initialization');

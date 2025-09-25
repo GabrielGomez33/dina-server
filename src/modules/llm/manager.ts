@@ -64,7 +64,7 @@ async generate(prompt: string, model: string): Promise<OllamaResponse> {
     const timeoutId = setTimeout(() => {
       console.error(`⏰ Ollama generate timeout for model ${model}`);
       controller.abort();
-    }, 60000); // 60 second timeout
+    }, 600000); // 600 second timeout
 
     const response = await fetch(`${this.baseUrl}/api/generate`, {
       method: 'POST',

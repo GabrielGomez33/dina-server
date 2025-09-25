@@ -663,7 +663,7 @@ export class MirrorNotificationSystem extends EventEmitter {
     try {
       // In a full implementation, we'd process batched notifications here
       // For now, this is a placeholder that works with the DINA architecture
-      console.log('📦 Processing batch notifications (placeholder)');
+      //console.log('📦 Processing batch notifications (placeholder)');
     } catch (error) {
       console.error('❌ Error processing batch notifications:', error);
     }
@@ -674,7 +674,7 @@ export class MirrorNotificationSystem extends EventEmitter {
     try {
       // In a full implementation, we'd process retry queue here
       // For now, this is a placeholder that works with the DINA architecture
-      console.log('🔄 Processing retry queue (placeholder)');
+      //console.log('🔄 Processing retry queue (placeholder)');
     } catch (error) {
       console.error('❌ Error processing retry queue:', error);
     }

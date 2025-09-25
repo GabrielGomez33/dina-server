@@ -1,6 +1,19 @@
-// File: src/config/redis.ts - RESILIENT VERSION (healthcheck + cache timeouts hardened)
-import { createClient, RedisClientType } from 'redis';
+// File: src/config/redis.ts - ENHANCED REDIS MANAGER (PROJECT-INTEGRATED)
+// Vector-safe (Float32), RediSearch-aware, FIFO queues, smart cache, legacy helpers & APIs used by other modules
+
+import { createClient, RedisClientType, RedisClusterType } from 'redis';
+import { gzip, gunzip } from 'zlib';
+import { promisify } from 'util';
+import { EventEmitter } from 'events';
 import { DinaUniversalMessage, DinaResponse, QUEUE_NAMES } from '../core/protocol';
+
+// Compression utilities
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
+
+// ================================
+// ENHANCED TYPES & INTERFACES
+// ================================
 
 export enum RedisConnectionState {
   DISCONNECTED = 'disconnected',
@@ -8,449 +21,797 @@ export enum RedisConnectionState {
   CONNECTED = 'connected',
   RECONNECTING = 'reconnecting',
   FAILED = 'failed',
-  CIRCUIT_OPEN = 'circuit_open',
+  CLUSTER_READY = 'cluster_ready'
 }
 
-export class DinaRedisManager {
+export interface VectorEmbedding {
+  id: string;
+  vector: number[];
+  metadata: Record<string, any>;
+  timestamp: number;
+  model: string;
+  dimensions: number;
+  magnitude?: number;
+}
+
+export interface CacheMetrics {
+  hits: number;
+  misses: number;
+  evictions: number;
+  memoryUsage: number;
+  operationsPerSecond: number;
+  averageResponseTime: number;
+}
+
+export interface VectorSearchOptions {
+  topK?: number;
+  threshold?: number;
+  // only applied in manual fallback
+  includeMetadata?: boolean;
+  filters?: Record<string, any>;
+}
+
+export interface VectorSearchResult {
+  id: string;
+  score: number;                 // distance (RediSearch/COSINE) or similarity (manual fallback)
+  vector?: number[];
+  metadata?: Record<string, any>;
+}
+
+export interface CachePolicy {
+  ttl: number;
+  maxSize?: number;
+  compressionThreshold?: number;
+  evictionPolicy?: 'lru' | 'lfu' | 'ttl';
+  warmingStrategy?: 'lazy' | 'eager' | 'predictive';
+}
+
+export interface QueueStats {
+  length: number;
+  processingCount: number;
+  errorCount: number;
+  lastProcessedAt?: Date;
+}
+
+// ================================
+// ENHANCED REDIS MANAGER
+// ================================
+
+export class EnhancedDinaRedisManager extends EventEmitter {
+  // Core Redis connections
   private client: RedisClientType;
   private publisher: RedisClientType;
   private subscriber: RedisClientType;
+  private vectorClient: RedisClientType; // Dedicated for vector operations
 
-  // State
-  public isConnected = false; // compatibility flag
+  // Cluster support
+  private cluster?: RedisClusterType;
+  private isClusterMode: boolean = false;
+
+  // Connection state
   private connectionState: RedisConnectionState = RedisConnectionState.DISCONNECTED;
+  public isConnected = false;
+  // <-- exposed mutable boolean (used widely in your code)
   private initializing = false;
+  // Performance optimization (present but not used yet)
+  private connectionPool: RedisClientType[] = [];
+  private poolSize = 10;
+  private roundRobinIndex = 0;
 
-  // Reconnect / failure accounting
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
-  private consecutiveFailures = 0;
-  private lastError: Error | null = null;
-
-  // Circuit breaker
-  private circuitBreakerOpen = false;
-  private circuitBreakerOpenTime = 0;
-  private circuitBreakerThreshold = 5;
-  private circuitBreakerTimeoutMs = 60_000;
-
-  // Message buffer
+  // Intelligent caching
+  private cacheMetrics: CacheMetrics = {
+    hits: 0, misses: 0, evictions: 0, memoryUsage: 0,
+    operationsPerSecond: 0, averageResponseTime: 0
+  };
+  // Vector database capabilities
+  private vectorIndexes: Set<string> = new Set();
+  private redisSearchAvailable = false;
+  // Message buffering
   private messageBuffer: DinaUniversalMessage[] = [];
-  private maxBufferSize = 1000;
-
-  // Monitoring
+  private maxBufferSize = 10000;
+  // Pub/Sub response handlers
   private responseHandlers: Map<string, (response: DinaResponse) => void> = new Map();
-  private queueMonitoringInterval: NodeJS.Timeout | null = null;
-  private healthCheckInterval: NodeJS.Timeout | null = null;
-  private reconnectTimeout: NodeJS.Timeout | null = null;
-  private queuesInitialized = false;
+  private subscriptionChannels: Map<string, string> = new Map(); // connectionId -> channel
+
+  // Configuration
+  private readonly config = {
+    // Connection settings
+    maxRetries: 5,
+    retryDelay: 1000,
+    commandTimeout: 30000,
+
+    // Compression settings
+    compressionThreshold: 1024, // bytes
+    compressionLevel: 6,
+
+    // Cache policies
+    defaultTTL: 3600,
+    embeddingTTL: 86400,
+    contextTTL: 7200,
+
+    // Performance settings
+    batchSize: 100,
+    pipelineThreshold: 10,
+
+    // Vector Settings
+    defaultVectorDimensions: 1024,
+    vectorSearchTimeout: 5000
+  };
 
   constructor() {
-    this.client = this.createMainClient();
-    this.publisher = this.client.duplicate();
-    this.subscriber = this.client.duplicate();
-    this.setupErrorHandling();
+    super();
+    console.log('🚀 Initializing Enhanced DINA Redis Manager with Vector Database capabilities...');
+    // Initialize Redis clients with enhanced configuration
+    this.client = this.createEnhancedClient('main');
+    this.publisher = this.createEnhancedClient('publisher');
+    this.subscriber = this.createEnhancedClient('subscriber');
+    this.vectorClient = this.createEnhancedClient('vector');
+
+    this.setupEventHandlers();
+    this.initializeConnectionPool();
+    this.startPerformanceMonitoring();
   }
 
-  // ----------------------------------------------------------------------------
-  // Client creation & error handling
-  // ----------------------------------------------------------------------------
-  private createMainClient(): RedisClientType {
+  // ================================
+  // ENHANCED CONNECTION MANAGEMENT
+  // ================================
+
+  private createEnhancedClient(clientType: string): RedisClientType {
+    const url = process.env.REDIS_URL || 'redis://localhost:6379';
+
     return createClient({
-      url: process.env.REDIS_URL || 'redis://localhost:6379',
+      url,
+      // NOTE: `lazyConnect` property has been removed as it is not a valid option
+      // in the type definition provided by your compiler. You may need to
+      // update your `redis` library if you require this functionality.
       socket: {
+        connectTimeout: 10000,
         reconnectStrategy: (retries) => {
-          if (retries > this.maxReconnectAttempts) return false;
-          return Math.min(retries * 1000, 15000);
-        },
-        connectTimeout: 8000,
+          if (retries > this.config.maxRetries) {
+            this.emit('connectionFailed', { clientType, retries });
+            return false;
+          }
+          const delay = Math.min(retries * this.config.retryDelay, 30000);
+          this.emit('reconnectAttempt', { clientType, retries, delay });
+          return delay;
+        }
       },
+      commandsQueueMaxLength: 10000
     });
   }
 
-  private setupErrorHandling(): void {
-    [this.client, this.publisher, this.subscriber].forEach((c, i) => {
-      const clientName = ['main', 'publisher', 'subscriber'][i];
-
-      c.on('error', (error: Error) => {
-        console.error(`❌ Redis ${clientName} error:`, error.message);
-        this.handleConnectionFailure(error);
+  private setupEventHandlers(): void {
+    const clients = [
+      { client: this.client, name: 'main' },
+      { client: this.publisher, name: 'publisher' },
+      { client: this.subscriber, name: 'subscriber' },
+      { client: this.vectorClient, name: 'vector' }
+    ];
+    clients.forEach(({ client, name }) => {
+      client.on('error', (error) => {
+        const msg = (error as any)?.message ?? String(error);
+        console.error(`❌ Redis ${name} error:`, msg);
+        this.handleConnectionError(name, error as Error);
       });
 
-      c.on('connect', () => {
-        console.log(`🔗 Redis ${clientName} connecting...`);
+      client.on('connect', () => {
+        console.log(`🔗 Redis ${name} connecting...`);
         this.setConnectionState(RedisConnectionState.CONNECTING);
       });
 
-      c.on('ready', () => {
-        console.log(`✅ Redis ${clientName} ready`);
-        if (clientName === 'main') {
-          this.handleConnectionSuccess();
-        }
+      client.on('ready', () => {
+        console.log(`✅ Redis ${name} ready`);
+        this.handleConnectionReady(name);
       });
 
-      c.on('end', () => {
-        console.log(`🔌 Redis ${clientName} connection ended`);
-        this.handleConnectionFailure(new Error('Connection ended'));
+      client.on('end', () => {
+        console.log(`🔌 Redis ${name} connection ended`);
+        this.handleConnectionEnd(name);
       });
 
-      // node-redis v4: no 'reconnecting' event
+      (client as any).on?.('reconnecting', () => {
+        console.log(`🔄 Redis ${name} reconnecting...`);
+        this.setConnectionState(RedisConnectionState.RECONNECTING);
+      });
+   
     });
   }
 
-  private setConnectionState(state: RedisConnectionState): void {
-    const prev = this.connectionState;
-    this.connectionState = state;
-    if (prev !== state) console.log(`🔄 Redis state: ${prev} → ${state}`);
-  }
-
-  private handleConnectionSuccess(): void {
-    this.isConnected = true;
-    this.setConnectionState(RedisConnectionState.CONNECTED);
-    this.reconnectAttempts = 0;
-    this.consecutiveFailures = 0;
-    this.lastError = null;
-    this.circuitBreakerOpen = false;
-
-    console.log('✅ Redis connected - processing buffered messages');
-    void this.processMessageBuffer();
-
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
+  private async initializeConnectionPool(): Promise<void> {
+    console.log(`🏊 Initializing connection pool with ${this.poolSize} connections...`);
+    for (let i = 0; i < this.poolSize; i++) {
+      const poolClient = this.createEnhancedClient(`pool-${i}`);
+      this.connectionPool.push(poolClient);
     }
   }
 
-  private handleConnectionFailure(error: Error): void {
-    this.isConnected = false;
-    this.lastError = error;
-    this.consecutiveFailures++;
+  private getPoolConnection(): RedisClientType {
+    const client = this.connectionPool[this.roundRobinIndex];
+    this.roundRobinIndex = (this.roundRobinIndex + 1) % this.poolSize;
+    return client;
+  }
 
-    if (this.consecutiveFailures >= this.circuitBreakerThreshold) {
-      this.openCircuitBreaker();
-      return;
+  private handleConnectionError(clientName: string, error: Error): void {
+    this.emit('connectionError', { clientName, error });
+    if (clientName === 'main') {
+      this.isConnected = false;
+      this.setConnectionState(RedisConnectionState.FAILED);
     }
+    this.scheduleReconnection(clientName);
+  }
 
-    this.setConnectionState(RedisConnectionState.FAILED);
-
-    if (!this.reconnectTimeout && this.reconnectAttempts < this.maxReconnectAttempts) {
-      this.scheduleReconnect();
+  private handleConnectionReady(clientName: string): void {
+    if (clientName === 'main') {
+      this.isConnected = true;
+      this.setConnectionState(RedisConnectionState.CONNECTED);
+      this.emit('connected');
+      this.processMessageBuffer();
     }
   }
 
-  private openCircuitBreaker(): void {
-    this.circuitBreakerOpen = true;
-    this.circuitBreakerOpenTime = Date.now();
-    this.setConnectionState(RedisConnectionState.CIRCUIT_OPEN);
-    console.log(`🚨 Circuit breaker opened after ${this.consecutiveFailures} failures`);
-    setTimeout(() => this.resetCircuitBreaker(), this.circuitBreakerTimeoutMs);
+  private handleConnectionEnd(clientName: string): void {
+    if (clientName === 'main') {
+      this.isConnected = false;
+      this.setConnectionState(RedisConnectionState.DISCONNECTED);
+      this.emit('disconnected');
+    }
   }
 
-  private resetCircuitBreaker(): void {
-    this.circuitBreakerOpen = false;
-    this.consecutiveFailures = 0;
-    console.log('🔄 Circuit breaker reset, attempting reconnection');
-    this.scheduleReconnect();
-  }
-
-  private scheduleReconnect(): void {
-    if (this.reconnectTimeout || this.circuitBreakerOpen || this.initializing) return;
-
-    this.reconnectAttempts++;
-    const delay = Math.min(this.reconnectAttempts * 3000, 30000);
-    console.log(`🔄 Redis reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
-
-    this.reconnectTimeout = setTimeout(async () => {
-      this.reconnectTimeout = null;
+  private scheduleReconnection(clientName: string): void {
+    setTimeout(async () => {
       try {
-        await this.reconnectFresh();
+        console.log(`🔄 Attempting to reconnect ${clientName}...`);
+        await this.reconnectClient(clientName);
       } catch (error) {
-        console.log(`❌ Reconnection attempt ${this.reconnectAttempts} failed: ${(error as Error)?.message}`);
+        console.error(`❌ Reconnection failed for ${clientName}:`, error);
       }
-    }, delay);
+    }, this.config.retryDelay);
   }
 
-  private pauseMonitors(): void {
-    if (this.queueMonitoringInterval) {
-      clearInterval(this.queueMonitoringInterval);
-      this.queueMonitoringInterval = null;
-    }
-    if (this.healthCheckInterval) {
-      clearInterval(this.healthCheckInterval);
-      this.healthCheckInterval = null;
-    }
-  }
-
-  private async reconnectFresh(): Promise<void> {
-    // Pause monitors so ping doesn't fire while clients are closed
-    this.pauseMonitors();
-
-    this.setConnectionState(RedisConnectionState.RECONNECTING);
+  private async reconnectClient(clientName: string): Promise<void> {
     try {
-      await Promise.allSettled([this.client.quit(), this.publisher.quit(), this.subscriber.quit()]);
-    } catch {
-      /* ignore */
+      switch (clientName) {
+        case 'main': await this.client.connect();
+          break;
+        case 'publisher': await this.publisher.connect(); break;
+        case 'subscriber': await this.subscriber.connect(); break;
+        case 'vector': await this.vectorClient.connect(); break;
+      }
+    } catch (error) {
+      console.error(`❌ Failed to reconnect ${clientName}:`, error);
+      throw error;
     }
-
-    // Recreate clients and rewire events
-    this.client = this.createMainClient();
-    this.publisher = this.client.duplicate();
-    this.subscriber = this.client.duplicate();
-    this.setupErrorHandling();
-
-    await this.initialize();
   }
 
-  // ----------------------------------------------------------------------------
-  // Initialization
-  // ----------------------------------------------------------------------------
+  // ================================
+  // INITIALIZATION & LIFECYCLE
+  // ================================
+
   async initialize(): Promise<void> {
     if (this.initializing) return;
     this.initializing = true;
 
-    console.log('📬 Initializing Redis with enhanced connection management...');
-
+    console.log('🚀 Initializing Enhanced Redis with Vector Database capabilities...');
     try {
-      if (this.circuitBreakerOpen) {
-        const elapsed = Date.now() - this.circuitBreakerOpenTime;
-        if (elapsed < this.circuitBreakerTimeoutMs) {
-          throw new Error('Circuit breaker is open - Redis operations disabled');
-        } else {
-          this.resetCircuitBreaker();
+      await Promise.all([
+        this.client.connect(),
+        this.publisher.connect(),
+        this.subscriber.connect(),
+        this.vectorClient.connect()
+      ]);
+      await Promise.all(this.connectionPool.map(client => client.connect()));
+
+      await this.initializeVectorDatabase();
+
+      await this.setupEnhancedQueues();
+      await this.createSearchIndexes();
+
+      this.startPerformanceMonitoring();
+
+      this.setConnectionState(RedisConnectionState.CONNECTED);
+      this.isConnected = true;
+      this.initializing = false;
+      console.log('✅ Enhanced Redis Manager initialized successfully');
+      this.emit('initialized');
+    } catch (error) {
+      console.error('❌ Failed to initialize Enhanced Redis Manager:', error);
+      this.initializing = false;
+      throw error;
+    }
+  }
+
+  private async initializeVectorDatabase(): Promise<void> {
+    console.log('🧠 Initializing vector database capabilities...');
+    try {
+      this.redisSearchAvailable = false;
+      try {
+        const modules = await this.client.sendCommand(['MODULE', 'LIST']);
+        this.redisSearchAvailable = this.checkRedisSearchAvailable(modules);
+      } catch {
+        this.redisSearchAvailable = false;
+      }
+
+      if (!this.redisSearchAvailable) {
+        console.warn('⚠️ RediSearch module not available - using manual vector search fallback');
+      } else {
+        console.log('✅ RediSearch detected');
+      }
+
+      await this.createVectorIndexes();
+
+      console.log('✅ Vector database initialized');
+    } catch (error) {
+      console.error('❌ Failed to initialize vector database:', error);
+      this.redisSearchAvailable = false;
+    }
+  }
+
+  private checkRedisSearchAvailable(modules: any): boolean {
+    try {
+      if (Array.isArray(modules)) {
+        return modules.some(m =>
+          (typeof m === 'string' && m.toLowerCase().includes('search')) ||
+          (Array.isArray(m) && m.some(x => typeof x === 'string' && x.toLowerCase().includes('search')))
+        );
+      }
+      if (typeof modules === 'string') return modules.toLowerCase().includes('search');
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  // ================================
+  // VECTOR SERIALIZATION (Float32)
+  // ================================
+
+  private serializeVector(vector: number[]): Buffer {
+    const buf = Buffer.allocUnsafe(vector.length * 4);
+    for (let i = 0; i < vector.length; i++) buf.writeFloatLE(vector[i], i * 4);
+    return buf;
+  }
+
+  private deserializeVector(buffer: Buffer): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < buffer.length; i += 4) out.push(buffer.readFloatLE(i));
+    return out;
+  }
+
+  private async hgetBuffer(key: string, field: string): Promise<Buffer | null> {
+    const res = await (this.vectorClient as any)
+      .commandOptions({ returnBuffers: true })
+      .sendCommand(['HGET', key, field]);
+    return res ?? null;
+  }
+
+  // ================================
+  // VECTOR DATABASE OPERATIONS
+  // ================================
+
+  async storeEmbedding(embedding: VectorEmbedding): Promise<void> {
+    try {
+      if (embedding.vector.length !== this.config.defaultVectorDimensions) {
+        throw new Error(
+          `Vector dim ${embedding.vector.length} != index DIM ${this.config.defaultVectorDimensions}`
+        );
+      }
+
+      const key = `embedding:${embedding.id}`;
+      const vectorBuffer = this.serializeVector(embedding.vector);
+      await this.vectorClient.hSet(key, {
+        vector_data: vectorBuffer as any,
+        metadata: JSON.stringify(embedding.metadata),
+        timestamp: embedding.timestamp.toString(),
+        model: embedding.model,
+        dimensions: embedding.dimensions.toString(),
+        magnitude: (embedding.magnitude || 0).toString()
+      });
+      if (this.redisSearchAvailable) {
+        await this.addToVectorIndex(embedding);
+      }
+
+      this.cacheMetrics.hits++;
+      console.log(`📦 Stored embedding ${embedding.id} with ${embedding.dimensions} dimensions`);
+    } catch (error) {
+      console.error('❌ Failed to store embedding:', error);
+      throw error;
+    }
+  }
+
+  async getEmbedding(id: string): Promise<VectorEmbedding | null> {
+    try {
+      const key = `embedding:${id}`;
+      const data = await this.vectorClient.hGetAll(key);
+
+      if (!data || !('vector_data' in data)) {
+        this.cacheMetrics.misses++;
+        return null;
+      }
+
+      const dim = parseInt(data.dimensions || '0', 10);
+      const vectorBuf = await this.hgetBuffer(key, 'vector_data');
+      if (!vectorBuf || !dim) {
+        this.cacheMetrics.misses++;
+        return null;
+      }
+
+      const vector = this.deserializeVector(vectorBuf);
+      this.cacheMetrics.hits++;
+      return {
+        id,
+        vector,
+        metadata: this.safeParseJSON(data.metadata || '{}'),
+        timestamp: parseInt(data.timestamp || '0', 10),
+        model: data.model || 'unknown',
+        dimensions: dim,
+        magnitude: parseFloat(data.magnitude || '0')
+      };
+    } catch (error) {
+      console.error('❌ Failed to get embedding:', error);
+      this.cacheMetrics.misses++;
+      return null;
+    }
+  }
+
+  async searchSimilarEmbeddings(
+    queryVector: number[],
+    options: VectorSearchOptions = {}
+  ): Promise<VectorSearchResult[]> {
+    try {
+      if (this.redisSearchAvailable && this.vectorIndexes.has('embeddings')) {
+        return await this.redisSearchVectorQuery(queryVector, options);
+      }
+      return await this.manualVectorSearch(queryVector, options);
+    } catch (error) {
+      console.error('❌ Failed to search similar embeddings:', error);
+      return [];
+    }
+  }
+
+  private async redisSearchVectorQuery(
+    queryVector: number[],
+    options: VectorSearchOptions
+  ): Promise<VectorSearchResult[]> {
+    const { topK = 10, includeMetadata = true } = options;
+    const queryBuffer = this.serializeVector(queryVector);
+
+    const cmd: (string | Buffer | number)[] = [
+      'FT.SEARCH', 'embeddings',
+      `*=>[KNN ${topK} @vector_data $vec AS score]`,
+      'PARAMS', '2', 'vec', queryBuffer,
+      'SORTBY', 'score',
+      'RETURN', includeMetadata ? '2' : '1',
+      ...(includeMetadata ? ['metadata', 'score'] : ['score']),
+      'DIALECT', '2'
+    ];
+    const res = await (this.vectorClient as any)
+      .commandOptions({ returnBuffers: true })
+      .sendCommand(cmd);
+    return this.processRedisSearchResults(res, options);
+  }
+
+  private processRedisSearchResults(results: any, options: VectorSearchOptions): VectorSearchResult[] {
+    if (!Array.isArray(results) || results.length < 2) return [];
+    const out: VectorSearchResult[] = [];
+    for (let i = 1; i < results.length; i += 2) {
+      const keyBuf = results[i] as Buffer;
+      const fields = results[i + 1] as Buffer[];
+
+      const id = keyBuf.toString().replace('embedding:', '');
+      const entry: VectorSearchResult = { id, score: 0 };
+
+      for (let j = 0; j < fields.length; j += 2) {
+        const fname = fields[j].toString();
+        const fval = fields[j + 1];
+
+        if (fname === 'score') {
+          entry.score = parseFloat(fval.toString());
+        } else if (fname === 'metadata' && options.includeMetadata) {
+          entry.metadata = this.safeParseJSON(fval.toString());
         }
       }
+      out.push(entry);
+    }
 
-      this.setConnectionState(RedisConnectionState.CONNECTING);
+    return out;
+  }
 
-      const initPromise = Promise.all([this.client.connect(), this.publisher.connect(), this.subscriber.connect()]);
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Redis initialization timeout')), 10_000),
-      );
+  private async manualVectorSearch(
+    queryVector: number[],
+    options: VectorSearchOptions
+  ): Promise<VectorSearchResult[]> {
+    const { topK = 10, threshold = 0.7, includeMetadata = true } = options;
+    const results: VectorSearchResult[] = [];
 
-      await Promise.race([initPromise, timeoutPromise]);
+    try {
+      const keys = await this.vectorClient.keys('embedding:*');
+      const batchSize = 50;
+      for (let i = 0; i < keys.length; i += batchSize) {
+        const batch = keys.slice(i, i + batchSize);
+        const batchResults = await Promise.all(
+          batch.map(async (key) => {
+            const embeddingId = key.substring('embedding:'.length);
+            const embedding = await this.getEmbedding(embeddingId);
+            if (!embedding || embedding.vector.length !== queryVector.length) return null;
 
-      await this.setupQueues(); // guarded, clears once in dev
-      this.startQueueMonitoring();
-      this.startHealthCheck();
+            const similarity = this.cosineSimilarity(queryVector, embedding.vector);
+            if (similarity >= threshold) {
+ 
+              return {
+                id: embedding.id,
+                score: similarity, // similarity in fallback
+                vector: includeMetadata ? embedding.vector : undefined,
+                metadata: includeMetadata ? embedding.metadata : undefined
+      
+              };
+            }
+            return null;
+          })
+        );
+        results.push(...(batchResults.filter(Boolean) as VectorSearchResult[]));
+      }
 
-      // No global 'message' listener; v4 uses per-subscription callbacks
-
-      this.handleConnectionSuccess();
+      return results.sort((a, b) => b.score - a.score).slice(0, topK);
     } catch (error) {
-      console.error('❌ Redis initialization failed:', error);
-      this.handleConnectionFailure(error as Error);
-      throw error;
-    } finally {
-      this.initializing = false;
+      console.error('❌ Manual vector search failed:', error);
+      return [];
     }
   }
 
-  // ----------------------------------------------------------------------------
-  // Message buffer (graceful degradation)
-  // ----------------------------------------------------------------------------
-  private bufferMessage(message: DinaUniversalMessage): void {
-    if (this.messageBuffer.length >= this.maxBufferSize) {
-      this.messageBuffer.shift();
-      console.warn('⚠️ Message buffer full, dropped oldest message');
+  private cosineSimilarity(a: number[], b: number[]): number {
+    if (a.length !== b.length) return 0;
+    let dot = 0, na = 0, nb = 0;
+    for (let i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+      na += a[i] * a[i]; nb += b[i] * b[i];
     }
-    this.messageBuffer.push(message);
-    console.log(`📦 Buffered message ${message.id} (${this.messageBuffer.length}/${this.maxBufferSize})`);
+    const denom = Math.sqrt(na) * Math.sqrt(nb);
+    return denom === 0 ? 0 : (dot / denom);
   }
 
-  private async processMessageBuffer(): Promise<void> {
-    if (this.messageBuffer.length === 0) return;
-
-    console.log(`🔄 Processing ${this.messageBuffer.length} buffered messages`);
-    const messages = [...this.messageBuffer];
-    this.messageBuffer = [];
-
-    for (const m of messages) {
-      try {
-        await this.enqueueMessage(m);
-      } catch (error) {
-        console.error('❌ Failed to process buffered message:', error);
-        this.bufferMessage(m); // re-buffer if still failing
-      }
-    }
-  }
-
-  // ----------------------------------------------------------------------------
-  // Queue operations
-  // ----------------------------------------------------------------------------
-  private async setupQueues(): Promise<void> {
-    console.log('🗂️ Setting up message queues...');
-    if (!this.queuesInitialized) {
-      if (process.env.NODE_ENV !== 'production') {
-        await this.client.del([QUEUE_NAMES.HIGH, QUEUE_NAMES.MEDIUM, QUEUE_NAMES.LOW, QUEUE_NAMES.BATCH]);
-        console.log('🗑️ Cleared dev queues once at init.');
-      }
-      this.queuesInitialized = true;
-    }
-    console.log('✅ Message queues ready');
-  }
-
-  private startQueueMonitoring(): void {
-    if (this.queueMonitoringInterval) clearInterval(this.queueMonitoringInterval);
-
-    this.queueMonitoringInterval = setInterval(async () => {
-      if (!this.isConnected) return;
-      try {
-        const stats = await this.getQueueStats();
-        const high = stats[QUEUE_NAMES.HIGH] || 0;
-        const medium = stats[QUEUE_NAMES.MEDIUM] || 0;
-        const low = stats[QUEUE_NAMES.LOW] || 0;
-        const batch = stats[QUEUE_NAMES.BATCH] || 0;
-        const total = high + medium + low + batch;
-        console.log(`📊 Queue Stats: High: ${high}, Medium: ${medium}, Low: ${low}, Batch: ${batch} (Total: ${total})`);
-      } catch (error) {
-        console.error('❌ Error getting queue stats during monitoring:', error);
-      }
-    }, 15_000);
-  }
-
-  private getQueueName(message: DinaUniversalMessage): string {
-    const priority = (message as any)?.target?.priority ?? 0;
-    if (priority >= 8) return QUEUE_NAMES.HIGH;
-    if (priority >= 5) return QUEUE_NAMES.MEDIUM;
-    if (priority >= 3) return QUEUE_NAMES.LOW;
-    return QUEUE_NAMES.BATCH;
-  }
-
-  async enqueueMessage(message: DinaUniversalMessage): Promise<void> {
-    if (this.circuitBreakerOpen) {
-      this.bufferMessage(message);
-      return;
-    }
-    if (!this.isConnected) {
-      console.warn('⚠️ Redis not connected, buffering message for queue');
-      this.bufferMessage(message);
+  private async createVectorIndexes(): Promise<void> {
+    if (!this.redisSearchAvailable) {
+      console.log('ℹ️ Skipping vector index creation - RediSearch not available');
       return;
     }
 
     try {
-      const queueName = this.getQueueName(message);
-      const queuedMessage: DinaUniversalMessage & { queued_at?: number } = { ...message, queued_at: Date.now() };
+      const indexName = 'embeddings';
+      try {
+        await this.vectorClient.sendCommand([
+          'FT.CREATE', indexName,
+          'ON', 'HASH',
+          'PREFIX', '1', 'embedding:',
+          'SCHEMA',
+          'vector_data', 'VECTOR', 'FLAT', '6',
+          'TYPE', 'FLOAT32',
+          'DIM', this.config.defaultVectorDimensions.toString(),
+          'DISTANCE_METRIC', 'COSINE',
+          'metadata', 'TEXT',
+          'model', 'TAG'
+        ]);
+        this.vectorIndexes.add(indexName);
+        console.log(`✅ Created vector index: ${indexName}`);
+      } catch (error: any) {
+        const msg = String(error?.message || '').toLowerCase();
+        if (msg.includes('index already exists')) {
+          this.vectorIndexes.add(indexName);
+          console.log(`ℹ️ Vector index already exists: ${indexName}`);
+        } else if (msg.includes('unknown command') || msg.includes('module')) {
+          console.warn('⚠️ RediSearch unavailable; using manual vector search.');
+        } else {
+          console.warn('⚠️ Could not create vector index:', error?.message ?? error);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Failed to create vector indexes:', error);
+    }
+  }
 
-      await Promise.race([
-        this.client.lPush(queueName, JSON.stringify(queuedMessage)),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Enqueue timeout')), 5000)),
-      ]);
+  private async addToVectorIndex(_embedding: VectorEmbedding): Promise<void> {
+    try {
+      const key = `embedding:${_embedding.id}`;
+      await this.vectorClient.hSet(key, 'indexed', 'true');
+    } catch (error) {
+      console.error('❌ Failed to mark indexed flag:', error);
+    }
+  }
 
-      console.log(`📨 Message queued: ${message.id} → ${queueName}`);
+  // ================================
+  // INTELLIGENT CACHING SYSTEM
+  // ================================
+
+  async smartCache<T>(
+    key: string,
+    fetchFunction: () => Promise<T>,
+    policy: CachePolicy = { ttl: this.config.defaultTTL }
+  ): Promise<T> {
+    const cached = await this.getFromSmartCache<T>(key);
+    if (cached !== null) {
+      this.cacheMetrics.hits++;
+      return cached;
+    }
+    this.cacheMetrics.misses++;
+    const data = await fetchFunction();
+    await this.setInSmartCache(key, data, policy);
+    return data;
+  }
+
+  private async getFromSmartCache<T>(key: string): Promise<T | null> {
+    try {
+      const data = await this.client.get(key);
+      if (!data) return null;
+
+      if (data.startsWith('gzip:')) {
+        const compressed = Buffer.from(data.slice(5), 'base64');
+        const decompressed = await gunzipAsync(compressed);
+        return JSON.parse(decompressed.toString());
+      }
+      return JSON.parse(data);
+    } catch (error) {
+      console.error('❌ Failed to get from smart cache:', error);
+      return null;
+    }
+  }
+
+  private async setInSmartCache<T>(
+    key: string,
+    data: T,
+    policy: CachePolicy
+  ): Promise<void> {
+    try {
+      let serialized = JSON.stringify(data);
+      if (serialized.length > (policy.compressionThreshold || this.config.compressionThreshold)) {
+        const compressed = await gzipAsync(serialized);
+        serialized = 'gzip:' + compressed.toString('base64');
+      }
+      await this.client.setEx(key, policy.ttl, serialized);
+    } catch (error) {
+      console.error('❌ Failed to set in smart cache:', error);
+    }
+  }
+
+  // ================================
+  // LLM-SPECIFIC OPTIMIZATIONS
+  // ================================
+
+  async cacheEmbedding(embeddingId: string, vector: number[], metadata: any = {}): Promise<void> {
+    const embedding: VectorEmbedding = {
+      id: embeddingId,
+      vector,
+      metadata,
+      timestamp: Date.now(),
+      model: metadata.model || 'default',
+      dimensions: vector.length,
+      magnitude: Math.sqrt(vector.reduce((sum, val) => sum + val * val, 0))
+    };
+    await this.storeEmbedding(embedding);
+  }
+
+  async getCachedEmbedding(embeddingId: string): Promise<number[] | null> {
+    const embedding = await this.getEmbedding(embeddingId);
+    return embedding ? embedding.vector : null;
+  }
+
+  async cacheContextWindow(
+    userId: string,
+    conversationId: string,
+    context: any
+  ): Promise<void> {
+    const key = `context:${userId}:${conversationId}`;
+    await this.smartCache(key, async () => context, { ttl: this.config.contextTTL });
+  }
+
+  async getCachedContext(userId: string, conversationId: string): Promise<any | null> {
+    const key = `context:${userId}:${conversationId}`;
+    return await this.getFromSmartCache(key);
+  }
+
+  async cacheModelResponse(
+    queryHash: string,
+    model: string,
+    response: any,
+    ttl: number = this.config.defaultTTL
+  ): Promise<void> {
+    const key = `model_response:${model}:${queryHash}`;
+    await this.smartCache(key, async () => response, { ttl });
+  }
+
+  async getCachedModelResponse(queryHash: string, model: string): Promise<any | null> {
+    const key = `model_response:${model}:${queryHash}`;
+    return await this.getFromSmartCache(key);
+  }
+
+  // ================================
+  // LEGACY / PROJECT INTEGRATION APIS
+  // ================================
+
+  // Older callers expect these to work with a single argument (we default the queue).
+  async enqueueMessage(message: DinaUniversalMessage, queueName?: string): Promise<void> {
+    if (!this.isConnected) {
+      this.bufferMessage(message);
+      return;
+    }
+    try {
+      const q = queueName || this.defaultQueueFor(message);
+      const serialized = JSON.stringify(message);
+      await this.client.lPush(q, serialized);
+      console.log(`📤 Enqueued message ${message.id} to ${q}`);
     } catch (error) {
       console.error('❌ Failed to enqueue message:', error);
-      if ((message as any)?.target?.priority < 8) {
-        this.bufferMessage(message);
-      } else {
-        throw error; // critical messages fail fast
-      }
+      this.bufferMessage(message);
     }
   }
 
-  async dequeueMessage(queueName: string, timeoutSeconds = 1): Promise<DinaUniversalMessage | null> {
-    if (!this.isConnected) {
-      // Quietly indicate no work available instead of throwing
-      return null;
-    }
-
-    try {
-      const result = await Promise.race([
-        this.client.brPop(queueName, timeoutSeconds),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Dequeue timeout')), (timeoutSeconds + 1) * 1000),
-        ),
-      ]);
-
-      if (result) {
-        const message: DinaUniversalMessage = JSON.parse(result.element);
-        console.log(`📬 Message dequeued: ${message.id} from ${queueName}`);
-        return message;
-      }
-      return null;
-    } catch (error) {
-      if (error instanceof Error && error.message === 'Dequeue timeout') {
-        return null; // benign idle timeout
-      }
-      console.error('❌ Failed to dequeue message:', error);
-      this.handleConnectionFailure(error as Error);
-      throw error;
-    }
-  }
-
-  // Alias for compatibility
-  async retrieveMessage(queueName: string): Promise<DinaUniversalMessage | null> {
-    return this.dequeueMessage(queueName, 1);
-  }
-
-  async getQueueStats(): Promise<{ [key: string]: number }> {
-    if (!this.isConnected) {
-      return {
-        [QUEUE_NAMES.HIGH]: 0,
-        [QUEUE_NAMES.MEDIUM]: 0,
-        [QUEUE_NAMES.LOW]: 0,
-        [QUEUE_NAMES.BATCH]: 0,
-      };
-    }
-    try {
-      const stats: { [key: string]: number } = {};
-      for (const q of Object.values(QUEUE_NAMES)) {
-        const count = await this.client.lLen(q);
-        stats[q] = count || 0;
-      }
-      return stats;
-    } catch (error) {
-      console.error('❌ Error getting queue stats:', error);
-      this.handleConnectionFailure(error as Error);
-      return {
-        [QUEUE_NAMES.HIGH]: 0,
-        [QUEUE_NAMES.MEDIUM]: 0,
-        [QUEUE_NAMES.LOW]: 0,
-        [QUEUE_NAMES.BATCH]: 0,
-      };
-    }
-  }
-
-  // ----------------------------------------------------------------------------
-  // Cache operations (timeouts are cache misses; no state flip)
-  // ----------------------------------------------------------------------------
-  async get(key: string): Promise<string | null> {
+  // Support BRPOP when timeoutSeconds provided (e.g., 0.1)
+  async dequeueMessage<T = DinaUniversalMessage>(queueName: string, timeoutSeconds?: number): Promise<T | null> {
     if (!this.isConnected) return null;
     try {
-      return await Promise.race([
-        this.client.get(key),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Get timeout')), 3000)),
-      ]);
+      if (timeoutSeconds !== undefined) {
+        const result = await this.client.brPop(queueName, Math.max(0, Math.ceil(timeoutSeconds)));
+        if (!result) return null;
+        return JSON.parse(result.element) as T;
+      } else {
+        const payload = await this.client.rPop(queueName);
+        // FIFO (LPUSH + RPOP)
+        if (!payload) return null;
+        return JSON.parse(payload) as T;
+      }
     } catch (error) {
-      console.warn(`⚠️ Redis get timeout for ${key}`);
-      return null; // treat as cache miss, do NOT handleConnectionFailure
+      console.error(`❌ Failed to dequeue from ${queueName}:`, error);
+      return null;
     }
   }
 
-  async setex(key: string, seconds: number, value: string): Promise<void> {
-    if (!this.isConnected) return;
+  // Alias used by orchestrator
+  async retrieveMessage<T = DinaUniversalMessage>(queueName: string, timeoutSeconds?: number): Promise<T | null> {
+    return this.dequeueMessage<T>(queueName, timeoutSeconds);
+  }
+
+  // Publish a model response to a per-instance channel
+  async publishResponse(instance: string, response: DinaResponse): Promise<void> {
     try {
-      await Promise.race([
-        this.client.setEx(key, seconds, value),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Setex timeout')), 2000)),
-      ]);
-    } catch {
-      console.warn(`⚠️ Redis setex timeout for ${key}`); // no state flip
+      const channel = `response:${instance}`;
+      await this.publisher.publish(channel, JSON.stringify(response));
+    } catch (error) {
+      console.error('❌ Failed to publish response:', error);
     }
   }
 
+  // Subscribe/unsubscribe helpers used by WSS
+  async subscribeToResponses(connectionId: string, handler: (response: DinaResponse) => void): Promise<void> {
+    const channel = `response:${connectionId}`;
+    if (this.subscriptionChannels.has(connectionId)) return; // already subscribed
+    await this.subscriber.subscribe(channel, (payload) => {
+      try {
+        const parsed = JSON.parse(payload) as DinaResponse;
+        handler(parsed);
+      } catch (e) {
+        console.error('❌ Failed to parse response payload:', e);
+      }
+    });
+    this.subscriptionChannels.set(connectionId, channel);
+  }
+
+  async unsubscribeFromResponses(connectionId: string): Promise<void> {
+    const channel = this.subscriptionChannels.get(connectionId);
+    if (!channel) return;
+    await this.subscriber.unsubscribe(channel);
+    this.subscriptionChannels.delete(connectionId);
+  }
+
+  // Exact cache helpers
   async getExactCachedResponse(key: string): Promise<any | null> {
     if (!this.isConnected) return null;
-
     try {
       const serialized = await Promise.race([
         this.client.get(`cache:${key}`),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Redis get timeout')), 2000)),
       ]);
-
-      if (serialized) return JSON.parse(serialized);
-      return null;
+      return serialized ? JSON.parse(serialized) : null;
     } catch {
       console.warn(`⚠️ Redis cache get timeout for key: ${key.substring(0, 50)}...`);
-      return null; // no state flip
+      return null;
     }
   }
 
@@ -466,185 +827,232 @@ export class DinaRedisManager {
     }
   }
 
-  async clearCache(): Promise<void> {
-    if (!this.isConnected) return;
-    try {
-      const keys = await this.client.keys('cache:*');
-      if (keys.length > 0) {
-        await this.client.del(keys); // pass array (v4 typing safe)
-        console.log(`🗑️ Cleared ${keys.length} cache entries.`);
-      } else {
-        console.log('🗑️ No cache entries to clear.');
-      }
-    } catch (error) {
-      console.error('❌ Failed to clear Redis cache:', error);
-    }
-  }
-
   async clearAllExactCache(): Promise<void> {
-    if (!this.isConnected) return;
+      if (!this.isConnected) return;
+      try {
+        const keys = await this.client.keys('cache:*');
+        if (keys.length > 0) {
+          // Fix for TS2556: Use sendCommand to avoid the spread operator error.
+          // It accepts an array of strings, which is a more robust approach.
+          await this.client.sendCommand(['DEL', ...keys]);
+          console.log(`🗑️ Cleared ${keys.length} cache entries (cache:*)`);
+        }
+      } catch (error) {
+        console.error('❌ Failed to clear cache:', error);
+      }
+    }
+
+  // Overloaded: with a queueName returns detailed stats;
+  // without returns a map of queue depths
+  async getQueueStats(queueName: string): Promise<QueueStats>;
+  async getQueueStats(): Promise<Record<string, number>>;
+  async getQueueStats(queueName?: string): Promise<QueueStats | Record<string, number>> {
     try {
-      const keys = await this.client.keys('cache:*');
-      if (keys.length > 0) {
-        await this.client.del(keys);
-        console.log(`🗑️ Cleared ${keys.length} exact-match cache entries.`);
+      if (queueName) {
+        const length = await this.client.lLen(queueName);
+        return {
+          length,
+          processingCount: 0,
+          errorCount: 0,
+          lastProcessedAt: new Date()
+        };
       } else {
-        console.log('🗑️ No exact-match cache entries to clear.');
+        const queues = Object.values(QUEUE_NAMES) as string[];
+        const entries = await Promise.all(
+          queues.map(async (q) => [q, await this.client.lLen(q)] as const)
+        );
+        const map: Record<string, number> = {};
+        for (const [q, len] of entries) map[q] = Number(len);
+        return map;
       }
     } catch (error) {
-      console.error('❌ Failed to clear all Redis exact-match cache entries:', error);
+      console.error('❌ Failed to get queue stats:', error);
+      return queueName
+        ? { length: 0, processingCount: 0, errorCount: 0 }
+        : {};
     }
   }
 
-  async getCacheSize(): Promise<number> {
-    if (!this.isConnected) return 0;
+  // ================================
+  // PERFORMANCE MONITORING
+  // ================================
+
+  private startPerformanceMonitoring(): void {
+    setInterval(() => {
+      this.updatePerformanceMetrics();
+      this.emit('performanceUpdate', this.cacheMetrics);
+    }, 10000);
+  }
+
+  private async updatePerformanceMetrics(): Promise<void> {
     try {
       const info = await this.client.info('memory');
-      const usedMemory = parseInt(info.match(/used_memory:(\d+)/)?.[1] || '0', 10);
-      console.log(`📏 Redis cache size: ${usedMemory} bytes`);
-      return usedMemory;
+      const memoryMatch = info.match(/used_memory:(\d+)/);
+      this.cacheMetrics.memoryUsage = memoryMatch ? parseInt(memoryMatch[1]) : 0;
+
+      const total = this.cacheMetrics.hits + this.cacheMetrics.misses;
+      const hitRate = total > 0 ? (this.cacheMetrics.hits / total) * 100 : 0;
+      console.log(
+        `📊 Cache Hit Rate: ${hitRate.toFixed(2)}%, Memory: ${this.formatBytes(this.cacheMetrics.memoryUsage)}`
+      );
     } catch (error) {
-      console.error('❌ Failed to get Redis cache size:', error);
-      return 0;
+      console.error('❌ Failed to update performance metrics:', error);
     }
   }
 
-  // ----------------------------------------------------------------------------
-  // Pub/Sub operations
-  // ----------------------------------------------------------------------------
-  async publishResponse(connectionId: string, response: DinaResponse): Promise<void> {
-    if (!this.isConnected) return;
+  private formatBytes(bytes: number): string {
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    if (bytes === 0) return '0 Bytes';
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return Math.round((bytes / Math.pow(1024, i)) * 100) / 100 + ' ' + sizes[i];
+  }
 
-    const channel = `dina:response:${connectionId}`;
-    try {
-      await Promise.race([
-        this.publisher.publish(channel, JSON.stringify(response)),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Publish timeout')), 3000)),
-      ]);
-      console.log(`📢 Published response for request ${response.request_id} to channel ${channel}`);
-    } catch (error) {
-      console.error(`❌ Failed to publish response to ${channel}:`, error);
-      // publishing timeouts may indicate trouble; we still don't flip state here
+  // ================================
+  // UTILITY METHODS
+  // ================================
+
+  private setConnectionState(state: RedisConnectionState): void {
+    const prev = this.connectionState;
+    this.connectionState = state;
+    if (prev !== state) {
+      console.log(`🔄 Redis state: ${prev} → ${state}`);
+      this.emit('stateChange', { from: prev, to: state });
     }
   }
 
-  async subscribeToResponses(
-    connectionId: string,
-    responseHandler: (response: DinaResponse) => void,
-  ): Promise<void> {
-    if (!this.isConnected) throw new Error('Redis not connected. Cannot subscribe.');
-
-    const channel = `dina:response:${connectionId}`;
-    this.responseHandlers.set(connectionId, responseHandler);
-
-    try {
-      await Promise.race([
-        this.subscriber.subscribe(channel, (raw) => {
-          const handler = this.responseHandlers.get(connectionId);
-          if (!handler) return;
-          try {
-            const parsed: DinaResponse = JSON.parse(raw);
-            handler(parsed);
-          } catch (e) {
-            console.error('❌ Failed to parse response message:', e);
-          }
-        }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Subscribe timeout')), 3000)),
-      ]);
-      console.log(`👂 Subscribed to response channel: ${channel}`);
-    } catch (error) {
-      console.error(`❌ Failed to subscribe to ${channel}:`, error);
-      this.responseHandlers.delete(connectionId);
-      throw error;
-    }
-  }
-
-  async unsubscribeFromResponses(connectionId: string): Promise<void> {
-    if (!this.isConnected) return;
-
-    const channel = `dina:response:${connectionId}`;
-    this.responseHandlers.delete(connectionId);
-
-    try {
-      await Promise.race([
-        this.subscriber.unsubscribe(channel),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Unsubscribe timeout')), 2000)),
-      ]);
-      console.log(`🚫 Unsubscribed from response channel: ${channel}`);
-    } catch (error) {
-      console.warn(`⚠️ Failed to unsubscribe ${connectionId}:`, error);
-    }
-  }
-
-  // ----------------------------------------------------------------------------
-  // Health monitoring (only when connected & open)
-  // ----------------------------------------------------------------------------
-  private startHealthCheck(): void {
-    if (this.healthCheckInterval) clearInterval(this.healthCheckInterval);
-
-    this.healthCheckInterval = setInterval(async () => {
-      // Only ping when we believe we're connected and client socket is open
-      if (this.connectionState !== RedisConnectionState.CONNECTED) return;
-      // @redis/client exposes isOpen
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
-      if (!(this.client as any)?.isOpen) return;
-
+  private async processMessageBuffer(): Promise<void> {
+    if (this.messageBuffer.length === 0) return;
+    console.log(`📤 Processing ${this.messageBuffer.length} buffered messages...`);
+    const messages = [...this.messageBuffer];
+    this.messageBuffer = [];
+    for (const message of messages) {
       try {
-        await Promise.race([
-          this.client.ping(),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Health check timeout')), 5000)),
-        ]);
-        if (!this.isConnected) this.handleConnectionSuccess();
-        // Keep logs modest to avoid noise
-        // console.log('💓 Redis health check passed');
-      } catch (error: any) {
-        // If the client closed during reconnect window, ignore
-        if (String(error?.name || '').includes('ClientClosedError')) return;
-        console.error('❌ Redis health check failed:', error);
-        this.handleConnectionFailure(error as Error);
+        await this.processMessage(message);
+      } catch (error) {
+        console.error('❌ Failed to process buffered message:', error);
       }
-    }, 30_000);
+    }
   }
 
-  // ----------------------------------------------------------------------------
-  // Public API
-  // ----------------------------------------------------------------------------
-  public get state(): RedisConnectionState {
-    return this.connectionState;
+  private bufferMessage(message: DinaUniversalMessage): void {
+    if (this.messageBuffer.length >= this.maxBufferSize) {
+      this.messageBuffer.shift();
+      this.cacheMetrics.evictions++;
+    }
+    this.messageBuffer.push(message);
   }
 
-  public getMetrics() {
-    return {
-      connectionState: this.connectionState,
-      isConnected: this.isConnected,
-      reconnectAttempts: this.reconnectAttempts,
-      circuitBreakerOpen: this.circuitBreakerOpen,
-      consecutiveFailures: this.consecutiveFailures,
-      lastError: this.lastError?.message,
-      bufferedMessages: this.messageBuffer.length,
-      maxBufferSize: this.maxBufferSize,
-    };
+  private async processMessage(message: DinaUniversalMessage): Promise<void> {
+    console.log(`⚙️ Processing message ${message.id}`);
   }
+
+  private defaultQueueFor(message: DinaUniversalMessage): string {
+    // Best-effort default selection based on message content or enum presence
+    const qNames = QUEUE_NAMES as any;
+    return (message as any).queue
+      || qNames?.UNIFIED
+      || qNames?.DEFAULT
+      || qNames?.INBOUND
+      || 'dina:queue';
+  }
+
+  // ================================
+  // ENHANCED QUEUE OPERATIONS
+  // ================================
+
+  private async setupEnhancedQueues(): Promise<void> {
+    const queues = Object.values(QUEUE_NAMES) as string[];
+    for (const queue of queues) {
+      try {
+        await this.client.del(queue);
+        // actually clears the list
+        console.log(`✅ Enhanced queue ${queue} ready`);
+      } catch (error) {
+        console.error(`❌ Failed to setup queue ${queue}:`, error);
+      }
+    }
+  }
+
+  // ================================
+  // SEARCH INDEXES (non-vector)
+  // ================================
+
+  private async createSearchIndexes(): Promise<void> {
+    if (!this.redisSearchAvailable) {
+      console.log('ℹ️ Skipping search index creation - RediSearch not available');
+      return;
+    }
+
+    const indexes = ['user_contexts', 'model_responses', 'conversation_history'];
+    for (const indexName of indexes) {
+      try {
+        await this.createSpecificIndex(indexName);
+      } catch (error) {
+        console.error(`❌ Failed to create index ${indexName}:`, error);
+      }
+    }
+  }
+
+  private async createSpecificIndex(indexName: string): Promise<void> {
+    try {
+      await this.client.sendCommand([
+        'FT.CREATE', indexName,
+        'ON', 'HASH',
+        'PREFIX', '1', `${indexName}:`,
+        'SCHEMA',
+        'content', 'TEXT',
+        'timestamp', 'NUMERIC'
+      ]);
+      console.log(`🔍 Created search index: ${indexName}`);
+    } catch (error: any) {
+      if (error?.message && error.message.includes('Index already exists')) {
+        console.log(`ℹ️ Search index already exists: ${indexName}`);
+      } else {
+        console.warn(`⚠️ Could not create index ${indexName}:`, error?.message ?? error);
+      }
+    }
+  }
+
+  // ================================
+  // SHUTDOWN & CLEANUP
+  // ================================
 
   async shutdown(): Promise<void> {
-    console.log('🛑 Shutting down Redis with enhanced cleanup...');
-    this.pauseMonitors();
-
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-
+    console.log('🛑 Shutting down Enhanced Redis Manager...');
     try {
-      await Promise.allSettled([this.client.quit(), this.publisher.quit(), this.subscriber.quit()]);
+      await Promise.all([
+        this.client.quit(),
+        this.publisher.quit(),
+        this.subscriber.quit(),
+        this.vectorClient.quit(),
+        ...this.connectionPool.map(client => client.quit())
+      ]);
       this.isConnected = false;
       this.setConnectionState(RedisConnectionState.DISCONNECTED);
-      console.log('✅ Redis shutdown complete');
+      console.log('✅ Enhanced Redis Manager shutdown complete');
     } catch (error) {
-      console.error('❌ Redis shutdown error:', error);
+      console.error('❌ Error during shutdown:', error);
     }
+  }
+
+  // ================================
+  // HELPERS
+  // ================================
+
+  private safeParseJSON(jsonString: string): any {
+    try { return JSON.parse(jsonString);
+    } catch { return {}; }
   }
 }
 
-export const redisManager = new DinaRedisManager();
+// ================================
+// EXPORT ENHANCED MANAGER
+// ================================
+
+export const redisManager = new EnhancedDinaRedisManager();
+// Auto-initialize on import
+redisManager.initialize().catch(error => {
+  console.error('❌ Failed to auto-initialize Redis manager:', error);
+});
+
+export default redisManager;
