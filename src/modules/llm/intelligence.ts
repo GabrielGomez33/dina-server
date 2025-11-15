@@ -1,8 +1,16 @@
-// DINA Phase 2: Multi-Model LLM Intelligence Engine (Fixed)
+// DINA Phase 2: Multi-Model LLM Intelligence Engine (Optimized)
 // File: src/modules/llm/intelligence.ts
 
 import { performance } from 'perf_hooks';
 import { database } from '../../config/database/db';
+
+// Simple logger utility (duplicated to avoid circular dependency)
+const log = {
+  debug: (msg: string) => {}, // Disabled for performance
+  info: (msg: string) => console.log(`ℹ️ ${msg}`),
+  warn: (msg: string) => console.warn(`⚠️ ${msg}`),
+  error: (msg: string) => console.error(`❌ ${msg}`)
+};
 
 // ================================
 // CORE INTERFACES
@@ -77,17 +85,15 @@ export class QueryComplexityAnalyzer {
   /**
    * Analyze query complexity and recommend optimal model
    */
-  async analyzeQuery(query: string, context?: any): Promise<ComplexityScore> {
+async analyzeQuery(query: string, context?: any): Promise<ComplexityScore> {
     const queryHash = this.hashQuery(query);
-    console.log(`🧠 Analyzing query complexity for hash: ${queryHash}`);
     const cached = this.patternCache.get(queryHash);
     if (cached) {
-      console.log(`⚡ Cache hit for query complexity: ${queryHash}`);
       return { ...cached, confidence: cached.confidence * 0.95 };
     }
 
     const startTime = performance.now();
-    
+
     // Multi-dimensional complexity analysis
     const analysis: ComplexityAnalysis = {
       linguistic: this.analyzeLinguisticComplexity(query),
@@ -100,7 +106,7 @@ export class QueryComplexityAnalyzer {
     const complexityLevel = this.calculateWeightedComplexity(analysis);
     const recommendedModel = this.selectOptimalModel(complexityLevel, analysis);
     const confidence = this.calculateConfidence(analysis, complexityLevel);
-    
+
     const result: ComplexityScore = {
       level: complexityLevel,
       confidence,
@@ -113,7 +119,7 @@ export class QueryComplexityAnalyzer {
     this.patternCache.set(queryHash, result);
     await this.recordLearningData(query, result, performance.now() - startTime);
 
-    console.log(`✅ Query complexity analyzed: level=${result.level}, model=${result.recommendedModel}`);
+    log.debug(`Complexity: level=${result.level}, model=${result.recommendedModel}`);
     return result;
   }
 
@@ -333,11 +339,8 @@ export class QueryComplexityAnalyzer {
     return Buffer.from(query.toLowerCase().replace(/\s+/g, ' ').trim()).toString('base64').substring(0, 16);
   }
 
-  public getQueryHash(query: string): string {
-    console.log(`🧠 Generating query hash for: "${query.substring(0, 50)}..."`);
-    const hash = this.hashQuery(query);
-    console.log(`✅ Generated query hash: ${hash}`);
-    return hash;
+public getQueryHash(query: string): string {
+    return this.hashQuery(query);
   }
 
   private async recordLearningData(query: string, result: ComplexityScore, analysisTime: number): Promise<void> {
@@ -357,9 +360,8 @@ export class QueryComplexityAnalyzer {
         result.confidence,
         result.level
       );
-      console.log(`📊 Recorded learning data for query hash: ${this.hashQuery(query)}`);
     } catch (error) {
-      console.error(`❌ Failed to record learning data: ${error}`);
+      log.error(`Failed to record learning data: ${error}`);
     }
   }
 }
