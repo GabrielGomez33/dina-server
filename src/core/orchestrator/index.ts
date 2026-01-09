@@ -12,7 +12,7 @@ import {
 import { database } from '../../config/database/db';
 import { redisManager } from '../../config/redis';
 import { DinaLLMManager } from '../../modules/llm/manager';
-import { ModelType, performanceOptimizer } from '../../modules/llm/intelligence'; // Added performanceOptimizer import
+import { ModelType, performanceOptimizer } from '../../modules/llm/intelligence';
 import { digiMOrchestrator} from '../../modules/digim';
 import { isDigiMMessage } from '../../modules/digim/types';
 import { mirrorModule } from '../../modules/mirror';
@@ -77,7 +77,7 @@ export class DinaCore {
   private startTime: Date = new Date();
   private lastRedisWarning: number = 0;
   private lastStatsWarning: number = 0;
-  
+
   constructor() {
     console.log('🧠 Initializing DINA Core...');
     this.llmManager = new DinaLLMManager();
@@ -88,29 +88,29 @@ export class DinaCore {
         console.log('ℹ️ DINA Core already initialized.');
         return;
       }
-        
+
       console.log('🚀 Initializing Enhanced DINA Core Orchestrator...');
       try {
         await database.initialize();
         console.log('🔐 Unified authentication system initialized via database');
-                
+
         //await redisManager.initialize();
-                
+
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('🤖 PHASE 2: Multi-Model LLM System Initialization');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                
+
         await this.llmManager.initialize();
         console.log('✅ LLM System initialization complete');
-                
+
         // ADD DIGIM INITIALIZATION HERE:
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('🧠 PHASE 1.5: DIGIM Intelligence Module Initialization');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('📊 Step 1: Loading DIGIM Foundation...');
-                
+
         await digiMOrchestrator.initialize();
-                
+
         console.log('🎯 Step 2: DIGIM Integration Check...');
         const digiMStatus = digiMOrchestrator.moduleStatus;
         console.log(`📈 DIGIM Health: ${digiMStatus === 'healthy' ? '✅ Operational' : '⚠️ Degraded'}`);
@@ -133,9 +133,9 @@ export class DinaCore {
         console.log('🪞 PHASE 3: MIRROR MODULE INITIALIZATION');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('📊 Step 1: Loading Mirror Foundation...');
-                
+
         await mirrorModule.initialize();
-                
+
         console.log('🎯 Step 2: Mirror Integration Check...');
         const mirrorStatus = mirrorModule.isInitialized;
         console.log(`📈 Mirror Health: ${mirrorStatus ? '✅ Operational' : '⚠️ Degraded'}`);
@@ -143,21 +143,21 @@ export class DinaCore {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('✅ MIRROR MODULE INITIALIZATION COMPLETE');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                       
+
         console.log('🔄 Phase 4: Advanced Message Processing Activation');
         this.startQueueProcessors();
-                
+
         this.initialized = true;
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('✅ DINA ENHANCED CORE INITIALIZATION COMPLETE');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                
+
         await database.log('info', 'core', 'DINA Enhanced Core with DIGIM initialized successfully', {
            phase: '2-complete-with-digim',
           digim_status: digiMStatus,
           digim_sources: digiMOrchestrator.getActiveSources().length
         });
-              
+
       } catch (error) {
         console.error('❌ Failed to initialize DINA Core:', error);
         this.initialized = false;
@@ -178,14 +178,11 @@ private startQueueProcessors(): void {
     const interval = queueIntervals[queueName];
     console.log(`🔄 Queue processor started: ${queueName} (${interval}ms interval)`);
     const processor = setInterval(async () => {
-      // ADD THIS CHECK: Don't process if not initialized or Redis not connected
       if (!this.initialized) {
         return;
       }
-            
-      // ADD THIS CHECK: Skip processing if Redis is not connected
+
       if (!redisManager.isConnected) {
-        // Don't spam logs - only log once per minute when Redis is down
         const now = Date.now();
         if (!this.lastRedisWarning || (now - this.lastRedisWarning) > 60000) {
           console.warn(`⚠️ Skipping queue processing for ${queueName} - Redis disconnected`);
@@ -193,7 +190,7 @@ private startQueueProcessors(): void {
         }
         return;
       }
-            
+
       const message = await redisManager.retrieveMessage(queueName);
       if (message) {
         console.log(`📥 Processing message from ${queueName} queue: ${message.target.method}`);
@@ -250,9 +247,11 @@ private startQueueProcessors(): void {
   private isMirrorMessage(message: DinaUniversalMessage): boolean {
     const validMirrorMethods = [
       'mirror_submit_profile',
-      'mirror_get_insights',       
+      'mirror_get_insights',
       'mirror_get_patterns',
       'mirror_answer_question',
+      'mirror_chat',
+      'mirror_chat_stream',
       'deep_facial_analysis',
       'detect_patterns',
       'temporal_analysis',
@@ -263,19 +262,18 @@ private startQueueProcessors(): void {
 
   public async handleIncomingMessage(message: DinaUniversalMessage): Promise<DinaResponse> {
       const startTime = performance.now();
-      // CRITICAL: Prevent recursive loops and stack overflow
       const callDepth = (message as any).__callDepth || 0;
       if (callDepth > 5) {
         console.error('❌ Maximum call depth exceeded, preventing stack overflow');
         return this.createErrorResponse(message.id, 'RECURSION_ERROR', 'Maximum recursion depth exceeded');
       }
-            
+
       (message as any).__callDepth = callDepth + 1;
 
       let responsePayload: any;
       let responseStatus: 'success' | 'error' | 'processing' | 'queued' = 'success';
       let errorMessage: string | undefined;
-            
+
       const requestId = `dina_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       try {
         await database.logRequest({
@@ -287,47 +285,46 @@ private startQueueProcessors(): void {
           userId: message.security.user_id,
           securityContext: message.security
         });
-            
+
         console.log(`🔍 Processing message ${requestId}: ${message.target.module}.${message.target.method}`);
-            
+
         if (!DinaProtocol.validateMessage(message)) {
           throw new Error('Invalid DINA message: Protocol validation failed');
         }
-            
+
         const sanitizedMessage = DinaProtocol.sanitizeMessage(message);
         console.log(`🧹 Message sanitized successfully for ${requestId}`);
-            
+
         if (!sanitizedMessage.target || typeof sanitizedMessage.target.module !== 'string') {
           throw new Error(
             `Invalid target module format. Expected string, got: ${typeof sanitizedMessage.target?.module}`
           );
         }
-            
+
         const targetModule = sanitizedMessage.target.module;
         console.log(`🎯 Routing to module: "${targetModule}" with method: "${sanitizedMessage.target.method}"`);
-            
-        // Enhanced routing with proper error handling
+
         switch (targetModule) {
           case 'core':
             console.log('🏛️ Processing CORE request');
             responsePayload = await this.processCoreRequest(sanitizedMessage);
             break;
-                      
+
           case 'llm':
             console.log('🤖 Processing LLM request');
             responsePayload = await this.processLLMRequest(sanitizedMessage);
             break;
-                      
+
           case 'database':
             console.log('🗄️ Processing DATABASE request');
             responsePayload = await this.processDatabaseRequest(sanitizedMessage);
             break;
-                      
+
           case 'system':
             console.log('⚙️ Processing SYSTEM request');
             responsePayload = await this.processSystemRequest(sanitizedMessage);
             break;
-                      
+
           case 'digim':
             console.log('🧠 Processing DIGIM request');
             if (!isDigiMMessage(sanitizedMessage)) {
@@ -341,7 +338,7 @@ private startQueueProcessors(): void {
           	 console.log('🪞 Processing MIRROR request');
          	 responsePayload = await this.processMirrorRequest(sanitizedMessage);
         	 break;
-                      
+
           default:
             const availableModules = ['core', 'llm', 'database', 'system', 'digim', 'mirror'];
             throw new Error(
@@ -349,12 +346,12 @@ private startQueueProcessors(): void {
               `Available modules: ${availableModules.join(', ')}`
             );
         }
-            
+
         console.log(`✅ Successfully processed ${requestId} in ${(performance.now() - startTime).toFixed(2)}ms`);
-          
+
       } catch (error) {
         console.error(`❌ Error processing message ${requestId}:`, error);
-                
+
         responseStatus = 'error';
         errorMessage = (error as Error).message;
         responsePayload = {
@@ -368,8 +365,7 @@ private startQueueProcessors(): void {
             callDepth: callDepth
           }
         };
-            
-        // ✅ CORRECTED: Log error with proper method signature
+
         try {
           await database.log('error', 'orchestrator', errorMessage, {
             request_id: requestId,
@@ -384,9 +380,9 @@ private startQueueProcessors(): void {
           console.error('❌ Failed to log error to database:', dbError);
         }
       }
-          
+
       const processingTime = performance.now() - startTime;
-          
+
       const dinaResponse: DinaResponse = createDinaResponse({
         request_id: requestId,
         status: responseStatus,
@@ -405,21 +401,21 @@ private startQueueProcessors(): void {
           }
         } : undefined
       });
-          
+
       console.log(`📤 Response generated for ${requestId}: status=${responseStatus}, time=${processingTime.toFixed(2)}ms`);
       return dinaResponse;
     }
 
   private createErrorResponse(
-    requestId: string,     
-    errorCode: string = 'PROCESSING_ERROR',     
+    requestId: string,
+    errorCode: string = 'PROCESSING_ERROR',
     message: string = 'An error occurred during processing',
     details?: any
   ): DinaResponse {
-        
+
     return {
       request_id: requestId,
-      id: uuidv4(), // Make sure to import { v4 as uuidv4 } from 'uuid';
+      id: uuidv4(),
       timestamp: new Date().toISOString(),
       status: 'error',
       payload: {
@@ -440,7 +436,7 @@ private startQueueProcessors(): void {
       }
     };
   }
-      
+
   private async processCoreRequest(message: DinaUniversalMessage): Promise<any> {
     switch (message.target.method) {
       case 'ping':
@@ -458,30 +454,25 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
   const { method } = message.target;
   console.log(`🤖 Processing LLM request: ${method}`);
 
-  // CRITICAL: Flexible payload extraction for different nesting levels
   const extractPayloadData = (payload: any, field: string): any => {
-    // Direct access (correct structure)
     if (payload[field] !== undefined) {
       console.log(`✅ Found ${field} at direct level`);
       return payload[field];
     }
-        
-    // Nested data access (current structure from API)
+
     if (payload.data && payload.data[field] !== undefined) {
       console.log(`✅ Found ${field} at data level`);
       return payload.data[field];
     }
-    
-    // Double-nested access (backward compatibility)
+
     if (payload.data && payload.data.data && payload.data.data[field] !== undefined) {
       console.log(`✅ Found ${field} at data.data level`);
       return payload.data.data[field];
     }
-        
+
     return undefined;
   };
 
-  // Extract data with flexible handling
   const query = extractPayloadData(message.payload, 'query');
   const text = extractPayloadData(message.payload, 'text');
   const code_request = extractPayloadData(message.payload, 'code_request');
@@ -490,20 +481,18 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
 
   console.log(`🔍 Extracted data: query=${!!query}, text=${!!text}, code_request=${!!code_request}, analysis_query=${!!analysis_query}`);
 
-  // Enhanced validation with helpful error messages
   if (method === 'llm_generate' && !query) {
     console.error('❌ Missing query for llm_generate');
     console.error('Payload structure:', JSON.stringify(message.payload, null, 2));
     throw new Error('Missing required field: query for llm_generate');
   }
-  
+
   if (method === 'llm_embed' && !text) {
     console.error('❌ Missing text for llm_embed');
     console.error('Payload structure:', JSON.stringify(message.payload, null, 2));
     throw new Error('Missing required field: text for llm_embed');
   }
 
-  // Cache handling
   const cacheKey = `llm:${method}:${message.security.user_id || 'default'}:${query || text || code_request || analysis_query}`;
   const cachedResponse = await redisManager.getExactCachedResponse(cacheKey);
 
@@ -515,7 +504,7 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
   let llmResponse: any;
   try {
     console.log(`🚀 Processing LLM method: ${method}`);
-        
+
     switch (method) {
       case 'llm_generate':
         console.log(`🧠 Generating response for query: "${query.substring(0, 50)}..."`);
@@ -529,7 +518,7 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
           include_context: options?.include_context
         });
         break;
-              
+
       case 'llm_embed':
         console.log(`🔢 Generating embedding for text: "${text.substring(0, 50)}..."`);
         llmResponse = await this.llmManager.embed(text, {
@@ -538,29 +527,28 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
           model_preference: options?.model_preference
         });
         break;
-              
+
       case 'llm_code':
         if (!code_request) throw new Error('Missing required field: code_request for llm_code');
         llmResponse = await this.llmManager.generateCode(code_request, options);
         break;
-              
+
       case 'llm_analysis':
         if (!analysis_query) throw new Error('Missing required field: analysis_query for llm_analysis');
         llmResponse = await this.llmManager.analyze(analysis_query, options);
         break;
-              
+
       default:
         throw new Error(`Unsupported LLM method: ${method}`);
     }
 
     console.log(`✅ LLM processing completed for ${method}`);
 
-    // Cache successful responses
     if (llmResponse && llmResponse.status !== 'error') {
       await redisManager.setExactCachedResponse(cacheKey, llmResponse, 3600);
       console.log(`💾 Cached LLM response for method: ${method}`);
     }
-      
+
   } catch (error) {
     console.error(`❌ LLM processing failed for ${method}:`, error);
     throw error;
@@ -616,17 +604,24 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
 
       switch (message.target.method) {
         case 'process_submission':
-          // Use existing processSubmission method
           return await mirrorModule.processSubmission(message, sessionInfo);
-                  
+
+        case 'mirror_chat':
+          // Process @Dina chat message (non-streaming)
+          console.log('💬 Processing Mirror Chat query');
+          return await this.processMirrorChat(message, sessionInfo, false);
+
+        case 'mirror_chat_stream':
+          // Process @Dina chat message with streaming
+          console.log('📡 Processing Mirror Chat query with streaming');
+          return await this.processMirrorChat(message, sessionInfo, true);
+
         case 'get_status':
-          // Use existing healthCheck method
           return await mirrorModule.healthCheck();
-                  
+
         case 'get_metrics':
-          // Use existing getPerformanceMetrics method
-            return await mirrorModule.getPerformanceMetrics();
-                  
+          return await mirrorModule.getPerformanceMetrics();
+
         case 'get_insights':
         case 'get_patterns':
         case 'get_questions':
@@ -641,32 +636,109 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
         case 'mirror_get_history':
         case 'mirror_export_data':
         case 'mirror_get_analytics':
-          // Route these through the existing processSubmission method
-          // which handles the full DINA protocol properly
           return await mirrorModule.processSubmission(message, sessionInfo);
-                  
+
         default:
           throw new Error(`Unknown mirror method: ${message.target.method}`);
       }
     }
 
-  // COMPLETE getEnhancedSystemStatus() method for src/core/orchestrator/index.ts
-    async getEnhancedSystemStatus(): Promise<Record<string, any>> {
+  // New method to handle @Dina chat messages
+  private async processMirrorChat(
+    message: DinaUniversalMessage,
+    sessionInfo: { userId: string; sessionId: string },
+    streaming: boolean
+  ): Promise<any> {
+    const startTime = performance.now();
+
+    // Extract chat data from payload
+    const payload = message.payload?.data || message.payload;
+    const query = payload?.query || payload?.message || payload?.content;
+    const groupId = payload?.groupId || payload?.group_id;
+    const username = payload?.username || sessionInfo.userId;
+    const context = payload?.context || {};
+
+    if (!query) {
+      throw new Error('Missing required field: query for mirror_chat');
+    }
+
+    console.log(`💬 Mirror Chat: Processing query from ${username} in group ${groupId}`);
+
+    // Build system prompt with context
+    const systemPrompt = this.buildMirrorChatSystemPrompt(context, username);
+
+    try {
+      // Generate response using LLM
+      const llmResponse = await this.llmManager.generate(query, {
+        user_id: sessionInfo.userId,
+        conversation_id: groupId,
+        streaming: streaming,
+        max_tokens: 1000,
+        temperature: 0.7,
+        system_prompt: systemPrompt
+      });
+
+      const processingTime = performance.now() - startTime;
+
+      return {
+        success: true,
+        content: llmResponse.response,
+        metadata: {
+          processingTimeMs: processingTime,
+          streaming: streaming,
+          model: llmResponse.model || 'default',
+          groupId: groupId,
+          respondingTo: username
+        }
+      };
+    } catch (error) {
+      console.error('❌ Mirror Chat processing failed:', error);
+      throw error;
+    }
+  }
+
+  private buildMirrorChatSystemPrompt(context: any, username: string): string {
+    const groupName = context?.groupInfo?.name || 'Mirror Group';
+    const groupGoal = context?.groupInfo?.goal || 'General discussion';
+    const recentMessages = context?.recentMessages || [];
+
+    const recentMessagesText = recentMessages
+      .slice(-10)
+      .map((m: any) => `${m.username}: ${m.content?.substring(0, 200)}`)
+      .join('\n') || 'No recent messages';
+
+    return `You are Dina, an intelligent and friendly AI assistant integrated into Mirror, a group chat application focused on personal growth and meaningful connections.
+
+CONTEXT:
+- Group: "${groupName}"
+- Group Goal: "${groupGoal}"
+- User asking: ${username}
+
+RECENT CONVERSATION:
+${recentMessagesText}
+
+GUIDELINES:
+- Be helpful, concise, and friendly
+- Stay relevant to the group context and conversation
+- Provide actionable insights when appropriate
+- Keep responses under 500 words unless more detail is necessary
+- Use a warm but professional tone`;
+  }
+
+  async getEnhancedSystemStatus(): Promise<Record<string, any>> {
       const dbStatus = await database.getSystemStatus();
       const redisStatus = { isConnected: redisManager.isConnected, queueStats: await redisManager.getQueueStats() };
       const llmStatus = await this.llmManager.getSystemStatus();
-            
-      // ADD DIGIM STATUS:
+
       const digiMStatus = {
         initialized: digiMOrchestrator.isInitialized,
         health: digiMOrchestrator.moduleStatus,
         active_sources: digiMOrchestrator.getActiveSources().length,
         phase: 'foundation'
       };
-        
-      // ADD MIRROR STATUS - USING PUBLIC GETTER:
+
       const mirrorStatus = {
-        initialized: mirrorModule.isInitialized, // Use public getter
+        initialized: mirrorModule.isInitialized,
         health: mirrorModule.isInitialized ? 'healthy' : 'critical',
         components: {
           dataProcessor: 'ready',
@@ -678,7 +750,7 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
         version: '2.0.0',
         phase: 'integration-complete'
       };
-        
+
       return {
         overallHealth: dbStatus.status === 'online' &&
                         redisStatus.isConnected &&
@@ -729,7 +801,7 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
       'llm-system': this.llmManager.isInitialized ? 'active' : 'unavailable',
       'redis': redisManager.isConnected ? 'active' : 'inactive',
       'mirror-module': mirrorModule.isInitialized ? 'active' : 'inactive',
-      'digim': digiMOrchestrator.isInitialized ? 
+      'digim': digiMOrchestrator.isInitialized ?
         `${digiMOrchestrator.moduleStatus}-phase1` : 'inactive',
       'phase': '2-complete-with-digim'
     };
@@ -749,11 +821,9 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
 
       await this.llmManager.shutdown();
 
-      // ADD DIGIM SHUTDOWN LOGIC:
       await digiMOrchestrator.shutdown();
       console.log('✅ DIGIM shutdown complete');
 
-      // ADD MIRROR SHUTDOWN LOGIC
 	  await mirrorModule.shutdown();
 	  console.log('✅ Mirror shutdown complete');
 
