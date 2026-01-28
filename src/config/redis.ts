@@ -8,7 +8,7 @@ import { EventEmitter } from 'events';
 import { DinaUniversalMessage, DinaResponse, QUEUE_NAMES } from '../core/protocol';
 import { writeFileSync, readFileSync, existsSync, mkdirSync, statSync } from 'fs';
 import { join, dirname } from 'path';
-
+import { DinaProtocol } from '../core/protocol';
 // Compression utilities
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -906,11 +906,19 @@ export class EnhancedDinaRedisManager extends EventEmitter {
       this.bufferMessage(message);
       return;
     }
+  
     try {
-      const q = queueName || this.defaultQueueFor(message);
+      const systemLoad = 0; // TODO: real load metric
+      const q = queueName || DinaProtocol.getQueueName(message, systemLoad);
+  
+      if (!Object.values(QUEUE_NAMES).includes(q as any)) {
+        throw new Error(`Invalid queue resolved: ${q}`);
+      }
+  
       const serialized = JSON.stringify(message);
       await this.client.lPush(q, serialized);
-      console.log(`📤 Enqueued message ${message.id} to ${q}`);
+  
+      console.log(`📤 Enqueued message ${message.id} → ${q}`);
     } catch (error) {
       console.error('❌ Failed to enqueue message:', error);
       this.bufferMessage(message);
@@ -1399,14 +1407,14 @@ export class EnhancedDinaRedisManager extends EventEmitter {
     console.log(`⚙️ Processing message ${message.id}`);
   }
 
-  private defaultQueueFor(message: DinaUniversalMessage): string {
-    const qNames = QUEUE_NAMES as any;
-    return (message as any).queue
-      || qNames?.UNIFIED
-      || qNames?.DEFAULT
-      || qNames?.INBOUND
-      || 'dina:queue';
-  }
+  //private defaultQueueFor(message: DinaUniversalMessage): string {
+  //  const qNames = QUEUE_NAMES as any;
+  //  return (message as any).queue
+  //    || qNames?.UNIFIED
+  //    || qNames?.DEFAULT
+  //    || qNames?.INBOUND
+  //    || 'dina:queue';
+  //}
 
   private safeParseJSON(jsonString: string): any {
     try { 

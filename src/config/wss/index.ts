@@ -14,6 +14,7 @@ import {
   createDinaMessage 
 } from '../../core/protocol';
 import { redisManager } from '../redis';
+import { DinaLLMManager } from '../../modules/llm/manager';
 
 interface ConnectionInfo {
   ws: WebSocket;
@@ -27,6 +28,7 @@ export class DinaWebSocketManager {
   private connections: Map<string, ConnectionInfo> = new Map();
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private isShuttingDown: boolean = false;
+  private llmManager: DinaLLMManager;
 
   constructor(httpsServer: HTTPSServer) {
     console.log('🔌 Initializing DINA WebSocket server with Redis resilience...');
@@ -37,6 +39,12 @@ export class DinaWebSocketManager {
       clientTracking: true,
       maxPayload: 16 * 1024 * 1024,
       perMessageDeflate: true,
+    });
+
+    // Initialize LLM Manager for Mirror chat
+    this.llmManager = new DinaLLMManager();
+    this.llmManager.initialize().catch(err => {
+      console.warn('⚠️ LLM Manager initialization failed, Mirror chat will be unavailable:', err);
     });
 
     this.setupServerEvents();
@@ -210,6 +218,7 @@ export class DinaWebSocketManager {
       });
 
       // ENHANCED: Try Redis first, fall back to direct processing
+      console.log('[WSS/index.ts]: Processing message',dinaMessage);
       await this.processMessage(ws, connectionId, dinaMessage, connectionInfo);
 
     } catch (parseError) {
@@ -292,16 +301,17 @@ export class DinaWebSocketManager {
    * NEW: Process message with Redis fallback
    */
   private async processMessage(
-    ws: WebSocket, 
-    connectionId: string, 
-    dinaMessage: DinaUniversalMessage, 
+    ws: WebSocket,
+    connectionId: string,
+    dinaMessage: DinaUniversalMessage,
     connectionInfo: ConnectionInfo
   ): Promise<void> {
     // Try Redis if available and subscribed
     if (redisManager.isConnected && connectionInfo.redisSubscribed) {
+      console.log('[WSS/index.ts]: RedisManager is connected and subscribed to...Queueing message.');
       try {
         await redisManager.enqueueMessage(dinaMessage);
-
+		console.log('[WSS/index.ts/processMessage()]: CONTENTS OF dinaMessage.qos', dinaMessage.qos);
         if (dinaMessage.qos.require_ack) {
           const ack: DinaResponse = {
             request_id: dinaMessage.id,
@@ -379,7 +389,13 @@ export class DinaWebSocketManager {
       this.sendResponse(ws, response);
       return;
     }
-    
+
+    // Handle Mirror chat in degraded mode (fallback when Redis unavailable)
+    if (dinaMessage.target.method === 'mirror_chat_stream' || dinaMessage.target.method === 'mirror_chat') {
+      await this.handleMirrorChatStream(ws, connectionId, dinaMessage);
+      return;
+    }
+
     // For other messages, send a degraded service response
     const response: DinaResponse = {
       request_id: dinaMessage.id,
@@ -393,8 +409,111 @@ export class DinaWebSocketManager {
       payload: { data: null },
       metrics: { processing_time_ms: 0 }
     };
-    
+
     this.sendResponse(ws, response);
+  }
+
+  /**
+   * Handle Mirror @Dina chat requests with streaming response (fallback for degraded mode)
+   */
+  private async handleMirrorChatStream(
+    ws: WebSocket,
+    connectionId: string,
+    message: DinaUniversalMessage
+  ): Promise<void> {
+    const requestId = message.id;
+    const payload = message.payload?.data || message.payload;
+    const query = payload?.query || payload?.message;
+    const context = payload?.context;
+    const options = payload?.options || {};
+
+    console.log(`🤖 Mirror chat request from ${connectionId}: "${query?.substring(0, 50)}..."`);
+
+    if (!query) {
+      this.sendResponse(ws, {
+        request_id: requestId,
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        status: 'error',
+        error: { code: 'INVALID_REQUEST', message: 'Missing query in chat request' },
+        payload: { data: null },
+        metrics: { processing_time_ms: 0 }
+      });
+      return;
+    }
+
+    if (!this.llmManager.isInitialized) {
+      this.sendResponse(ws, {
+        request_id: requestId,
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        status: 'error',
+        error: { code: 'LLM_UNAVAILABLE', message: 'LLM service is not available' },
+        payload: { data: null },
+        metrics: { processing_time_ms: 0 }
+      });
+      return;
+    }
+
+    try {
+      let chunkIndex = 0;
+      const startTime = Date.now();
+
+      for await (const chunk of this.llmManager.generateStream(query, {
+        model: options.model || 'mistral:7b',
+        maxTokens: options.maxTokens || 1000,
+        temperature: options.temperature || 0.7,
+        context: typeof context === 'string' ? context : JSON.stringify(context)
+      })) {
+        if (ws.readyState !== WebSocket.OPEN) {
+          console.warn(`⚠️ WebSocket closed during streaming for ${connectionId}`);
+          break;
+        }
+
+        ws.send(JSON.stringify({
+          type: 'chunk',
+          request_id: requestId,
+          chunk_index: chunkIndex++,
+          content: chunk.content,
+          done: chunk.done,
+          timestamp: new Date().toISOString()
+        }));
+
+        if (chunk.done) {
+          this.sendResponse(ws, {
+            request_id: requestId,
+            id: uuidv4(),
+            timestamp: new Date().toISOString(),
+            status: 'success',
+            payload: {
+              data: {
+                type: 'complete',
+                total_chunks: chunkIndex,
+                processing_time_ms: Date.now() - startTime
+              }
+            },
+            metrics: { processing_time_ms: Date.now() - startTime }
+          });
+        }
+      }
+
+      console.log(`✅ Mirror chat stream completed for ${connectionId}: ${chunkIndex} chunks`);
+
+    } catch (error) {
+      console.error(`❌ Mirror chat stream error for ${connectionId}:`, error);
+      this.sendResponse(ws, {
+        request_id: requestId,
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        status: 'error',
+        error: {
+          code: 'STREAM_ERROR',
+          message: error instanceof Error ? error.message : 'Stream processing failed'
+        },
+        payload: { data: null },
+        metrics: { processing_time_ms: 0 }
+      });
+    }
   }
 
   private async subscribeToConnectionResponses(connectionId: string): Promise<void> {
@@ -433,7 +552,7 @@ export class DinaWebSocketManager {
       status: 'success',
       payload: {
         data: {
-          message: 'Welcome to DINA Phase 1!',
+          message: 'Welcome to DINA. A Distributed Intelligient Neural Architect',
           connection_id: connectionId,
           capabilities: ['ping', 'echo', 'chat', 'system_stats'],
           system_status: 'online',

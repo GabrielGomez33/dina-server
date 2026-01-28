@@ -145,9 +145,10 @@ export class DinaCore {
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
         console.log('🔄 Phase 4: Advanced Message Processing Activation');
+		this.initialized = true;
         this.startQueueProcessors();
 
-        this.initialized = true;
+        //this.initialized = true;
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
         console.log('✅ DINA ENHANCED CORE INITIALIZATION COMPLETE');
         console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -175,8 +176,9 @@ private startQueueProcessors(): void {
   };
 
   for (const queueName of Object.keys(queueIntervals)) {
+  	console.log(`[SRC/CORE/ORCHESTRATOR->startQueueProcessors()] ${queueName}`);
     const interval = queueIntervals[queueName];
-    console.log(`🔄 Queue processor started: ${queueName} (${interval}ms interval)`);
+    console.log(`[SRC/CORE/ORCHESTRATOR->startQueueProcessors()] 🔄 Queue processor started: ${queueName} (${interval}ms interval)`);
     const processor = setInterval(async () => {
       if (!this.initialized) {
         return;
@@ -190,8 +192,13 @@ private startQueueProcessors(): void {
         }
         return;
       }
-
-      const message = await redisManager.retrieveMessage(queueName);
+	  let message;
+	  try{
+      	   message = await redisManager.retrieveMessage(queueName);
+		 } catch (err) {
+		 	console.error(`❌ Redis retrieve failed for ${queueName}`, err);
+		 	return;
+		 }
       if (message) {
         console.log(`📥 Processing message from ${queueName} queue: ${message.target.method}`);
         try {
@@ -239,7 +246,7 @@ private startQueueProcessors(): void {
           }
         }
       }
-    }, interval);
+    }, 1000);
     this.queueProcessors.set(queueName, processor);
   }
 }
@@ -650,6 +657,7 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
     streaming: boolean
   ): Promise<any> {
     const startTime = performance.now();
+    console.log(`[SRC/CORE/ORCHESTRATOR/index.ts -> processMirrorChat()] Contents of message -> ${JSON.stringify(message)}`);
 
     // Extract chat data from payload
     const payload = message.payload?.data || message.payload;
