@@ -360,7 +360,8 @@ export class DinaLLMManager {
 
   // FIXED: Made public
   public async generate(query: string, options?: any): Promise<LLMResponse> {
-    console.log(`🧠 Generating response for query: "${query.substring(0, 50)}..."`);
+    console.log(`[SRC/MODULES/LLM/manager.ts -> generate()] 🧠 Generating response for query: "${query.substring(0, 50)}..."`);
+    console.log(`[SRC/MODULES/LLM/manager.ts -> generate()] Contents of options param -> ${JSON.stringify(options)}`);
     const startTime = performance.now();
     
     const complexity = await llmIntelligenceEngine.analyzeQuery(query, options?.context);
@@ -372,6 +373,7 @@ export class DinaLLMManager {
     
     const response: LLMResponse = {
       id: `llm-res-${uuidv4()}`,
+      sourceRequestId: options.requestId,
       model,
       response: ollamaResponse.response,
       tokens: {
@@ -401,7 +403,7 @@ export class DinaLLMManager {
       );
     }
     
-    console.log(`✅ Generated response: id=${response.id}, model=${model}`);
+    console.log(`✅ Generated response: id=${response.id}, model=${model}, sourceRequestId=${options.requestId}`);
     return response;
   }
 
@@ -576,12 +578,7 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
     console.log('✅ LLM Manager shutdown complete');
   }
 
-  public async *generateStream(query: string, options?: {
-    model?: string;
-    maxTokens?: number;
-    temperature?: number;
-    context?: string;
-  }): AsyncGenerator<{ content: string; done: boolean }> {
+  public async *generateStream(query: string, options?: any): AsyncGenerator<{ content: string; done: boolean }> {
     const model = options?.model || 'mistral:7b';
     let prompt = query;
     if (options?.context) {

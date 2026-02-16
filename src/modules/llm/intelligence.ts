@@ -40,6 +40,7 @@ export interface ModelCapabilities {
 
 export interface LLMResponse {
   id: string;
+  sourceRequestId?: string,
   model: string;
   response: string;
   tokens: {

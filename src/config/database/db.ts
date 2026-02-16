@@ -166,7 +166,7 @@ class SecurityModule {
     const suspiciousPatterns = [
       /<script[^>]*>.*?<\/script>/gi,
       /javascript:/gi,
-      /on\w+\s*=/gi,
+      ///on\w+\s*=/gi,
       /expression\s*\(/gi
     ];
     

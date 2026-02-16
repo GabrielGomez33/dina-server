@@ -298,7 +298,7 @@ private startQueueProcessors(): void {
         if (!DinaProtocol.validateMessage(message)) {
           throw new Error('Invalid DINA message: Protocol validation failed');
         }
-
+		console.log(`core/orchestrator/index.ts -> handleIncomingMessage() Content of message prior to sanitation -> ${JSON.stringify(message)}`);
         const sanitizedMessage = DinaProtocol.sanitizeMessage(message);
         console.log(`🧹 Message sanitized successfully for ${requestId}`);
 
@@ -650,21 +650,24 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
       }
     }
 
-  // New method to handle @Dina chat messages
   private async processMirrorChat(
     message: DinaUniversalMessage,
     sessionInfo: { userId: string; sessionId: string },
     streaming: boolean
   ): Promise<any> {
     const startTime = performance.now();
-    console.log(`[SRC/CORE/ORCHESTRATOR/index.ts -> processMirrorChat()] Contents of message -> ${JSON.stringify(message)}`);
 
+    console.log(`[SRC/CORE/ORCHESTRATOR/index.ts -> processMirrorChat()] Contents of message -> ${JSON.stringify(message)}`);
     // Extract chat data from payload
     const payload = message.payload?.data || message.payload;
     const query = payload?.query || payload?.message || payload?.content;
     const groupId = payload?.groupId || payload?.group_id;
     const username = payload?.username || sessionInfo.userId;
     const context = payload?.context || {};
+	//WHERE WE LEFT OFF 1/28/26 8:47PM Adding request Identifier to fix mismatch in mirror server causing request to not be found
+	//Wrong id returned. 
+    const requestIdentifier = payload.requestId;
+    console.log(`[SRC/CORE/ORCHESTRATOR/index.ts -> processMirrorChat()] contents of requestIdentifier -> ${requestIdentifier}`);
 
     if (!query) {
       throw new Error('Missing required field: query for mirror_chat');
@@ -680,6 +683,7 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
       const llmResponse = await this.llmManager.generate(query, {
         user_id: sessionInfo.userId,
         conversation_id: groupId,
+        requestId: requestIdentifier,
         streaming: streaming,
         max_tokens: 1000,
         temperature: 0.7,
@@ -696,6 +700,7 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
           streaming: streaming,
           model: llmResponse.model || 'default',
           groupId: groupId,
+          sourceRequestId: llmResponse.sourceRequestId,
           respondingTo: username
         }
       };
