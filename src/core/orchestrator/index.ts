@@ -259,6 +259,7 @@ private startQueueProcessors(): void {
       'mirror_answer_question',
       'mirror_chat',
       'mirror_chat_stream',
+      'mirror_synthesize_insights',
       'deep_facial_analysis',
       'detect_patterns',
       'temporal_analysis',
@@ -612,6 +613,10 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
       switch (message.target.method) {
         case 'process_submission':
           return await mirrorModule.processSubmission(message, sessionInfo);
+
+        case 'mirror_synthesize_insights':
+          console.log('🧪 Processing Mirror Insight Synthesis');
+          return await mirrorModule.synthesizeInsights(message, sessionInfo);
 
         case 'mirror_chat':
           // Process @Dina chat message (non-streaming)

@@ -1,40 +1,36 @@
 // /src/modules/mirror/index.ts
 /**
- * DINA MIRROR MODULE - CORE IMPLEMENTATION (ALL ERRORS FIXED)
- * 
- * FIXES APPLIED:
- * ✅ Removed MirrorError import conflict (line 51)
- * ✅ Fixed DinaUniversalMessage usage (lines 195, 197) 
- * ✅ Fixed method signatures and argument counts
- * ✅ Added missing methods to classes
- * ✅ Proper integration with DINA architecture
- * ✅ All 26 errors in this file resolved
+ * DINA MIRROR MODULE - CORE IMPLEMENTATION
+ *
+ * ENHANCED: Integrated InsightSynthesizer for routing all mirror-server
+ * LLM requests through the mirror module instead of direct chat access.
  */
 
 import { EventEmitter } from 'events';
 import { performance } from 'perf_hooks';
 import { v4 as uuidv4 } from 'uuid';
 
-// === FIXED CORE IMPORTS ===
-import { 
-  DinaUniversalMessage, 
-  DinaResponse,          // Added back to main import
+// === CORE IMPORTS ===
+import {
+  DinaUniversalMessage,
+  DinaResponse,
   SecurityLevel,
   createDinaMessage,
   createDinaResponse
-} from '../../core/protocol/index'; 
+} from '../../core/protocol/index';
 import {DinaLLMManager} from '../llm/manager';
 import { redisManager } from '../../config/redis';
 import { database } from '../../config/database/db';
 
-// === FIXED MIRROR-SPECIFIC IMPORTS ===
+// === MIRROR-SPECIFIC IMPORTS ===
 import { MirrorDataProcessor } from './processors/dataProcessor';
 import { MirrorContextManager } from './managers/contextManager';
 import { MirrorStorageManager } from './managers/storageManager';
 import { MirrorInsightGenerator } from './processors/insightGenerator';
 import { MirrorNotificationSystem } from './systems/notificationSystem';
+import { InsightSynthesizer, InsightSynthesisRequest, InsightSynthesisResponse } from './processors/insightSynthesizer';
 
-// === FIXED TYPE IMPORTS (no MirrorError conflict) ===
+// === TYPE IMPORTS ===
 import {
   MirrorUserSubmission,
   ProcessedMirrorData,
@@ -71,7 +67,7 @@ interface QueuedAnalysisData {
   priority: number;
 }
 
-// FIXED: Define MirrorError locally (no import conflict)
+// Define MirrorError locally (no import conflict)
 export class MirrorModuleError extends Error {
   public readonly code: string;
   public readonly severity: 'low' | 'medium' | 'high' | 'critical';
@@ -94,7 +90,7 @@ export class MirrorModuleError extends Error {
 }
 
 // ============================================================================
-// CORE MIRROR MODULE CLASS (ALL ERRORS FIXED)
+// CORE MIRROR MODULE CLASS
 // ============================================================================
 
 export class MirrorModule extends EventEmitter {
@@ -103,6 +99,7 @@ export class MirrorModule extends EventEmitter {
   private storageManager: MirrorStorageManager;
   private insightGenerator: MirrorInsightGenerator;
   private notificationSystem: MirrorNotificationSystem;
+  private insightSynthesizer: InsightSynthesizer;
   private llmManager: DinaLLMManager;
   private redis: typeof redisManager;
   private initialized: boolean = false;
@@ -119,16 +116,17 @@ export class MirrorModule extends EventEmitter {
   constructor() {
     super();
     console.log('🪞 Initializing Mirror Module...');
-    
+
     this.redis = redisManager;
     this.llmManager = new DinaLLMManager();
-    
+
     // Initialize modular components
     this.dataProcessor = new MirrorDataProcessor();
     this.contextManager = new MirrorContextManager();
     this.storageManager = new MirrorStorageManager();
     this.insightGenerator = new MirrorInsightGenerator(this.llmManager);
     this.notificationSystem = new MirrorNotificationSystem();
+    this.insightSynthesizer = new InsightSynthesizer(this.llmManager);
 
     this.setupErrorHandling();
   }
@@ -151,7 +149,8 @@ export class MirrorModule extends EventEmitter {
         this.contextManager.initialize(),
         this.storageManager.initialize(),
         this.insightGenerator.initialize(),
-        this.notificationSystem.initialize()
+        this.notificationSystem.initialize(),
+        this.insightSynthesizer.initialize()
       ]);
 
       await database.query('SELECT 1');
@@ -160,8 +159,8 @@ export class MirrorModule extends EventEmitter {
       await this.setupProcessingQueues();
 
       this.initialized = true;
-      console.log('✅ Mirror Module initialized successfully');
-      
+      console.log('✅ Mirror Module initialized successfully (with InsightSynthesizer)');
+
       this.emit('initialized');
     } catch (error) {
       console.error('❌ Failed to initialize Mirror Module:', error);
@@ -177,7 +176,7 @@ export class MirrorModule extends EventEmitter {
   public get isInitialized(): boolean {
     return this.initialized;
   }
-  
+
   private setupErrorHandling(): void {
     this.on('error', (error: Error) => {
       console.error('🚨 Mirror Module Error:', error);
@@ -188,6 +187,7 @@ export class MirrorModule extends EventEmitter {
     this.storageManager.on('error', (error) => this.handleComponentError('StorageManager', error));
     this.insightGenerator.on('error', (error) => this.handleComponentError('InsightGenerator', error));
     this.notificationSystem.on('error', (error) => this.handleComponentError('NotificationSystem', error));
+    this.insightSynthesizer.on('error', (error) => this.handleComponentError('InsightSynthesizer', error));
   }
 
   private handleComponentError(component: string, error: any): void {
@@ -196,119 +196,198 @@ export class MirrorModule extends EventEmitter {
   }
 
   // ============================================================================
-  // MAIN PROCESSING METHOD (FIXED ALL SIGNATURE ISSUES)
+  // MAIN PROCESSING METHOD
   // ============================================================================
 
   /**
- * FIXED: Process complete Mirror submission with proper protocol handling
- */
-async processSubmission(
-  message: DinaUniversalMessage,  // FIXED: Non-generic type
-  sessionInfo: SessionInfo
-): Promise<DinaResponse> {  // FIXED: Return DinaResponse, not DinaUniversalMessage
-  
-  if (!this.initialized) {
-    throw new MirrorModuleError('NOT_INITIALIZED', 'Mirror Module not initialized', 'critical');
-  }
+   * Process complete Mirror submission with proper protocol handling
+   */
+  async processSubmission(
+    message: DinaUniversalMessage,
+    sessionInfo: SessionInfo
+  ): Promise<DinaResponse> {
 
-  const processId = uuidv4();
-  const startTime = performance.now();
-  const submissionId = uuidv4();
-
-  try {
-    console.log(`🔄 Processing Mirror submission: ${processId} for user: ${sessionInfo.userId}`);
-    
-    this.activeProcessing.set(processId, new Date());
-
-    // FIXED: Access payload data correctly
-    const submissionData = message.payload.data as MirrorUserSubmission;
-    this.validateSubmission(submissionData);
-
-    const context: ProcessingContext = {
-      userId: sessionInfo.userId,
-      processId,
-      sessionId: sessionInfo.sessionId,
-      submissionId
-    };
-
-    // FIXED: Process submission with single argument
-    const processedData = await this.dataProcessor.processSubmission(submissionData);
-
-    // Generate immediate insights
-    const immediateInsights = await this.generateImmediateInsights(
-      processedData,
-      context
-    );
-
-    // FIXED: Use correct storage method
-    await this.storageManager.securelyStoreData(
-      processedData,
-      { context },
-      sessionInfo.userId
-    );
-
-    await this.queueDeepAnalysis(context, processedData);
-
-    // FIXED: Use correct method signature (3 arguments)
-    await this.contextManager.updateUserContext(
-      sessionInfo.userId,
-      'behavioral_patterns',
-      { processedData, insights: immediateInsights }
-    );
-
-    // FIXED: Use correct notification method
-    if (immediateInsights.length > 0) {
-      await this.notificationSystem.sendImmediateNotification(
-        sessionInfo.userId,
-        immediateInsights
-      );
+    if (!this.initialized) {
+      throw new MirrorModuleError('NOT_INITIALIZED', 'Mirror Module not initialized', 'critical');
     }
 
-    const processingTime = performance.now() - startTime;
-    this.trackPerformance('complete_submission', processingTime);
+    const processId = uuidv4();
+    const startTime = performance.now();
+    const submissionId = uuidv4();
 
-    this.activeProcessing.delete(processId);
+    try {
+      console.log(`🔄 Processing Mirror submission: ${processId} for user: ${sessionInfo.userId}`);
 
-    console.log(`✅ Mirror submission processed in ${processingTime.toFixed(2)}ms`);
+      this.activeProcessing.set(processId, new Date());
 
-    // FIXED: Return proper DinaResponse structure using createDinaResponse
-    return createDinaResponse({
-      request_id: message.id,
-      status: 'success',
-      payload: {
-        submissionId,
+      const submissionData = message.payload.data as MirrorUserSubmission;
+      this.validateSubmission(submissionData);
+
+      const context: ProcessingContext = {
+        userId: sessionInfo.userId,
+        processId,
+        sessionId: sessionInfo.sessionId,
+        submissionId
+      };
+
+      const processedData = await this.dataProcessor.processSubmission(submissionData);
+
+      // Generate immediate insights
+      const immediateInsights = await this.generateImmediateInsights(
         processedData,
-        immediateInsights,
-        status: 'completed'
-      },
-      metrics: {
-        processing_time_ms: processingTime
-      }
-    });
+        context
+      );
 
-  } catch (error) {
-    this.activeProcessing.delete(processId);
-    
-    console.error(`❌ Mirror submission processing failed:`, error);
-    
-    // FIXED: Create error response using createDinaResponse
-    return createDinaResponse({
-      request_id: message.id,
-      status: 'error',
-      payload: null,
-      metrics: {
-        processing_time_ms: performance.now() - startTime
-      },
-      error: {
-        code: 'PROCESSING_FAILED',
-        message: error instanceof Error ? error.message : 'Unknown processing error',
-        details: { processId }
+      await this.storageManager.securelyStoreData(
+        processedData,
+        { context },
+        sessionInfo.userId
+      );
+
+      await this.queueDeepAnalysis(context, processedData);
+
+      await this.contextManager.updateUserContext(
+        sessionInfo.userId,
+        'behavioral_patterns',
+        { processedData, insights: immediateInsights }
+      );
+
+      if (immediateInsights.length > 0) {
+        await this.notificationSystem.sendImmediateNotification(
+          sessionInfo.userId,
+          immediateInsights
+        );
       }
-    });
+
+      const processingTime = performance.now() - startTime;
+      this.trackPerformance('complete_submission', processingTime);
+
+      this.activeProcessing.delete(processId);
+
+      console.log(`✅ Mirror submission processed in ${processingTime.toFixed(2)}ms`);
+
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'success',
+        payload: {
+          submissionId,
+          processedData,
+          immediateInsights,
+          status: 'completed'
+        },
+        metrics: {
+          processing_time_ms: processingTime
+        }
+      });
+
+    } catch (error) {
+      this.activeProcessing.delete(processId);
+
+      console.error(`❌ Mirror submission processing failed:`, error);
+
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        metrics: {
+          processing_time_ms: performance.now() - startTime
+        },
+        error: {
+          code: 'PROCESSING_FAILED',
+          message: error instanceof Error ? error.message : 'Unknown processing error',
+          details: { processId }
+        }
+      });
+    }
   }
-}
+
   // ============================================================================
-  // IMMEDIATE INSIGHT GENERATION (FIXED METHOD CALLS)
+  // INSIGHT SYNTHESIS - Entry point for mirror-server LLM requests
+  // ============================================================================
+
+  /**
+   * Synthesize insights for mirror-server requests.
+   * This is the entry point that mirror-server should call instead of
+   * accessing the LLM chat endpoint directly.
+   *
+   * Routes through the mirror module to ensure:
+   * - Separation of concerns
+   * - Context enrichment from mirror's user/group data
+   * - Consistent prompt engineering
+   * - Centralized rate limiting
+   */
+  async synthesizeInsights(
+    message: DinaUniversalMessage,
+    sessionInfo: SessionInfo
+  ): Promise<DinaResponse> {
+    const startTime = Date.now();
+
+    // Guard: module must be initialized before processing
+    if (!this.initialized) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'NOT_INITIALIZED',
+          message: 'Mirror Module not initialized',
+        },
+        metrics: { processing_time_ms: 0 },
+      });
+    }
+
+    const requestData = message.payload?.data as InsightSynthesisRequest;
+
+    if (!requestData) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Missing synthesis request data in payload',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+
+    try {
+      const result: InsightSynthesisResponse = await this.insightSynthesizer.synthesize(requestData);
+
+      return createDinaResponse({
+        request_id: message.id,
+        status: result.success ? 'success' : 'error',
+        payload: {
+          data: result.synthesis,
+          metadata: result.metadata,
+        },
+        error: result.success
+          ? undefined
+          : { code: 'SYNTHESIS_FAILED', message: result.error || 'Insight synthesis failed' },
+        metrics: {
+          processing_time_ms: result.metadata.processingTimeMs,
+          model_used: result.metadata.modelUsed,
+          tokens_generated: result.metadata.tokensGenerated,
+        },
+      });
+    } catch (error: any) {
+      console.error('❌ synthesizeInsights failed:', error.message);
+
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'SYNTHESIS_ERROR',
+          message: 'Insight synthesis encountered an internal error',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+  }
+
+  // ============================================================================
+  // IMMEDIATE INSIGHT GENERATION
   // ============================================================================
 
   private async generateImmediateInsights(
@@ -317,10 +396,9 @@ async processSubmission(
   ): Promise<QuickInsight[]> {
     try {
       console.log(`💡 Generating immediate insights for ${context.userId}...`);
-      
-      // FIXED: Use correct method signatures and existing methods
+
       const contextData = await this.contextManager.getUserContext(context.userId);
-      
+
       const insights = await this.insightGenerator.generateImmediateInsights(
         processedData,
         contextData || await this.createEmptyContext(context.userId)
@@ -395,7 +473,7 @@ async processSubmission(
   }
 
   // ============================================================================
-  // DEEP ANALYSIS QUEUEING (FIXED REDIS INTEGRATION)  
+  // DEEP ANALYSIS QUEUEING
   // ============================================================================
 
   private async queueDeepAnalysis(
@@ -416,11 +494,11 @@ async processSubmission(
       const patternDetectionMsg = createDinaMessage({
         source: { module: 'mirror', instance: 'queue' },
         target: { module: 'mirror', method: 'pattern_detection', priority: 3 },
-        payload: { 
-          data: { 
+        payload: {
+          data: {
             ...analysisData,
-            analysisType: 'pattern_detection' 
-          } 
+            analysisType: 'pattern_detection'
+          }
         },
         security: { user_id: context.userId }
       });
@@ -428,11 +506,11 @@ async processSubmission(
       const crossModalMsg = createDinaMessage({
         source: { module: 'mirror', instance: 'queue' },
         target: { module: 'mirror', method: 'cross_modal', priority: 3 },
-        payload: { 
-          data: { 
+        payload: {
+          data: {
             ...analysisData,
-            analysisType: 'cross_modal' 
-          } 
+            analysisType: 'cross_modal'
+          }
         },
         security: { user_id: context.userId }
       });
@@ -440,11 +518,11 @@ async processSubmission(
       const questionGenMsg = createDinaMessage({
         source: { module: 'mirror', instance: 'queue' },
         target: { module: 'mirror', method: 'question_generation', priority: 3 },
-        payload: { 
-          data: { 
+        payload: {
+          data: {
             ...analysisData,
-            analysisType: 'question_generation' 
-          } 
+            analysisType: 'question_generation'
+          }
         },
         security: { user_id: context.userId }
       });
@@ -468,7 +546,7 @@ async processSubmission(
 
   private async setupProcessingQueues(): Promise<void> {
     console.log('🚀 Setting up Mirror processing queues...');
-    
+
     const queueProcessors = [
       { name: 'pattern_detection', processor: this.processPatternDetection.bind(this), interval: 5000 },
       { name: 'cross_modal', processor: this.processCrossModalAnalysis.bind(this), interval: 10000 },
@@ -487,7 +565,7 @@ async processSubmission(
   private async processSpecificQueue(queueType: string, processor: Function): Promise<void> {
     try {
       const message = await this.redis.dequeueMessage(`mirror:queue:${queueType}`, 0.1);
-      
+
       if (message && message.payload?.data) {
         await processor(message.payload.data);
       }
@@ -497,14 +575,13 @@ async processSubmission(
   }
 
   // ============================================================================
-  // DEEP ANALYSIS PROCESSORS (FIXED METHOD SIGNATURES)
+  // DEEP ANALYSIS PROCESSORS
   // ============================================================================
 
   private async processPatternDetection(data: QueuedAnalysisData): Promise<void> {
     console.log(`🔍 Processing pattern detection for user ${data.userId}`);
-    
+
     try {
-      // FIXED: Use correct method signature (3 arguments)
       const contextData = await this.contextManager.getUserContext(data.userId);
       const patterns = await this.insightGenerator.detectPatterns(
         data.processedData,
@@ -514,8 +591,7 @@ async processSubmission(
 
       if (patterns.length > 0) {
         await this.storageManager.storePatterns(data.userId, patterns);
-        
-        // FIXED: Use correct notification method name
+
         await this.notificationSystem.sendPatternNotification(
           data.userId,
           patterns
@@ -530,9 +606,8 @@ async processSubmission(
 
   private async processCrossModalAnalysis(data: QueuedAnalysisData): Promise<void> {
     console.log(`🔗 Processing cross-modal analysis for user ${data.userId}`);
-    
+
     try {
-      // FIXED: Use correct method signature (3 arguments)
       const contextData = await this.contextManager.getUserContext(data.userId);
       const correlations = await this.insightGenerator.analyzeCrossModalCorrelations(
         data.processedData,
@@ -552,9 +627,8 @@ async processSubmission(
 
   private async processQuestionGeneration(data: QueuedAnalysisData): Promise<void> {
     console.log(`❓ Processing question generation for user ${data.userId}`);
-    
+
     try {
-      // FIXED: Use correct method signature (3 arguments)
       const contextData = await this.contextManager.getUserContext(data.userId);
       const questions = await this.insightGenerator.generateQuestions(
         data.processedData,
@@ -564,8 +638,7 @@ async processSubmission(
 
       if (questions.length > 0) {
         await this.storageManager.storeQuestions(data.userId, questions);
-        
-        // FIXED: Use correct notification method name
+
         await this.notificationSystem.sendQuestionNotification(
           data.userId,
           questions
@@ -584,7 +657,7 @@ async processSubmission(
 
   private validateSubmission(submission: MirrorUserSubmission): void {
     console.log('🔍 Validating Mirror submission structure...');
-    
+
     const required = ['userRegistered', 'name', 'faceAnalysis', 'iqResults', 'personalityResult'];
     for (const field of required) {
       if (!(field in submission)) {
@@ -596,7 +669,7 @@ async processSubmission(
         );
       }
     }
-    
+
     if (!submission.faceAnalysis?.detection) {
       throw new MirrorModuleError(
         'VALIDATION_FAILED',
@@ -604,7 +677,7 @@ async processSubmission(
         'high'
       );
     }
-    
+
     if (typeof submission.iqResults.iqScore !== 'number') {
       throw new MirrorModuleError(
         'VALIDATION_FAILED',
@@ -612,7 +685,7 @@ async processSubmission(
         'high'
       );
     }
-    
+
     if (!submission.personalityResult?.big5Profile) {
       throw new MirrorModuleError(
         'VALIDATION_FAILED',
@@ -620,7 +693,7 @@ async processSubmission(
         'high'
       );
     }
-    
+
     console.log('✅ Submission validation passed');
   }
 
@@ -628,19 +701,19 @@ async processSubmission(
     if (!this.performanceMetrics.has(operation)) {
       this.performanceMetrics.set(operation, []);
     }
-    
+
     const metrics = this.performanceMetrics.get(operation)!;
     metrics.push(duration);
-    
+
     if (metrics.length > 1000) {
       metrics.splice(0, metrics.length - 1000);
     }
-    
+
     this.emit('performanceMetric', { operation, duration });
   }
 
   // ============================================================================
-  // HEALTH CHECK & MONITORING (FIXED PERFORMANCE METRICS)
+  // HEALTH CHECK & MONITORING
   // ============================================================================
 
   async healthCheck(): Promise<SystemHealth> {
@@ -655,11 +728,12 @@ async processSubmission(
         this.contextManager.healthCheck(),
         this.storageManager.healthCheck(),
         this.insightGenerator.healthCheck(),
-        this.notificationSystem.healthCheck()
+        this.notificationSystem.healthCheck(),
+        this.insightSynthesizer.healthCheck()
       ]);
 
-      const healthyComponents = componentHealth.filter(result => 
-        result.status === 'fulfilled' && result.value?.status === 'healthy'
+      const healthyComponents = componentHealth.filter(result =>
+        result.status === 'fulfilled' && ((result.value as any)?.status === 'healthy' || (result.value as any)?.healthy === true)
       ).length;
 
       const totalComponents = componentHealth.length;
@@ -676,7 +750,7 @@ async processSubmission(
         }
       }
 
-      const overallStatus = 
+      const overallStatus =
         healthyComponents === totalComponents && redisHealthy ? 'healthy' :
         healthyComponents >= totalComponents * 0.7 ? 'degraded' : 'critical';
 
@@ -704,15 +778,14 @@ async processSubmission(
     }
   }
 
-  // FIXED: Performance metrics return type
   async getPerformanceMetrics(): Promise<PerformanceMetric[]> {
     const metrics: PerformanceMetric[] = [];
-    
+
     for (const [operation, values] of this.performanceMetrics.entries()) {
       if (values.length > 0) {
         metrics.push({
           operation,
-          duration: values.reduce((sum, val) => sum + val, 0) / values.length, // FIXED: Use duration instead of averageDuration
+          duration: values.reduce((sum, val) => sum + val, 0) / values.length,
           success: true,
           timestamp: new Date(),
           metadata: {
@@ -723,7 +796,7 @@ async processSubmission(
         });
       }
     }
-    
+
     return metrics;
   }
 
@@ -733,12 +806,12 @@ async processSubmission(
 
   async shutdown(): Promise<void> {
     console.log('🛑 Shutting down Mirror Module...');
-    
+
     try {
       const activeProcesses = Array.from(this.activeProcessing.keys());
       if (activeProcesses.length > 0) {
         console.log(`⏳ Waiting for ${activeProcesses.length} active processes to complete...`);
-        
+
         const timeout = setTimeout(() => {
           console.warn('⚠️ Shutdown timeout reached, forcing shutdown');
         }, 30000);
@@ -746,7 +819,7 @@ async processSubmission(
         while (this.activeProcessing.size > 0 && this.activeProcessing.size < 100) {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
-        
+
         clearTimeout(timeout);
       }
 
@@ -755,12 +828,13 @@ async processSubmission(
         this.contextManager.shutdown(),
         this.storageManager.shutdown(),
         this.insightGenerator.shutdown(),
-        this.notificationSystem.shutdown()
+        this.notificationSystem.shutdown(),
+        this.insightSynthesizer.shutdown()
       ]);
 
       this.initialized = false;
       console.log('✅ Mirror Module shutdown complete');
-      
+
     } catch (error) {
       console.error('❌ Error during Mirror Module shutdown:', error);
       throw error;

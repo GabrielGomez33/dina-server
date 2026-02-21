@@ -31,6 +31,16 @@ function getTrustLevelAccess(trustLevel: string, accessMap: Record<string, strin
   return accessMap[trustLevel] || accessMap['new'] || [];
 }
 
+// In-memory rate limit for synthesis endpoint (userId -> last request timestamp)
+const synthesisRateLimit = new Map<string, number>();
+// Periodic cleanup to prevent unbounded growth (every 5 minutes, evict entries older than 60s)
+setInterval(() => {
+  const cutoff = Date.now() - 60000;
+  for (const [key, ts] of synthesisRateLimit) {
+    if (ts < cutoff) synthesisRateLimit.delete(key);
+  }
+}, 300000).unref();
+
 export function setupAPI(app: express.Application, dina: DinaCore, basePath: string = ''): void {
   const apiPath = `${basePath}/api/v1`;
   
@@ -680,6 +690,139 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
       });
     }
   });
+
+  // ========================================================================
+  // MIRROR: Synthesize Insights (entry point for mirror-server LLM requests)
+  // ========================================================================
+  // This endpoint replaces direct LLM chat access from mirror-server.
+  // mirror-server's DINALLMConnector and ConversationAnalyzer should
+  // call this endpoint instead of /dina/api/v1/models/mistral:7b/chat.
+  // ========================================================================
+
+  apiRouter.post('/mirror/synthesize-insights',
+    async (req: AuthenticatedRequest, res: Response) => {
+      try {
+        // SECURITY: Use only authenticated user identity, never trust body
+        const userId = req.dina?.dina_key;
+
+        if (!userId) {
+          res.status(401).json({
+            success: false,
+            error: 'Authentication required',
+            code: 'NO_AUTH'
+          });
+          return;
+        }
+
+        const {
+          synthesisType,
+          groupId,
+          sessionId,
+          analysisData,
+          userContext,
+          conversationHistory,
+          options
+        } = req.body;
+
+        // Validate required fields
+        if (!synthesisType || !groupId || !analysisData) {
+          res.status(400).json({
+            success: false,
+            error: 'Missing required fields: synthesisType, groupId, analysisData',
+            code: 'INVALID_REQUEST'
+          });
+          return;
+        }
+
+        // Rate limit: max 1 successful synthesis per 30 seconds per user+group
+        // Scoped by groupId so different groups aren't blocked, and only set AFTER
+        // success so retries after failure aren't rate-limited.
+        const rateLimitKey = `mirror:synthesis:ratelimit:${userId}:${groupId}`;
+        const now = Date.now();
+        const lastSynthesis = synthesisRateLimit.get(rateLimitKey);
+        if (lastSynthesis && (now - lastSynthesis) < 30000) {
+          res.status(429).json({
+            success: false,
+            error: 'Please wait before requesting another synthesis',
+            code: 'RATE_LIMITED',
+            auth_info: { trust_level: req.dina?.trust_level }
+          });
+          return;
+        }
+
+        // Create DUMP message targeting the mirror module's synthesizeInsights
+        // NOTE: createDinaMessage wraps payload in { data: payload }, so pass flat
+        const mirrorMessage = createDinaMessage({
+          source: {
+            module: 'api',
+            version: '1.0.0'
+          },
+          target: {
+            module: 'mirror',
+            method: 'mirror_synthesize_insights',
+            priority: 7
+          },
+          security: {
+            user_id: userId,
+            session_id: req.dina?.session_id,
+            clearance: mapTrustLevelToSecurityLevel(req.dina?.trust_level || 'new'),
+            sanitized: true
+          },
+          payload: {
+            synthesisType,
+            groupId,
+            sessionId,
+            analysisData,
+            userContext,
+            conversationHistory,
+            options
+          }
+        });
+
+        // Route through DINA orchestrator -> mirror module
+        const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+
+        if (mirrorResponse.status === 'success') {
+          // The orchestrator double-wraps via createDinaResponse:
+          //   mirrorModule.synthesizeInsights() -> createDinaResponse({ payload: { data, metadata } })
+          //   orchestrator.handleIncomingMessage() -> createDinaResponse({ payload: <inner DinaResponse> })
+          // So the inner DinaResponse is at mirrorResponse.payload.data
+          // And the actual synthesis data is at innerResponse.payload.data.data
+          const innerResponse = mirrorResponse.payload?.data;
+          const synthesisData = innerResponse?.payload?.data?.data;
+          const synthesisMetadata = innerResponse?.payload?.data?.metadata;
+
+          // Only set rate limit after successful synthesis
+          synthesisRateLimit.set(rateLimitKey, Date.now());
+
+          res.json({
+            success: true,
+            data: synthesisData,
+            metadata: synthesisMetadata,
+            auth_info: {
+              trust_level: req.dina?.trust_level,
+              rate_limit_remaining: req.dina?.rate_limit_remaining
+            }
+          });
+        } else {
+          res.status(500).json({
+            success: false,
+            error: mirrorResponse.error?.message || 'Unknown synthesis error',
+            auth_info: {
+              trust_level: req.dina?.trust_level
+            }
+          });
+        }
+
+      } catch (error: any) {
+        console.error('❌ Error in mirror/synthesize-insights:', error);
+        res.status(500).json({
+          error: 'Insight synthesis failed',
+          message: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+  );
 
   // Get User Context and Patterns (trusted users only)
   apiRouter.get('/mirror/context', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
@@ -1359,6 +1502,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   console.log('  GET  /mirror/insights         - Get user insights');
   console.log('  GET  /mirror/context          - Get user context (trusted)');
   console.log('  POST /mirror/analyze          - Generate specific analysis');
+  console.log('  POST /mirror/synthesize-insights - Synthesize insights via mirror module');
   console.log('  GET  /mirror/notifications    - Get user notifications');
   console.log('  POST /mirror/notifications/:id/read - Mark notification read');
   console.log('  POST /mirror/preferences      - Update user preferences');
