@@ -66,6 +66,124 @@ interface LLMEmbedRequest {
   };
 }
 
+// ============================================================================
+// CONTEXT NORMALIZATION
+// ============================================================================
+//
+// The mirror-server sends context in a FLAT format:
+//   { groupName, groupGoal, members: string[], recentMessages, requestingUser }
+//
+// The dina-server processors expect a NESTED format:
+//   { groupInfo: { name, goal }, members: [{ username }], recentMessages }
+//
+// normalizeContext() converts either format into the canonical nested form
+// so that all downstream code (orchestrator, chatProcessor,
+// streamingChatProcessor) works correctly regardless of which format arrives.
+// ============================================================================
+
+interface NormalizedContext {
+  groupInfo: {
+    name: string;
+    description?: string;
+    goal?: string;
+  };
+  members: Array<{ username: string; role?: string }>;
+  recentMessages: Array<{ username: string; content: string; createdAt?: string; timestamp?: string }>;
+  requestingUser?: string;
+  originalContext?: any;
+}
+
+/**
+ * Normalize mirror chat context into a canonical nested structure.
+ *
+ * Handles three known input shapes:
+ * 1. Flat format from mirror-server (both WS & HTTP paths):
+ *    { groupName, groupGoal, members: ["alice", "bob"], recentMessages, requestingUser }
+ * 2. Nested format from DinaChatContext (buildDinaChatContext utility):
+ *    { groupInfo: { name, goal }, members: [{ username }], recentMessages }
+ * 3. Empty / partial context
+ *
+ * Edge cases handled:
+ * - null / undefined context
+ * - members as string[] vs object[]
+ * - Missing fields default gracefully
+ * - Timestamp field normalization (createdAt vs timestamp)
+ */
+function normalizeContext(raw: any): NormalizedContext {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      groupInfo: { name: 'Mirror Group', goal: 'General discussion' },
+      members: [],
+      recentMessages: [],
+    };
+  }
+
+  // ---- Group Info ----
+  // Priority: nested groupInfo > flat groupName/groupGoal > defaults
+  let groupName: string;
+  let groupGoal: string | undefined;
+  let groupDescription: string | undefined;
+
+  if (raw.groupInfo && typeof raw.groupInfo === 'object') {
+    // Nested format
+    groupName = raw.groupInfo.name || 'Mirror Group';
+    groupGoal = raw.groupInfo.goal || undefined;
+    groupDescription = raw.groupInfo.description || undefined;
+  } else {
+    // Flat format from mirror-server
+    groupName = raw.groupName || 'Mirror Group';
+    groupGoal = raw.groupGoal || undefined;
+    groupDescription = raw.groupDescription || undefined;
+  }
+
+  // ---- Members ----
+  // mirror-server sends members as string[] ("GabrielGomez33", "Gabriel2")
+  // DinaChatContext sends members as { username, role }[]
+  let members: Array<{ username: string; role?: string }> = [];
+  if (Array.isArray(raw.members)) {
+    members = raw.members
+      .filter((m: any) => m != null)
+      .map((m: any) => {
+        if (typeof m === 'string') {
+          return { username: m };
+        }
+        if (typeof m === 'object' && m.username) {
+          return { username: m.username, role: m.role };
+        }
+        return null;
+      })
+      .filter(Boolean) as Array<{ username: string; role?: string }>;
+  }
+
+  // ---- Recent Messages ----
+  let recentMessages: Array<{ username: string; content: string; createdAt?: string; timestamp?: string }> = [];
+  if (Array.isArray(raw.recentMessages)) {
+    recentMessages = raw.recentMessages
+      .filter((m: any) => m && m.username && m.content)
+      .map((m: any) => ({
+        username: m.username,
+        content: m.content,
+        createdAt: m.createdAt || m.created_at || m.timestamp || undefined,
+        timestamp: m.timestamp || m.createdAt || m.created_at || undefined,
+      }));
+  }
+
+  // ---- Requesting User ----
+  const requestingUser = raw.requestingUser || undefined;
+
+  return {
+    groupInfo: {
+      name: groupName,
+      description: groupDescription,
+      goal: groupGoal,
+    },
+    members,
+    recentMessages,
+    requestingUser,
+    originalContext: raw.originalContext,
+  };
+}
+
 // ================================
 // DINA CORE ORCHESTRATOR
 // ================================
@@ -247,6 +365,7 @@ private startQueueProcessors(): void {
         }
       }
     }, 1000);
+
     this.queueProcessors.set(queueName, processor);
   }
 }
@@ -670,7 +789,7 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
     const username = payload?.username || sessionInfo.userId;
     const context = payload?.context || {};
 	//WHERE WE LEFT OFF 1/28/26 8:47PM Adding request Identifier to fix mismatch in mirror server causing request to not be found
-	//Wrong id returned. 
+	//Wrong id returned.
     const requestIdentifier = payload.requestId;
     console.log(`[SRC/CORE/ORCHESTRATOR/index.ts -> processMirrorChat()] contents of requestIdentifier -> ${requestIdentifier}`);
 
@@ -680,8 +799,14 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
 
     console.log(`💬 Mirror Chat: Processing query from ${username} in group ${groupId}`);
 
-    // Build system prompt with context
-    const systemPrompt = this.buildMirrorChatSystemPrompt(context, username);
+    // FIX: Normalize context to handle both flat (mirror-server) and nested formats.
+    // Before this fix, context.groupInfo.name was always undefined because the
+    // mirror-server sends context.groupName (flat), causing fallback to defaults.
+    const normalizedCtx = normalizeContext(context);
+    console.log(`[SRC/CORE/ORCHESTRATOR/index.ts -> processMirrorChat()] Normalized context -> group="${normalizedCtx.groupInfo.name}", goal="${normalizedCtx.groupInfo.goal}", messages=${normalizedCtx.recentMessages.length}, members=${normalizedCtx.members.length}`);
+
+    // Build system prompt with normalized context
+    const systemPrompt = this.buildMirrorChatSystemPrompt(normalizedCtx, username);
 
     try {
       // Generate response using LLM
@@ -715,32 +840,62 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
     }
   }
 
-  private buildMirrorChatSystemPrompt(context: any, username: string): string {
-    const groupName = context?.groupInfo?.name || 'Mirror Group';
-    const groupGoal = context?.groupInfo?.goal || 'General discussion';
-    const recentMessages = context?.recentMessages || [];
+  /**
+   * Build the system prompt for @Dina chat responses.
+   *
+   * FIX: This method now receives a NormalizedContext (always nested format)
+   *      from processMirrorChat(). Previously it read context.groupInfo.name
+   *      directly from the raw payload, which used flat fields (groupName),
+   *      causing fallback to "Mirror Group" / "General discussion".
+   *
+   * The system prompt is now structured with explicit sections that help
+   * the model understand it has full conversation history access and should
+   * use it when responding to contextual questions.
+   */
+  private buildMirrorChatSystemPrompt(ctx: NormalizedContext, username: string): string {
+    const groupName = ctx.groupInfo.name;
+    const groupGoal = ctx.groupInfo.goal || 'General discussion';
+    const recentMessages = ctx.recentMessages || [];
 
+    // Build conversation history with timestamps for better temporal awareness
     const recentMessagesText = recentMessages
-      .slice(-10)
-      .map((m: any) => `${m.username}: ${m.content?.substring(0, 200)}`)
-      .join('\n') || 'No recent messages';
+      .slice(-15) // Include up to 15 recent messages for richer context
+      .map((m: any) => {
+        const timestamp = m.timestamp || m.createdAt;
+        const timeStr = timestamp ? ` [${new Date(timestamp).toLocaleString()}]` : '';
+        return `${m.username}${timeStr}: ${(m.content || '').substring(0, 300)}`;
+      })
+      .join('\n') || 'No recent messages available.';
 
-    return `You are Dina, an intelligent and friendly AI assistant integrated into Mirror, a group chat application focused on personal growth and meaningful connections.
+    // Build members list
+    const membersText = ctx.members.length > 0
+      ? ctx.members.map(m => m.username).join(', ')
+      : 'Unknown';
 
-CONTEXT:
-- Group: "${groupName}"
-- Group Goal: "${groupGoal}"
+    return `You are Dina, an intelligent and empathetic AI assistant integrated into Mirror, a group chat application focused on personal growth, mental wellness, and meaningful connections.
+
+IMPORTANT: You have FULL ACCESS to the conversation history shown below. When users ask about previous messages, topics discussed, or conversation patterns, you MUST reference and analyze this history directly. Do NOT say you cannot access conversation history — it is provided to you right here.
+
+GROUP CONTEXT:
+- Group Name: "${groupName}"
+- Group Goal: ${groupGoal}
+- Members: ${membersText}
 - User asking: ${username}
 
-RECENT CONVERSATION:
+CONVERSATION HISTORY (most recent messages in this group):
 ${recentMessagesText}
 
 GUIDELINES:
-- Be helpful, concise, and friendly
-- Stay relevant to the group context and conversation
+- Reference the conversation history above when answering questions about what was discussed
+- Be helpful, concise, and empathetic
+- Stay relevant to the group context and ongoing conversation
 - Provide actionable insights when appropriate
 - Keep responses under 500 words unless more detail is necessary
-- Use a warm but professional tone`;
+- Use a warm but professional tone
+- Address users by name when relevant
+- If asked about conversation topics or patterns, analyze the history above
+- Never claim you cannot see or access the conversation — you can see it above
+- Respect privacy and maintain a supportive atmosphere`;
   }
 
   async getEnhancedSystemStatus(): Promise<Record<string, any>> {

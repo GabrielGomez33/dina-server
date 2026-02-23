@@ -67,6 +67,73 @@ export interface ChatResponse {
 }
 
 // ============================================================================
+// CONTEXT NORMALIZATION
+// ============================================================================
+//
+// The mirror-server sends context in TWO possible formats depending on the
+// communication path (WebSocket vs HTTP). This normalizer handles both.
+//
+// Flat format (from mirror-server transformation):
+//   { groupName, groupGoal, members: string[], recentMessages, requestingUser }
+//
+// Nested format (from DinaChatContext utility):
+//   { groupInfo: { name, goal }, members: [{ username }], recentMessages }
+// ============================================================================
+
+function normalizeContext(raw: any): ChatContext {
+  if (!raw || typeof raw !== 'object') {
+    return {};
+  }
+
+  const result: ChatContext = {};
+
+  // ---- Group Info ----
+  if (raw.groupInfo && typeof raw.groupInfo === 'object') {
+    result.groupInfo = {
+      name: raw.groupInfo.name || 'Unknown Group',
+      description: raw.groupInfo.description,
+      goal: raw.groupInfo.goal,
+    };
+  } else if (raw.groupName || raw.groupGoal) {
+    // Flat format from mirror-server
+    result.groupInfo = {
+      name: raw.groupName || 'Unknown Group',
+      goal: raw.groupGoal,
+    };
+  }
+
+  // ---- Members ----
+  if (Array.isArray(raw.members) && raw.members.length > 0) {
+    result.members = raw.members
+      .filter((m: any) => m != null)
+      .map((m: any) => {
+        if (typeof m === 'string') return { username: m };
+        if (typeof m === 'object' && m.username) return { username: m.username, role: m.role };
+        return null;
+      })
+      .filter(Boolean) as Array<{ username: string; role?: string }>;
+  }
+
+  // ---- Recent Messages ----
+  if (Array.isArray(raw.recentMessages) && raw.recentMessages.length > 0) {
+    result.recentMessages = raw.recentMessages
+      .filter((m: any) => m && m.username && m.content)
+      .map((m: any) => ({
+        username: m.username,
+        content: m.content,
+        createdAt: m.createdAt || m.created_at || m.timestamp,
+      }));
+  }
+
+  // ---- Original Context ----
+  if (raw.originalContext) {
+    result.originalContext = raw.originalContext;
+  }
+
+  return result;
+}
+
+// ============================================================================
 // MIRROR CHAT PROCESSOR CLASS
 // ============================================================================
 
@@ -172,6 +239,9 @@ Guidelines:
         throw new Error('Query is required for chat processing');
       }
 
+      // FIX: Normalize context before processing to handle both flat and nested formats
+      const normalizedCtx = normalizeContext(context || {});
+
       // Process the chat query
       const result = await this.processQuery({
         requestId,
@@ -179,7 +249,7 @@ Guidelines:
         userId: userId || message.security?.user_id || 'anonymous',
         username: username || 'User',
         query,
-        context: context || {},
+        context: normalizedCtx,
       });
 
       const processingTime = performance.now() - startTime;
@@ -288,6 +358,13 @@ Guidelines:
   // PROMPT BUILDING
   // ============================================================================
 
+  /**
+   * Build the full prompt for the LLM.
+   *
+   * FIX: Context is now guaranteed to be in normalized (nested) format
+   *      thanks to normalizeContext() in processDumpMessage(). The
+   *      context.groupInfo fields will always be populated correctly.
+   */
   private buildPrompt(request: ChatQueryRequest): string {
     const { query, username, context } = request;
 

@@ -58,6 +58,66 @@ export interface StreamingConfig {
 type StreamCallback = (chunk: string, isDone: boolean, metadata?: any) => void;
 
 // ============================================================================
+// CONTEXT NORMALIZATION
+// ============================================================================
+//
+// Identical to the normalizer in chatProcessor.ts. Handles both flat format
+// from mirror-server and nested format from DinaChatContext utility.
+// ============================================================================
+
+function normalizeContext(raw: any): ChatContext {
+  if (!raw || typeof raw !== 'object') {
+    return {};
+  }
+
+  const result: ChatContext = {};
+
+  // ---- Group Info ----
+  if (raw.groupInfo && typeof raw.groupInfo === 'object') {
+    result.groupInfo = {
+      name: raw.groupInfo.name || 'Unknown Group',
+      description: raw.groupInfo.description,
+      goal: raw.groupInfo.goal,
+    };
+  } else if (raw.groupName || raw.groupGoal) {
+    result.groupInfo = {
+      name: raw.groupName || 'Unknown Group',
+      goal: raw.groupGoal,
+    };
+  }
+
+  // ---- Members ----
+  if (Array.isArray(raw.members) && raw.members.length > 0) {
+    result.members = raw.members
+      .filter((m: any) => m != null)
+      .map((m: any) => {
+        if (typeof m === 'string') return { username: m };
+        if (typeof m === 'object' && m.username) return { username: m.username, role: m.role };
+        return null;
+      })
+      .filter(Boolean) as Array<{ username: string; role?: string }>;
+  }
+
+  // ---- Recent Messages ----
+  if (Array.isArray(raw.recentMessages) && raw.recentMessages.length > 0) {
+    result.recentMessages = raw.recentMessages
+      .filter((m: any) => m && m.username && m.content)
+      .map((m: any) => ({
+        username: m.username,
+        content: m.content,
+        createdAt: m.createdAt || m.created_at || m.timestamp,
+      }));
+  }
+
+  // ---- Original Context ----
+  if (raw.originalContext) {
+    result.originalContext = raw.originalContext;
+  }
+
+  return result;
+}
+
+// ============================================================================
 // STREAMING CHAT PROCESSOR CLASS
 // ============================================================================
 
@@ -136,6 +196,9 @@ Respond naturally as if you're part of the conversation.`;
         throw new Error('Query is required');
       }
 
+      // FIX: Normalize context before processing to handle both flat and nested formats
+      const normalizedCtx = normalizeContext(context || {});
+
       // Process with streaming support
       const result = await this.processWithStreaming({
         requestId,
@@ -143,7 +206,7 @@ Respond naturally as if you're part of the conversation.`;
         userId: userId || message.security?.user_id || 'anonymous',
         username: username || 'User',
         query,
-        context: context || {},
+        context: normalizedCtx,
         streaming: streaming && this.streamingConfig.enabled,
       }, onStream);
 
@@ -354,6 +417,13 @@ Respond naturally as if you're part of the conversation.`;
   // PROMPT BUILDING
   // ============================================================================
 
+  /**
+   * Build the full prompt for the LLM.
+   *
+   * FIX: Context is now guaranteed to be in normalized (nested) format
+   *      thanks to normalizeContext() in processDumpMessage(). The
+   *      context.groupInfo fields will always be populated correctly.
+   */
   private buildPrompt(request: StreamingChatRequest): string {
     const { query, username, context } = request;
 

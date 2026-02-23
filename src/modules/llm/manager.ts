@@ -4,13 +4,13 @@ import { performance } from 'perf_hooks';
 import { database } from '../../config/database/db';
 import { redisManager } from '../../config/redis';
 import { DinaUniversalMessage } from '../../core/protocol'; // FIXED: Corrected import path
-import { 
-  llmIntelligenceEngine, 
-  contextMemorySystem, 
+import {
+  llmIntelligenceEngine,
+  contextMemorySystem,
   performanceOptimizer, // FIXED: Added missing import
-  ModelType, 
-  ComplexityScore, 
-  LLMResponse 
+  ModelType,
+  ComplexityScore,
+  LLMResponse
 } from './intelligence';
 
 interface OllamaResponse {
@@ -30,6 +30,20 @@ interface OllamaEmbeddingResponse {
   model: string;
   embeddings: number[];
   total_duration?: number;
+}
+
+// ============================================================================
+// OLLAMA GENERATE OPTIONS
+// Configurable options passed through to the Ollama API.
+// ============================================================================
+
+interface OllamaGenerateOptions {
+  /** System prompt providing persona and context instructions to the model */
+  system?: string;
+  /** Maximum number of tokens to predict (Ollama's num_predict) */
+  maxTokens?: number;
+  /** Sampling temperature (0.0 - 1.0). Lower = more deterministic. */
+  temperature?: number;
 }
 
 export class OllamaClient {
@@ -57,101 +71,136 @@ export class OllamaClient {
     }
   }
 
-async generate(prompt: string, model: string): Promise<OllamaResponse> {
-  console.log(`📡 Sending request to Ollama for model ${model}, prompt: "${prompt.substring(0, 50)}..."`);
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      console.error(`⏰ Ollama generate timeout for model ${model}`);
-      controller.abort();
-    }, 600000); // 600 second timeout
+  /**
+   * Generate a response from Ollama.
+   *
+   * @param prompt  - The user-facing prompt / query text
+   * @param model   - Ollama model identifier (e.g. "mistral:7b")
+   * @param opts    - Optional: system prompt, maxTokens, temperature
+   *
+   * FIX: Previously this method accepted only (prompt, model) and hardcoded
+   *      num_predict=500 / temperature=0.7 with NO system prompt support.
+   *      The Ollama /api/generate endpoint accepts a "system" field that
+   *      sets the model's system-level instructions. This was never used,
+   *      causing Dina to respond without any persona or conversation context.
+   */
+  async generate(prompt: string, model: string, opts?: OllamaGenerateOptions): Promise<OllamaResponse> {
+    const hasSystem = opts?.system && opts.system.trim().length > 0;
+    console.log(`📡 Sending request to Ollama for model ${model}, prompt: "${prompt.substring(0, 50)}..."`);
+    if (hasSystem) {
+      console.log(`📡 System prompt provided (${opts!.system!.length} chars)`);
+    }
 
-    const response = await fetch(`${this.baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        model, 
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.error(`⏰ Ollama generate timeout for model ${model}`);
+        controller.abort();
+      }, 600000); // 600 second timeout
+
+      // Build the request body. Include "system" only when provided so that
+      // requests without a system prompt behave identically to before.
+      const requestBody: Record<string, any> = {
+        model,
         prompt,
-        stream: false,  // This actually still returns streaming format!
+        stream: false,
         options: {
-          num_predict: 500,
-          temperature: 0.7
+          num_predict: opts?.maxTokens || 500,
+          temperature: opts?.temperature ?? 0.7
         }
-      }),
-      signal: controller.signal
-    });
+      };
 
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Ollama HTTP ${response.status}: ${response.statusText} - ${errorText}`);
-    }
-    
-    // THE FIX: Ollama returns NDJSON (newline-delimited JSON) even with stream:false
-    const responseText = await response.text();
-    console.log(`🔍 OLLAMA DEBUG: Raw response length: ${responseText.length}, first 100 chars: ${responseText.substring(0, 100)}`);
-    
-    // Parse NDJSON: Split by newlines and parse each JSON object
-    const lines = responseText.trim().split('\n').filter(line => line.trim());
-    console.log(`🔍 OLLAMA DEBUG: Found ${lines.length} JSON lines`);
-    
-    if (lines.length === 0) {
-      throw new Error('Empty response from Ollama');
-    }
-    
-    // Ollama sends multiple JSON objects, the last one has done:true and the complete response
-    let finalResponse: any = null;
-    let accumulatedResponse = '';
-    
-    for (const line of lines) {
-      try {
-        const jsonObj = JSON.parse(line);
-        console.log(`🔍 OLLAMA DEBUG: Parsed JSON with keys: ${Object.keys(jsonObj).join(', ')}`);
-        
-        // Accumulate response parts
-        if (jsonObj.response) {
-          accumulatedResponse += jsonObj.response;
-        }
-        
-        // The final object has done:true
-        if (jsonObj.done === true) {
-          finalResponse = jsonObj;
-          // Set the complete accumulated response
-          finalResponse.response = accumulatedResponse;
-          break;
-        }
-      } catch (parseError) {
-        console.error(`🔍 OLLAMA DEBUG: Failed to parse JSON line: ${line.substring(0, 100)}`);
-        console.error(`🔍 OLLAMA DEBUG: Parse error: ${parseError}`);
+      // FIX: Pass the system prompt to Ollama when available.
+      // This is the core fix — the system prompt carries Dina's persona,
+      // group context, and conversation history that the model MUST see.
+      if (hasSystem) {
+        requestBody.system = opts!.system;
       }
-    }
-    
-    if (!finalResponse) {
-      // Fallback: use the last valid JSON object
-      const lastLine = lines[lines.length - 1];
-      finalResponse = JSON.parse(lastLine);
-      finalResponse.response = accumulatedResponse || finalResponse.response;
-    }
-    
-    console.log(`✅ Received Ollama response for model ${model}: "${(finalResponse.response || '').substring(0, 50)}..."`);
-    console.log(`🔍 OLLAMA DEBUG: Final response keys: ${Object.keys(finalResponse).join(', ')}`);
-    
-    return finalResponse as OllamaResponse;
-    
-  } catch (error) {
-    console.error(`❌ Ollama generate error: ${error}`);
-    //console.error(`❌ Error type: ${error.constructor.name}`);
-    if (error instanceof SyntaxError) {
-      console.error(`❌ This is a JSON parsing error - Ollama is returning malformed JSON`);
-    }
-    throw error;
-  }
-}
 
+      const response = await fetch(`${this.baseUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Ollama HTTP ${response.status}: ${response.statusText} - ${errorText}`);
+      }
+
+      // THE FIX: Ollama returns NDJSON (newline-delimited JSON) even with stream:false
+      const responseText = await response.text();
+      console.log(`🔍 OLLAMA DEBUG: Raw response length: ${responseText.length}, first 100 chars: ${responseText.substring(0, 100)}`);
+
+      // Parse NDJSON: Split by newlines and parse each JSON object
+      const lines = responseText.trim().split('\n').filter(line => line.trim());
+      console.log(`🔍 OLLAMA DEBUG: Found ${lines.length} JSON lines`);
+
+      if (lines.length === 0) {
+        throw new Error('Empty response from Ollama');
+      }
+
+      // Ollama sends multiple JSON objects, the last one has done:true and the complete response
+      let finalResponse: any = null;
+      let accumulatedResponse = '';
+
+      for (const line of lines) {
+        try {
+          const jsonObj = JSON.parse(line);
+          console.log(`🔍 OLLAMA DEBUG: Parsed JSON with keys: ${Object.keys(jsonObj).join(', ')}`);
+
+          // Accumulate response parts
+          if (jsonObj.response) {
+            accumulatedResponse += jsonObj.response;
+          }
+
+          // The final object has done:true
+          if (jsonObj.done === true) {
+            finalResponse = jsonObj;
+            // Set the complete accumulated response
+            finalResponse.response = accumulatedResponse;
+            break;
+          }
+        } catch (parseError) {
+          console.error(`🔍 OLLAMA DEBUG: Failed to parse JSON line: ${line.substring(0, 100)}`);
+          console.error(`🔍 OLLAMA DEBUG: Parse error: ${parseError}`);
+        }
+      }
+
+      if (!finalResponse) {
+        // Fallback: use the last valid JSON object
+        const lastLine = lines[lines.length - 1];
+        finalResponse = JSON.parse(lastLine);
+        finalResponse.response = accumulatedResponse || finalResponse.response;
+      }
+
+      console.log(`✅ Received Ollama response for model ${model}: "${(finalResponse.response || '').substring(0, 50)}..."`);
+      console.log(`🔍 OLLAMA DEBUG: Final response keys: ${Object.keys(finalResponse).join(', ')}`);
+
+      return finalResponse as OllamaResponse;
+
+    } catch (error) {
+      console.error(`❌ Ollama generate error: ${error}`);
+      //console.error(`❌ Error type: ${error.constructor.name}`);
+      if (error instanceof SyntaxError) {
+        console.error(`❌ This is a JSON parsing error - Ollama is returning malformed JSON`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Stream a response from Ollama.
+   *
+   * FIX: Added system prompt support, matching the generate() fix.
+   */
   async *generateStream(prompt: string, model: string = 'mistral:7b', options?: {
     maxTokens?: number;
     temperature?: number;
+    system?: string;
   }): AsyncGenerator<{ content: string; done: boolean }> {
     console.log(`📡 Starting streaming generation for model ${model}`);
 
@@ -162,18 +211,25 @@ async generate(prompt: string, model: string): Promise<OllamaResponse> {
     }, 300000);
 
     try {
+      const requestBody: Record<string, any> = {
+        model,
+        prompt,
+        stream: true,
+        options: {
+          num_predict: options?.maxTokens || 1000,
+          temperature: options?.temperature || 0.7
+        }
+      };
+
+      // FIX: Pass system prompt for streaming as well
+      if (options?.system && options.system.trim().length > 0) {
+        requestBody.system = options.system;
+      }
+
       const response = await fetch(`${this.baseUrl}/api/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          prompt,
-          stream: true,
-          options: {
-            num_predict: options?.maxTokens || 1000,
-            temperature: options?.temperature || 0.7
-          }
-        }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal
       });
 
@@ -293,7 +349,7 @@ export class DinaLLMManager {
 		  // Try double-nested access (for backward compatibility)
 		  if (payload.data && payload.data.data && payload.data.data[field] !== undefined) return payload.data.data[field];
 		  return undefined;
- 	};	
+ 	};
 
     try {
       const startTime = performance.now();
@@ -303,13 +359,13 @@ export class DinaLLMManager {
         case 'llm_generate':
               const query = extractPayloadData(message.payload, 'query');
               const options = extractPayloadData(message.payload, 'options') || {};
-              
+
               if (!query) {
                 console.error('❌ Missing query in llm_generate request');
                 console.error('Payload structure:', JSON.stringify(message.payload, null, 2));
                 return null;
               }
-              
+
               console.log(`🧠 Processing query: "${query.substring(0, 50)}..."`);
               response = await this.generate(query, options);
               break;
@@ -322,13 +378,13 @@ export class DinaLLMManager {
         case 'llm_embed':
               const text = extractPayloadData(message.payload, 'text');
               const embedOptions = extractPayloadData(message.payload, 'options') || {};
-              
+
               if (!text) {
                 console.error('❌ Missing text in llm_embed request');
                 console.error('Payload structure:', JSON.stringify(message.payload, null, 2));
                 return null;
               }
-              
+
               console.log(`🔢 Processing embed for text: "${text.substring(0, 50)}..."`);
               response = await this.embed(text, embedOptions);
               break;
@@ -358,19 +414,46 @@ export class DinaLLMManager {
     }
   }
 
+  /**
+   * Generate a response using Ollama.
+   *
+   * FIX: Now forwards system_prompt, max_tokens, and temperature from
+   *      the options object to OllamaClient.generate(). Previously these
+   *      were silently discarded, causing the model to receive only the
+   *      bare user query with no system context.
+   */
   // FIXED: Made public
   public async generate(query: string, options?: any): Promise<LLMResponse> {
     console.log(`[SRC/MODULES/LLM/manager.ts -> generate()] 🧠 Generating response for query: "${query.substring(0, 50)}..."`);
     console.log(`[SRC/MODULES/LLM/manager.ts -> generate()] Contents of options param -> ${JSON.stringify(options)}`);
     const startTime = performance.now();
-    
+
     const complexity = await llmIntelligenceEngine.analyzeQuery(query, options?.context);
     const model = options?.model_preference && this.availableModels.includes(options.model_preference)
       ? options.model_preference
       : complexity.recommendedModel;
-    
-    const ollamaResponse = await this.ollama.generate(query, model);
-    
+
+    // FIX: Forward system_prompt, max_tokens, and temperature to OllamaClient.
+    // Before this fix, only (query, model) was passed — the system prompt
+    // carrying Dina's persona, group context, and conversation history was
+    // silently dropped, causing the model to respond without any context.
+    const ollamaOpts: OllamaGenerateOptions = {};
+
+    if (options?.system_prompt) {
+      ollamaOpts.system = options.system_prompt;
+      console.log(`[SRC/MODULES/LLM/manager.ts -> generate()] 📋 Forwarding system_prompt to Ollama (${options.system_prompt.length} chars)`);
+    }
+
+    if (options?.max_tokens) {
+      ollamaOpts.maxTokens = options.max_tokens;
+    }
+
+    if (options?.temperature !== undefined) {
+      ollamaOpts.temperature = options.temperature;
+    }
+
+    const ollamaResponse = await this.ollama.generate(query, model, ollamaOpts);
+
     const response: LLMResponse = {
       id: `llm-res-${uuidv4()}`,
       sourceRequestId: options.requestId,
@@ -393,7 +476,7 @@ export class DinaLLMManager {
         cached: false
       }
     };
-    
+
     if (options?.include_context) {
       await contextMemorySystem.updateContext(
         options.user_id || 'anonymous',
@@ -402,7 +485,7 @@ export class DinaLLMManager {
         ollamaResponse.response
       );
     }
-    
+
     console.log(`✅ Generated response: id=${response.id}, model=${model}, sourceRequestId=${options.requestId}`);
     return response;
   }
@@ -411,15 +494,15 @@ export class DinaLLMManager {
   public async generateCode(query: string, options?: any): Promise<LLMResponse> {
     console.log(`💻 Generating code for query: "${query.substring(0, 50)}..."`);
     const startTime = performance.now();
-    
+
     const complexity = await llmIntelligenceEngine.analyzeQuery(query, options?.context);
     const model = options?.model_preference && this.availableModels.includes(options.model_preference)
       ? options.model_preference
       : complexity.recommendedModel;
-    
+
     const prompt = `Generate code for the following request: ${query}`;
     const ollamaResponse = await this.ollama.generate(prompt, model);
-    
+
     const response: LLMResponse = {
       id: `llm-code-${uuidv4()}`,
       model,
@@ -441,7 +524,7 @@ export class DinaLLMManager {
         cached: false
       }
     };
-    
+
     console.log(`✅ Generated code response: id=${response.id}, model=${model}`);
     return response;
   }
@@ -450,15 +533,15 @@ export class DinaLLMManager {
   public async analyze(query: string, options?: any): Promise<LLMResponse> {
     console.log(`🔍 Analyzing query: "${query.substring(0, 50)}..."`);
     const startTime = performance.now();
-    
+
     const complexity = await llmIntelligenceEngine.analyzeQuery(query, options?.context);
     const model = options?.model_preference && this.availableModels.includes(options.model_preference)
       ? options.model_preference
       : complexity.recommendedModel;
-    
+
     const prompt = `Analyze and provide detailed insights for: ${query}`;
     const ollamaResponse = await this.ollama.generate(prompt, model);
-    
+
     const response: LLMResponse = {
       id: `llm-analysis-${uuidv4()}`,
       model,
@@ -480,7 +563,7 @@ export class DinaLLMManager {
         cached: false
       }
     };
-    
+
     console.log(`✅ Analysis response: id=${response.id}, model=${model}`);
     return response;
   }
@@ -488,28 +571,28 @@ export class DinaLLMManager {
 public async embed(text: string, options?: any): Promise<LLMResponse> {
   console.log(`🔢 MANAGER: Starting embed method for text: "${text.substring(0, 50)}..."`);
   const startTime = performance.now();
-  
+
   try {
     // ADD DEBUG LOG:
     console.log(`🔍 MANAGER DEBUG: About to call intelligence engine analyzeQuery`);
-    
+
     const complexity = await llmIntelligenceEngine.analyzeQuery(text, options?.context);
-    
+
     // ADD DEBUG LOG:
     console.log(`🔍 MANAGER DEBUG: Intelligence analysis complete: level=${complexity.level}`);
-    
+
     const model = options?.model_preference && this.availableModels.includes(options.model_preference)
       ? options.model_preference
       : 'mxbai-embed-large';
-    
+
     // ADD DEBUG LOG:
     console.log(`🔍 MANAGER DEBUG: Model selected: ${model}, about to call ollama.embed()`);
-    
+
     const embeddingResponse = await this.ollama.embed(text, model);
-    
+
     // ADD DEBUG LOG:
     console.log(`🔍 MANAGER DEBUG: Ollama embed complete, building response object`);
-    
+
     const response: LLMResponse = {
       id: `llm-embed-${uuidv4()}`,
       model,
@@ -531,10 +614,10 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
         cached: false
       }
     };
-    
+
     console.log(`✅ MANAGER: Embedding response built: id=${response.id}, model=${model}, dimensions=${embeddingResponse.embeddings.length}`);
     return response;
-    
+
   } catch (error) {
     console.error(`❌ MANAGER ERROR in embed method: ${error}`);
     throw error;
@@ -544,11 +627,11 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
   // FIXED: Added missing methods
   public async getSystemStatus(): Promise<Record<string, any>> {
     console.log('📋 Fetching LLM system status...');
-    
+
     const intelligenceStats = await llmIntelligenceEngine.getIntelligenceStats();
     const performanceStats = performanceOptimizer.getPerformanceStats();
     const contextStats = contextMemorySystem.getContextStats();
-    
+
     return {
       ollamaHealthy: this._isInitialized,
       availableModels: this.availableModels,
@@ -578,6 +661,12 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
     console.log('✅ LLM Manager shutdown complete');
   }
 
+  /**
+   * Stream a response from the LLM.
+   *
+   * FIX: Now forwards system_prompt to OllamaClient.generateStream()
+   *      so that streaming responses also receive persona/context.
+   */
   public async *generateStream(query: string, options?: any): AsyncGenerator<{ content: string; done: boolean }> {
     const model = options?.model || 'mistral:7b';
     let prompt = query;
@@ -587,7 +676,8 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
     console.log(`🔄 Starting stream generation with model ${model}`);
     for await (const chunk of this.ollama.generateStream(prompt, model, {
       maxTokens: options?.maxTokens || 1000,
-      temperature: options?.temperature || 0.7
+      temperature: options?.temperature || 0.7,
+      system: options?.system_prompt
     })) {
       yield chunk;
     }
@@ -617,15 +707,7 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
         averageResponseTime: 2500,
         memoryUsage: 40000
       },
-      'mxbai-embed-large': {
-        maxTokens: 512,
-        strengthAreas: ['embeddings', 'semantic search'],
-        weaknesses: ['text generation'],
-        averageResponseTime: 100,
-        memoryUsage: 1000
-      }
     };
-    console.log(`✅ Model capabilities: ${Object.keys(capabilities).join(', ')}`);
     return capabilities;
   }
 }
