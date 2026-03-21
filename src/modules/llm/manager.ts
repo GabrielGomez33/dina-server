@@ -104,6 +104,7 @@ export class OllamaClient {
         model,
         prompt,
         stream: false,
+        keep_alive: '24h', // Keep model loaded in GPU memory to avoid 150s+ cold starts
         options: {
           num_predict: opts?.maxTokens || 500,
           temperature: opts?.temperature ?? 0.7
@@ -215,6 +216,7 @@ export class OllamaClient {
         model,
         prompt,
         stream: true,
+        keep_alive: '24h',
         options: {
           num_predict: options?.maxTokens || 1000,
           temperature: options?.temperature || 0.7
@@ -292,7 +294,7 @@ export class OllamaClient {
       const response = await fetch(`${this.baseUrl}/api/embed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, input }),
+        body: JSON.stringify({ model, input, keep_alive: '24h' }),
         signal: AbortSignal.timeout(this.timeoutMs)
       });
       // FIXED: Proper type casting
@@ -312,6 +314,11 @@ export class OllamaClient {
 }
 
 export class DinaLLMManager {
+  // Shared warmup promise — all instances in this process await the same
+  // warmup work.  Unlike a boolean flag this guarantees the warmup actually
+  // finishes before any instance considers it "done", and only one warmup
+  // ever runs per process.
+  private static _warmupPromise: Promise<void> | null = null;
   private ollama: OllamaClient;
   private availableModels: string[] = [];
   private _isInitialized: boolean = false;
@@ -327,10 +334,70 @@ export class DinaLLMManager {
       this.availableModels = await this.ollama.listModels();
       this._isInitialized = true;
       console.log('✅ DinaLLMManager initialized successfully');
+
+      // Warm up primary models so they're loaded in GPU memory and ready for requests.
+      // This eliminates the 150-160s cold start on the first TruthStream analysis.
+      this.warmupModels().catch(err => {
+        console.warn(`⚠️ Model warmup failed (non-fatal): ${err.message || err}`);
+      });
     } catch (error) {
       console.error(`❌ Failed to initialize DinaLLMManager: ${error}`);
       this._isInitialized = false;
       throw error;
+    }
+  }
+
+  /**
+   * Pre-load models into GPU memory by sending a minimal prompt.
+   * Runs in the background (fire-and-forget) so it doesn't block startup.
+   * The keep_alive: "24h" in generate() ensures they stay loaded.
+   */
+  private async warmupModels(): Promise<void> {
+    // If another instance already started warming, just wait for it.
+    if (DinaLLMManager._warmupPromise) {
+      return DinaLLMManager._warmupPromise;
+    }
+
+    // Skip if this instance has no models (shouldn't happen, but be safe).
+    if (this.availableModels.length === 0) {
+      console.log('⏩ Skipping warmup — no available models on this instance');
+      return;
+    }
+
+    // Capture the promise so other instances can await it instead of re-running.
+    DinaLLMManager._warmupPromise = this.doWarmup();
+    return DinaLLMManager._warmupPromise;
+  }
+
+  private async doWarmup(): Promise<void> {
+    const modelsToWarm = ['qwen2.5:3b', 'mistral:7b', 'mxbai-embed-large'];
+    const available = this.availableModels;
+    console.log(`🔥 Starting warmup. Available models: [${available.join(', ')}]`);
+    console.log(`🔥 Models to warm: [${modelsToWarm.join(', ')}]`);
+
+    for (const model of modelsToWarm) {
+      const modelBase = model.split(':')[0];
+      if (!available.some(m => m === model || m.startsWith(modelBase))) {
+        console.log(`⏩ Skipping warmup for ${model} (not found in available models)`);
+        continue;
+      }
+
+      try {
+        console.log(`🔥 Warming up model: ${model}...`);
+        const startTime = Date.now();
+
+        if (model.includes('embed')) {
+          await this.ollama.embed('warmup', model);
+        } else {
+          // Minimal prompt — just enough to load the model into GPU memory
+          await this.ollama.generate('Hi', model, { maxTokens: 1, temperature: 0 });
+        }
+
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`✅ Model ${model} warmed up in ${elapsed}s — ready for requests`);
+      } catch (err: any) {
+        console.warn(`⚠️ Failed to warm up ${model}: ${err.message || err}`);
+      }
     }
   }
 
@@ -686,6 +753,13 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
   async getModelCapabilities(): Promise<Record<string, any>> {
     console.log('📋 Fetching model capabilities...');
     const capabilities: Record<string, any> = {
+      [ModelType.QWEN25_3B]: {
+        maxTokens: 32000,
+        strengthAreas: ['structured JSON output', 'summarization', 'fast inference'],
+        weaknesses: ['complex reasoning', 'long-form creative writing'],
+        averageResponseTime: 50,
+        memoryUsage: 1900
+      },
       [ModelType.MISTRAL_7B]: {
         maxTokens: 32000,
         strengthAreas: ['general knowledge', 'text generation'],

@@ -2,8 +2,13 @@
 /**
  * DINA MIRROR MODULE - CORE IMPLEMENTATION
  *
- * ENHANCED: Integrated InsightSynthesizer for routing all mirror-server
- * LLM requests through the mirror module instead of direct chat access.
+ * ENHANCED: Integrated InsightSynthesizer and TruthStreamSynthesizer for routing
+ * all mirror-server LLM requests through the mirror module instead of direct chat access.
+ *
+ * TruthStream integration follows the same pattern as InsightSynthesizer:
+ * - Initialized with the module's own DinaLLMManager instance
+ * - Invoked via DUMP messages routed through the orchestrator
+ * - DinaCore.llmManager stays private
  */
 
 import { EventEmitter } from 'events';
@@ -29,6 +34,14 @@ import { MirrorStorageManager } from './managers/storageManager';
 import { MirrorInsightGenerator } from './processors/insightGenerator';
 import { MirrorNotificationSystem } from './systems/notificationSystem';
 import { InsightSynthesizer, InsightSynthesisRequest, InsightSynthesisResponse } from './processors/insightSynthesizer';
+import { TruthStreamSynthesizer } from './processors/truthStreamSynthesizer';
+import { truthStreamManager } from './truthStreamManager';
+import type {
+  ClassifyReviewRequest,
+  GenerateAnalysisRequest,
+  ValidateTruthCardRequest,
+  ScoreReviewQualityRequest,
+} from './types/truthstream';
 
 // === TYPE IMPORTS ===
 import {
@@ -100,6 +113,7 @@ export class MirrorModule extends EventEmitter {
   private insightGenerator: MirrorInsightGenerator;
   private notificationSystem: MirrorNotificationSystem;
   private insightSynthesizer: InsightSynthesizer;
+  private truthStreamSynthesizer: TruthStreamSynthesizer;
   private llmManager: DinaLLMManager;
   private redis: typeof redisManager;
   private initialized: boolean = false;
@@ -127,6 +141,7 @@ export class MirrorModule extends EventEmitter {
     this.insightGenerator = new MirrorInsightGenerator(this.llmManager);
     this.notificationSystem = new MirrorNotificationSystem();
     this.insightSynthesizer = new InsightSynthesizer(this.llmManager);
+    this.truthStreamSynthesizer = new TruthStreamSynthesizer(this.llmManager);
 
     this.setupErrorHandling();
   }
@@ -144,13 +159,17 @@ export class MirrorModule extends EventEmitter {
     try {
       console.log('🔧 Initializing Mirror Module components...');
 
+      await this.llmManager.initialize();
+
       await Promise.all([
         this.dataProcessor.initialize(),
         this.contextManager.initialize(),
         this.storageManager.initialize(),
         this.insightGenerator.initialize(),
         this.notificationSystem.initialize(),
-        this.insightSynthesizer.initialize()
+        this.insightSynthesizer.initialize(),
+        this.truthStreamSynthesizer.initialize(),
+        truthStreamManager.initialize(),
       ]);
 
       await database.query('SELECT 1');
@@ -159,7 +178,7 @@ export class MirrorModule extends EventEmitter {
       await this.setupProcessingQueues();
 
       this.initialized = true;
-      console.log('✅ Mirror Module initialized successfully (with InsightSynthesizer)');
+      console.log('✅ Mirror Module initialized successfully (with InsightSynthesizer + TruthStreamSynthesizer)');
 
       this.emit('initialized');
     } catch (error) {
@@ -188,6 +207,7 @@ export class MirrorModule extends EventEmitter {
     this.insightGenerator.on('error', (error) => this.handleComponentError('InsightGenerator', error));
     this.notificationSystem.on('error', (error) => this.handleComponentError('NotificationSystem', error));
     this.insightSynthesizer.on('error', (error) => this.handleComponentError('InsightSynthesizer', error));
+    this.truthStreamSynthesizer.on('error', (error) => this.handleComponentError('TruthStreamSynthesizer', error));
   }
 
   private handleComponentError(component: string, error: any): void {
@@ -384,6 +404,332 @@ export class MirrorModule extends EventEmitter {
         metrics: { processing_time_ms: Date.now() - startTime },
       });
     }
+  }
+
+  // ============================================================================
+  // TRUTHSTREAM HANDLERS - Invoked via DUMP protocol from orchestrator
+  // ============================================================================
+
+  /**
+   * Classify a review via LLM analysis.
+   * Called by orchestrator.processMirrorRequest() -> 'mirror_ts_classify_review'
+   */
+  async handleTruthStreamClassifyReview(
+    message: DinaUniversalMessage,
+    sessionInfo: SessionInfo
+  ): Promise<DinaResponse> {
+    const startTime = Date.now();
+
+    if (!this.initialized) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: { code: 'NOT_INITIALIZED', message: 'Mirror Module not initialized' },
+        metrics: { processing_time_ms: 0 },
+      });
+    }
+
+    const requestData = message.payload?.data as ClassifyReviewRequest;
+
+    if (!requestData || !requestData.reviewId || !requestData.responses || !requestData.revieweeGoal) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Missing required fields: reviewId, responses, revieweeGoal',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+
+    // Build reviewText from structured responses if empty
+    if (!requestData.reviewText || requestData.reviewText.trim().length === 0) {
+      requestData.reviewText = this.buildReviewTextFromResponses(requestData.responses);
+      if (!requestData.reviewText || requestData.reviewText.trim().length === 0) {
+        requestData.reviewText = '[Structured responses only — no free-form text provided]';
+      }
+    }
+
+    try {
+      console.log(`🔮 TruthStream: Classifying review ${requestData.reviewId} for user ${sessionInfo.userId}`);
+      const result = await this.truthStreamSynthesizer.classifyReview(requestData);
+
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'success',
+        payload: { data: result },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    } catch (error: any) {
+      console.error('❌ TruthStream classifyReview failed:', error.message);
+
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'CLASSIFICATION_ERROR',
+          message: error instanceof Error ? error.message : 'Review classification failed',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+  }
+
+  /**
+   * Generate a comprehensive analysis (Truth Mirror Report, etc.)
+   * Called by orchestrator.processMirrorRequest() -> 'mirror_ts_generate_analysis'
+   */
+  async handleTruthStreamGenerateAnalysis(
+    message: DinaUniversalMessage,
+    sessionInfo: SessionInfo
+  ): Promise<DinaResponse> {
+    const startTime = Date.now();
+
+    if (!this.initialized) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: { code: 'NOT_INITIALIZED', message: 'Mirror Module not initialized' },
+        metrics: { processing_time_ms: 0 },
+      });
+    }
+
+    const requestData = message.payload?.data as GenerateAnalysisRequest;
+
+    if (!requestData || !requestData.userId || !requestData.analysisType
+        || !requestData.reviews || !requestData.goal || !requestData.goalCategory) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Missing required fields: userId, analysisType, reviews, goal, goalCategory',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+
+    if (!Array.isArray(requestData.reviews) || requestData.reviews.length < 5) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'INSUFFICIENT_REVIEWS',
+          message: `Minimum 5 reviews required, got ${Array.isArray(requestData.reviews) ? requestData.reviews.length : 0}`,
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+
+    try {
+      console.log(`🔮 TruthStream: Generating ${requestData.analysisType} analysis for user ${requestData.userId}`);
+
+      const result = await this.truthStreamSynthesizer.generateAnalysis(requestData);
+
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'success',
+        payload: { data: result },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    } catch (error: any) {
+      console.error('❌ TruthStream generateAnalysis failed:', error.message);
+
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'ANALYSIS_ERROR',
+          message: error instanceof Error ? error.message : 'Analysis generation failed',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+  }
+
+  /**
+   * Validate truth card data.
+   * Called by orchestrator.processMirrorRequest() -> 'mirror_ts_validate_truth_card'
+   */
+  async handleTruthStreamValidateTruthCard(
+    message: DinaUniversalMessage,
+    _sessionInfo: SessionInfo
+  ): Promise<DinaResponse> {
+    const startTime = Date.now();
+    const requestData = message.payload?.data as ValidateTruthCardRequest;
+
+    if (!requestData || !requestData.goal || !requestData.goalCategory
+        || !requestData.sharedDataTypes || !requestData.displayAlias) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Missing required fields: goal, goalCategory, sharedDataTypes, displayAlias',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+
+    try {
+      const result = truthStreamManager.validateTruthCard(requestData);
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'success',
+        payload: { data: result },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    } catch (error: any) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: { code: 'VALIDATION_ERROR', message: error.message },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+  }
+
+  /**
+   * Score review quality.
+   * Called by orchestrator.processMirrorRequest() -> 'mirror_ts_score_review_quality'
+   */
+  async handleTruthStreamScoreReviewQuality(
+    message: DinaUniversalMessage,
+    _sessionInfo: SessionInfo
+  ): Promise<DinaResponse> {
+    const startTime = Date.now();
+    const requestData = message.payload?.data as ScoreReviewQualityRequest;
+
+    if (!requestData || !requestData.responses || !requestData.questionnaireSections) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Missing required fields: responses, questionnaireSections',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+
+    try {
+      const result = truthStreamManager.scoreReviewQuality(requestData);
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'success',
+        payload: { data: result },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    } catch (error: any) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: { code: 'SCORING_ERROR', message: error.message },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+  }
+
+  /**
+   * Assess hostility pattern.
+   * Called by orchestrator.processMirrorRequest() -> 'mirror_ts_assess_hostility'
+   */
+  async handleTruthStreamAssessHostility(
+    message: DinaUniversalMessage,
+    _sessionInfo: SessionInfo
+  ): Promise<DinaResponse> {
+    const startTime = Date.now();
+    const data = message.payload?.data;
+
+    if (!data || typeof data.hostilityCount !== 'number' || typeof data.totalReviews !== 'number') {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Missing required fields: hostilityCount (number), totalReviews (number)',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+
+    try {
+      const result = truthStreamManager.assessHostilityPattern(data.hostilityCount, data.totalReviews);
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'success',
+        payload: { data: result },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    } catch (error: any) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: { code: 'ASSESSMENT_ERROR', message: error.message },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+  }
+
+  /**
+   * TruthStream health check.
+   */
+  async handleTruthStreamHealth(): Promise<DinaResponse> {
+    const synthesizerHealth = await this.truthStreamSynthesizer.healthCheck();
+    return createDinaResponse({
+      request_id: 'healthcheck',
+      status: 'success',
+      payload: {
+        data: {
+          module: 'truthstream',
+          healthy: synthesizerHealth.healthy,
+          synthesizer: synthesizerHealth,
+          manager: { initialized: true },
+          timestamp: new Date().toISOString(),
+        },
+      },
+      metrics: { processing_time_ms: 0 },
+    });
+  }
+
+  /**
+   * Build textual summary from structured review responses when freeFormText is empty.
+   */
+  private buildReviewTextFromResponses(responses: Record<string, any>): string {
+    if (!responses || typeof responses !== 'object') return '';
+    const parts: string[] = [];
+
+    for (const [sectionId, sectionData] of Object.entries(responses)) {
+      if (!sectionData || typeof sectionData !== 'object') continue;
+      for (const [questionId, answer] of Object.entries(sectionData as Record<string, any>)) {
+        if (answer === null || answer === undefined) continue;
+        if (typeof answer === 'string' && answer.trim().length > 0) {
+          parts.push(answer.trim());
+        } else if (typeof answer === 'object') {
+          if (answer.explanation && typeof answer.explanation === 'string') parts.push(answer.explanation.trim());
+          if (answer.categories && Array.isArray(answer.categories)) {
+            parts.push(`${questionId}: ${answer.categories.join(', ')}`);
+            if (answer.explanation) parts.push(answer.explanation);
+          }
+        }
+      }
+    }
+
+    return parts.filter(p => p.length > 0).join('. ');
   }
 
   // ============================================================================
@@ -729,7 +1075,8 @@ export class MirrorModule extends EventEmitter {
         this.storageManager.healthCheck(),
         this.insightGenerator.healthCheck(),
         this.notificationSystem.healthCheck(),
-        this.insightSynthesizer.healthCheck()
+        this.insightSynthesizer.healthCheck(),
+        this.truthStreamSynthesizer.healthCheck(),
       ]);
 
       const healthyComponents = componentHealth.filter(result =>
@@ -829,7 +1176,8 @@ export class MirrorModule extends EventEmitter {
         this.storageManager.shutdown(),
         this.insightGenerator.shutdown(),
         this.notificationSystem.shutdown(),
-        this.insightSynthesizer.shutdown()
+        this.insightSynthesizer.shutdown(),
+        this.truthStreamSynthesizer.shutdown(),
       ]);
 
       this.initialized = false;
@@ -845,5 +1193,3 @@ export class MirrorModule extends EventEmitter {
 
 export const mirrorModule = new MirrorModule();
 export default mirrorModule;
-
-console.log('🪞 Mirror Module singleton instance created and exported');

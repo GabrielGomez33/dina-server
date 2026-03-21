@@ -207,80 +207,45 @@ export class DinaCore {
         return;
       }
 
-      console.log('🚀 Initializing Enhanced DINA Core Orchestrator...');
       try {
+        // ── Phase 1: Database ──────────────────────────────────────
+        console.log('📦 Phase 1/4 — Database & Auth');
         await database.initialize();
-        console.log('🔐 Unified authentication system initialized via database');
 
-        //await redisManager.initialize();
-
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('🤖 PHASE 2: Multi-Model LLM System Initialization');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
+        // ── Phase 2: LLM System ────────────────────────────────────
+        console.log('🤖 Phase 2/4 — Multi-Model LLM System');
         await this.llmManager.initialize();
-        console.log('✅ LLM System initialization complete');
+        console.log('   ✅ LLM System ready');
 
-        // ADD DIGIM INITIALIZATION HERE:
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('🧠 PHASE 1.5: DIGIM Intelligence Module Initialization');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('📊 Step 1: Loading DIGIM Foundation...');
-
+        // ── Phase 3: DIGIM Intelligence ────────────────────────────
+        console.log('🧠 Phase 3/4 — DIGIM Intelligence Module');
         await digiMOrchestrator.initialize();
-
-        console.log('🎯 Step 2: DIGIM Integration Check...');
         const digiMStatus = digiMOrchestrator.moduleStatus;
-        console.log(`📈 DIGIM Health: ${digiMStatus === 'healthy' ? '✅ Operational' : '⚠️ Degraded'}`);
-        console.log(`🔄 DIGIM Sources: ${digiMOrchestrator.getActiveSources().length} configured`);
-        console.log(`✨ DIGIM Foundation: ${digiMOrchestrator.isInitialized ? 'READY' : 'FAILED'}`);
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('✅ DIGIM PHASE 1 INITIALIZATION COMPLETE');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('DIGIM Phase 1 Features:');
-        console.log('  ✅ DUMP Protocol Integration');
-        console.log('  ✅ Database Schema Foundation');
-        console.log('  ✅ Source Management Framework');
-        console.log('  ✅ Security Framework (Basic)');
-        console.log('  ✅ Health Monitoring System');
-        console.log('  ✅ Natural Language Query Interface');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`   ${digiMStatus === 'healthy' ? '✅' : '⚠️'} DIGIM ${digiMStatus} — ${digiMOrchestrator.getActiveSources().length} sources`);
 
-        // ADD MIRROR INITIALIZATION HERE:
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('🪞 PHASE 3: MIRROR MODULE INITIALIZATION');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('📊 Step 1: Loading Mirror Foundation...');
-
+        // ── Phase 4: Mirror Module ─────────────────────────────────
+        console.log('🪞 Phase 4/4 — Mirror Module');
         await mirrorModule.initialize();
-
-        console.log('🎯 Step 2: Mirror Integration Check...');
         const mirrorStatus = mirrorModule.isInitialized;
-        console.log(`📈 Mirror Health: ${mirrorStatus ? '✅ Operational' : '⚠️ Degraded'}`);
-        console.log(`🔄 Mirror Components: ${mirrorStatus ? 'ALL SYSTEMS READY' : 'FAILED'}`);
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('✅ MIRROR MODULE INITIALIZATION COMPLETE');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`   ${mirrorStatus ? '✅' : '⚠️'} Mirror ${mirrorStatus ? 'ready' : 'degraded'}`);
 
-        console.log('🔄 Phase 4: Advanced Message Processing Activation');
-		this.initialized = true;
+        // ── Queue Processors ───────────────────────────────────────
+        this.initialized = true;
         this.startQueueProcessors();
 
-        //this.initialized = true;
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('✅ DINA ENHANCED CORE INITIALIZATION COMPLETE');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('');
+        console.log('✅ DINA Core initialization complete');
 
-        await database.log('info', 'core', 'DINA Enhanced Core with DIGIM initialized successfully', {
-           phase: '2-complete-with-digim',
+        await database.log('info', 'core', 'DINA Core initialized successfully', {
           digim_status: digiMStatus,
-          digim_sources: digiMOrchestrator.getActiveSources().length
+          digim_sources: digiMOrchestrator.getActiveSources().length,
+          mirror_status: mirrorStatus ? 'ready' : 'degraded'
         });
 
       } catch (error) {
         console.error('❌ Failed to initialize DINA Core:', error);
         this.initialized = false;
-        await database.log('critical', 'core', 'DINA Enhanced Core initialization failed', { error: (error as Error).message });
+        await database.log('critical', 'core', 'DINA Core initialization failed', { error: (error as Error).message });
         throw error;
       }
     }
@@ -294,9 +259,7 @@ private startQueueProcessors(): void {
   };
 
   for (const queueName of Object.keys(queueIntervals)) {
-  	console.log(`[SRC/CORE/ORCHESTRATOR->startQueueProcessors()] ${queueName}`);
     const interval = queueIntervals[queueName];
-    console.log(`[SRC/CORE/ORCHESTRATOR->startQueueProcessors()] 🔄 Queue processor started: ${queueName} (${interval}ms interval)`);
     const processor = setInterval(async () => {
       if (!this.initialized) {
         return;
@@ -753,6 +716,48 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
         case 'get_metrics':
           return await mirrorModule.getPerformanceMetrics();
 
+        // ================================================================
+        // TRUTHSTREAM: LLM-powered review classification
+        // ================================================================
+        case 'mirror_ts_classify_review':
+          console.log('🔮 Processing TruthStream Review Classification');
+          return await mirrorModule.handleTruthStreamClassifyReview(message, sessionInfo);
+
+        // ================================================================
+        // TRUTHSTREAM: Full analysis generation (Truth Mirror Report, etc.)
+        // ================================================================
+        case 'mirror_ts_generate_analysis':
+          console.log('🔮 Processing TruthStream Analysis Generation');
+          return await mirrorModule.handleTruthStreamGenerateAnalysis(message, sessionInfo);
+
+        // ================================================================
+        // TRUTHSTREAM: Truth card data validation
+        // ================================================================
+        case 'mirror_ts_validate_truth_card':
+          console.log('🔮 Processing TruthStream Truth Card Validation');
+          return await mirrorModule.handleTruthStreamValidateTruthCard(message, sessionInfo);
+
+        // ================================================================
+        // TRUTHSTREAM: Review quality scoring
+        // ================================================================
+        case 'mirror_ts_score_review_quality':
+          console.log('🔮 Processing TruthStream Review Quality Scoring');
+          return await mirrorModule.handleTruthStreamScoreReviewQuality(message, sessionInfo);
+
+        // ================================================================
+        // TRUTHSTREAM: Hostility pattern assessment
+        // ================================================================
+        case 'mirror_ts_assess_hostility':
+          console.log('🔮 Processing TruthStream Hostility Assessment');
+          return await mirrorModule.handleTruthStreamAssessHostility(message, sessionInfo);
+
+        // ================================================================
+        // TRUTHSTREAM: Health check
+        // ================================================================
+        case 'mirror_ts_health':
+          console.log('🔮 Processing TruthStream Health Check');
+          return await mirrorModule.handleTruthStreamHealth();
+
         case 'get_insights':
         case 'get_patterns':
         case 'get_questions':
@@ -1022,6 +1027,3 @@ GUIDELINES:
 export const dinaCore = new DinaCore();
 
 export default dinaCore;
-
-console.log('🚀 Enhanced DINA Core Orchestrator loaded with Phase 2 LLM capabilities');
-console.log('✨ Multi-Model AI System ready for production deployment');

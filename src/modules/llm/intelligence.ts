@@ -65,6 +65,7 @@ export interface LLMResponse {
 }
 
 export enum ModelType {
+  QWEN25_3B = 'qwen2.5:3b',
   MISTRAL_7B = 'mistral:7b',
   CODELLAMA_34B = 'codellama:34b',
   LLAMA2_70B = 'llama2:70b'
@@ -333,18 +334,26 @@ export class QueryComplexityAnalyzer {
   }
 
   private selectOptimalModel(complexityLevel: number, analysis: ComplexityAnalysis): ModelType {
+    // High computational complexity → code-specialized models
     if (analysis.computational > 6) {
       return complexityLevel > 7 ? ModelType.CODELLAMA_34B : ModelType.MISTRAL_7B;
     }
-    
+
+    // Very high overall complexity → largest model
     if (complexityLevel > 8) {
       return ModelType.LLAMA2_70B;
     }
-    
+
+    // Medium-high complexity → mid-tier model
     if (complexityLevel > 5) {
       return ModelType.CODELLAMA_34B;
     }
-    
+
+    // Low complexity (summarization, JSON output, simple Q&A) → fast small model
+    if (complexityLevel <= 3) {
+      return ModelType.QWEN25_3B;
+    }
+
     return ModelType.MISTRAL_7B;
   }
 
@@ -388,6 +397,7 @@ export class QueryComplexityAnalyzer {
 
   private estimateProcessingTime(complexityLevel: number, model: ModelType): number {
     const modelBaseTimes = {
+      [ModelType.QWEN25_3B]: 50,
       [ModelType.MISTRAL_7B]: 150,
       [ModelType.CODELLAMA_34B]: 800,
       [ModelType.LLAMA2_70B]: 2500

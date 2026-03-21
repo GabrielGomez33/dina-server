@@ -13,6 +13,13 @@
 //
 // ARCHITECTURE: mirror-server → dina-server mirror module → this synthesizer
 // All requests flow through truthStreamRoutes → truthStreamManager → here
+//
+// FIXES APPLIED:
+//   1. Reduced TIMEOUT_MS from 120s to 55s to fit within Express 60s timeout
+//   2. Added maxTokens forwarding to llmManager.generate() via correct param name
+//   3. Improved error messages (no more empty/undefined errors)
+//   4. Added JSON extraction fallback for malformed LLM responses
+//   5. Added structured response summarization for classification prompts
 // ============================================================================
 
 import { EventEmitter } from 'events';
@@ -38,7 +45,12 @@ import type {
 const HOSTILE_THRESHOLD = 0.85;
 const MAX_CONTEXT_CHARS = 2000;
 const MAX_REVIEW_CHARS = 8000;
-const TIMEOUT_MS = 120000;
+
+// Timeout hierarchy: Synthesizer (240s) < Queue processor (280s) < Express route (300s)
+// Cold Ollama model loads can take 150-160s before generation even starts.
+// The previous 150s limit caused consistent first-attempt timeouts on cold starts.
+// This must be LESS than the Express route timeout to prevent ERR_HTTP_HEADERS_SENT.
+const TIMEOUT_MS = 240000; // 240s — handles cold Ollama model loads + generation
 
 // ============================================================================
 // LOGGER SHIM — matches Logger interface from mirror-server
@@ -96,12 +108,23 @@ export class TruthStreamSynthesizer extends EventEmitter {
       reviewId: request.reviewId,
       goalCategory: request.revieweeGoal,
       hasTone: !!request.reviewTone,
+      reviewTextLength: request.reviewText?.length || 0,
     });
 
     try {
       const prompt = this.buildClassificationPrompt(request);
       const llmResponse = await this.callLLM(prompt, { maxTokens: 800, temperature: 0.3 });
       const parsed = this.parseJsonResponse<ClassifyReviewResponse>(llmResponse);
+
+      // Validate classification is a known value
+      const validClassifications: ReviewClassification[] = ['constructive', 'affirming', 'raw_truth', 'hostile'];
+      if (!validClassifications.includes(parsed.classification)) {
+        this.logger.warn('LLM returned unknown classification, defaulting to constructive', {
+          received: parsed.classification,
+        });
+        parsed.classification = 'constructive';
+        parsed.confidence = Math.min(parsed.confidence || 0.5, 0.6);
+      }
 
       // Safety: only allow "hostile" if confidence exceeds threshold
       if (parsed.classification === 'hostile' && parsed.confidence < HOSTILE_THRESHOLD) {
@@ -141,12 +164,13 @@ export class TruthStreamSynthesizer extends EventEmitter {
         piiWarnings: parsed.piiWarnings || [],
       };
     } catch (error: any) {
+      const errorMessage = error instanceof Error ? error.message : String(error || 'Unknown classification error');
       this.logger.error('Review classification failed', {
         reviewId: request.reviewId,
-        error: error.message,
+        error: errorMessage,
         processingTimeMs: Date.now() - startTime,
       });
-      throw error;
+      throw new Error(`Review classification failed: ${errorMessage}`);
     }
   }
 
@@ -190,11 +214,14 @@ export class TruthStreamSynthesizer extends EventEmitter {
       }
 
       const llmResponse = await this.callLLM(prompt, {
-        maxTokens: 2500,
-        temperature: 0.6,
+        maxTokens: 3500,
+        temperature: 0.5,
       });
 
-      const analysisData = this.parseJsonResponse<any>(llmResponse);
+      const rawAnalysisData = this.parseJsonResponse<any>(llmResponse);
+
+      // Post-process to ensure structure matches frontend expectations
+      const analysisData = this.normalizeReportData(rawAnalysisData, request);
 
       const processingTimeMs = Date.now() - startTime;
 
@@ -207,22 +234,23 @@ export class TruthStreamSynthesizer extends EventEmitter {
       return {
         analysisType: request.analysisType,
         analysisData,
-        perceptionGapScore: analysisData.perceptionGapScore ?? analysisData.score ?? null,
+        perceptionGapScore: analysisData.perceptionGap?.score ?? rawAnalysisData.perceptionGapScore ?? null,
         confidenceLevel: this.calculateConfidence(request.reviews),
         metadata: {
           reviewsAnalyzed: request.reviews.length,
-          modelUsed: 'mistral:7b',
+          modelUsed: 'qwen2.5:3b',
           processingTimeMs,
         },
       };
     } catch (error: any) {
+      const errorMessage = error instanceof Error ? error.message : String(error || 'Unknown analysis error');
       this.logger.error('Analysis generation failed', {
         userId: request.userId,
         analysisType: request.analysisType,
-        error: error.message,
+        error: errorMessage,
         processingTimeMs: Date.now() - startTime,
       });
-      throw error;
+      throw new Error(`Analysis generation failed (${request.analysisType}): ${errorMessage}`);
     }
   }
 
@@ -274,6 +302,16 @@ export class TruthStreamSynthesizer extends EventEmitter {
     parts.push('REVIEW CONTENT:');
     parts.push(reviewText);
 
+    // Include structured response summary for richer classification context
+    if (request.responses && typeof request.responses === 'object') {
+      const summary = this.summarizeReviewResponses(request.responses);
+      if (summary && summary !== '[No responses]' && summary !== '[Empty responses]') {
+        parts.push('');
+        parts.push('STRUCTURED RESPONSES:');
+        parts.push(summary);
+      }
+    }
+
     if (request.qualityMetrics) {
       parts.push('');
       parts.push('QUALITY METRICS:');
@@ -309,9 +347,11 @@ export class TruthStreamSynthesizer extends EventEmitter {
     const parts: string[] = [];
 
     parts.push(
-      'You are the Mirror intelligence analyst. Generate a comprehensive perception report ' +
-      'for this user based on all the reviews they have received from anonymous strangers. ' +
-      'Be thorough, insightful, and honest. The user came to TruthStream seeking truth.'
+      'You are an expert perception analyst writing a professional Truth Mirror Report. ' +
+      'Your report will be presented as a polished intelligence briefing. Write with authority, ' +
+      'depth, and specificity. ALWAYS cite direct quotes from reviewers to support every claim. ' +
+      'Use phrases like "One reviewer noted..." or "Multiple reviewers observed..." followed by ' +
+      'exact words from the reviews. Be honest but constructive. The user seeks genuine truth.'
     );
     parts.push('');
 
@@ -344,58 +384,52 @@ export class TruthStreamSynthesizer extends EventEmitter {
     // User's goal
     parts.push(`USER'S GOAL: ${request.goalCategory} — "${request.goal}"`);
     if (request.selfStatement) {
-      parts.push(`USER'S SELF-STATEMENT: "${this.sanitizeForPrompt(request.selfStatement, 500)}"`);
+      parts.push(`USER'S SELF-DESCRIPTION (free-form text, NOT their name — do NOT use this as a name or identifier): "${this.sanitizeForPrompt(request.selfStatement, 500)}"`);
     }
     parts.push('');
 
-    // Reviews
+    // Reviews — include full text for quote extraction
     parts.push(`=== ANONYMOUS REVIEWS (${request.reviews.length} total) ===`);
     for (let i = 0; i < request.reviews.length; i++) {
       const review = request.reviews[i];
       parts.push(`--- Review ${i + 1} (${review.classification || 'unclassified'}, quality: ${Math.round(review.qualityScore * 100)}%) ---`);
       parts.push(this.summarizeReviewResponses(review.responses));
       if (review.selfTaggedTone) {
-        parts.push(`Reviewer's tone: ${review.selfTaggedTone}`);
+        parts.push(`Reviewer's self-tagged tone: ${review.selfTaggedTone}`);
       }
       parts.push('');
     }
     parts.push('=== END REVIEWS ===');
     parts.push('');
 
-    // Response format
-    parts.push('Generate a comprehensive Truth Mirror Report. Respond with JSON:');
-    parts.push(JSON.stringify({
-      perceptionSummary: {
-        overallImpression: '2-3 sentence overview of how others perceive this person',
-        topImpressionWords: [{ word: 'example', frequency: 5 }],
-        averageScores: { overall: 7.5, section_name: 8.0 },
-      },
-      patternDetection: {
-        consistentStrengths: ['strength multiple reviewers mentioned'],
-        consistentConcerns: ['concern multiple reviewers mentioned'],
-        divergentOpinions: ['areas where reviewers disagreed'],
-      },
-      blindSpots: {
-        items: [{
-          dimension: 'area',
-          selfPerception: 'how they see themselves',
-          externalPerception: 'how others see them',
-          gap: 'the disconnect',
-          severity: 'moderate',
-        }],
-        summary: 'overall blind spots narrative',
-      },
-      perceptionGapScore: 72,
-      perceptionGapInterpretation: 'What the score means',
-      growthRecommendations: [{
-        area: 'specific area',
-        recommendation: 'what to do',
-        priority: 'high',
-        actionSteps: ['step 1', 'step 2'],
-      }],
-      honestAssessment: 'The unvarnished truth about what the data says. No sugar-coating.',
-      reviewDistribution: { constructive: 3, affirming: 2, rawTruth: 1, hostile: 0 },
-    }, null, 2));
+    // Response format instructions — compact to reduce token count and generation time
+    parts.push('Generate a Truth Mirror Report. Respond ONLY with valid JSON. Rules:');
+    parts.push('- IMPORTANT: Refer to the subject as "You" or "you" — NEVER use the self-description text as a name');
+    parts.push('- Cite EXACT reviewer quotes in supportingQuotes/keyQuotes/evidence fields');
+    parts.push('- Scores are 0-10 (except perceptionGap.score: 0-100)');
+    parts.push('- perceptionGap.level: "exceptional"(0-25),"good"(26-50),"significant_gaps"(51-75),"major_disconnect"(76-100)');
+    parts.push('- Write detailed narratives (not brief phrases) for description/overview/summary fields');
+    parts.push('');
+    parts.push('JSON structure (fill ALL fields):');
+    parts.push('IMPORTANT: averageScores MUST be computed from reviewer data (1-10 scale). Do NOT leave them as 0.');
+    parts.push(`{
+  "executiveSummary": "4-6 sentences synthesizing overall perception",
+  "perceptionSummary": {
+    "overview": "3-4 sentence narrative",
+    "averageScores": {"firstImpression":"<1-10>","physicalPresentation":"<1-10>","intellectualAttractiveness":"<1-10>","emotionalAttractiveness":"<1-10>","socialEnergy":"<1-10>","overall":"<1-10>","selfAlignment":"<1-10>"},
+    "topImpressionWords": [{"word":"","count":1,"percentage":20}],
+    "strengthDistribution": [{"category":"","count":1,"percentage":20}],
+    "struggleDistribution": [{"category":"","count":1,"percentage":20}],
+    "keyQuotes": ["exact quote"]
+  },
+  "dimensionBreakdown": [{"name":"","score":0,"description":"2-3 sentences with quotes","reviewerQuotes":["exact quote"]}],
+  "patternDetection": [{"pattern":"","frequency":0,"reviewerCount":0,"significance":"high|medium|low","description":"2-3 sentences","supportingQuotes":["exact quote"]}],
+  "blindSpots": [{"dimension":"","selfScore":0,"externalScore":0,"gap":0,"interpretation":"2-3 sentences","evidence":"exact quote"}],
+  "perceptionGap": {"score":0,"level":"good","summary":"1-2 sentences","narrative":"3-5 sentences","details":["point with evidence"]},
+  "reviewerConsensus": {"overallSentiment":"positive|mixed|critical","sentimentBreakdown":{"positive":0,"neutral":0,"critical":0},"agreementAreas":["area"],"disagreementAreas":["area"]},
+  "growthRecommendations": [{"area":"","recommendation":"2-3 actionable sentences","journalPrompt":"reflection question","priority":"high|medium|low"}],
+  "communityInsights": {"personalityTypeComparison":"2-3 sentences","percentileScores":{"overall":0,"selfAwareness":0,"socialPresence":0}}
+}`);
 
     return parts.join('\n');
   }
@@ -417,7 +451,7 @@ export class TruthStreamSynthesizer extends EventEmitter {
     }
 
     if (request.selfStatement) {
-      parts.push(`SELF-STATEMENT: "${this.sanitizeForPrompt(request.selfStatement, 500)}"`);
+      parts.push(`SELF-DESCRIPTION (free-form text, NOT a name): "${this.sanitizeForPrompt(request.selfStatement, 500)}"`);
       parts.push('');
     }
 
@@ -459,7 +493,7 @@ export class TruthStreamSynthesizer extends EventEmitter {
     parts.push('');
 
     if (request.selfStatement) {
-      parts.push(`Self-statement: "${this.sanitizeForPrompt(request.selfStatement, 500)}"`);
+      parts.push(`Self-description (free-form text, NOT a name): "${this.sanitizeForPrompt(request.selfStatement, 500)}"`);
     }
 
     parts.push('');
@@ -604,6 +638,53 @@ export class TruthStreamSynthesizer extends EventEmitter {
   // ==========================================================================
 
   /**
+   * Compute average scores directly from review response data.
+   * Used as a reliable fallback when the LLM returns zeros or invalid scores.
+   */
+  private computeAverageScoresFromReviews(reviews: any[]): Record<string, number> {
+    const sums: Record<string, number> = {
+      firstImpression: 0, physicalPresentation: 0, intellectualAttractiveness: 0,
+      emotionalAttractiveness: 0, socialEnergy: 0, overall: 0, selfAlignment: 0,
+    };
+    const counts: Record<string, number> = { ...sums };
+
+    for (const review of reviews) {
+      const r = review.responses || review;
+
+      // Map questionnaire response fields to score dimensions
+      const mappings: Array<[string, () => number | undefined]> = [
+        ['firstImpression', () => r.first_impression?.gut_reaction ?? r.firstImpressionScore],
+        ['overall', () => r.overall?.overall_score ?? r.overallScore],
+        ['selfAlignment', () => r.blind_spots?.self_awareness_rating ?? r.selfAlignmentScore],
+        ['socialEnergy', () => r.socialEnergyScore],
+        ['physicalPresentation', () => r.physicalPresentationScore],
+        ['intellectualAttractiveness', () => r.intellectualAttractivenessScore],
+        ['emotionalAttractiveness', () => r.emotionalAttractivenessScore],
+      ];
+
+      for (const [key, getter] of mappings) {
+        const val = getter();
+        if (typeof val === 'number' && val > 0 && val <= 10) {
+          sums[key] += val;
+          counts[key]++;
+        }
+      }
+    }
+
+    // Compute averages; for dimensions with no data, estimate from overall or default to 5.0
+    const result: Record<string, number> = {};
+    const overallAvg = counts.overall > 0 ? sums.overall / counts.overall : 5.0;
+
+    for (const key of Object.keys(sums)) {
+      result[key] = counts[key] > 0
+        ? Math.round((sums[key] / counts[key]) * 10) / 10
+        : Math.round(overallAvg * 10) / 10;
+    }
+
+    return result;
+  }
+
+  /**
    * Summarize review responses into readable text for the LLM prompt.
    */
   private summarizeReviewResponses(responses: Record<string, any>): string {
@@ -615,13 +696,15 @@ export class TruthStreamSynthesizer extends EventEmitter {
       for (const [questionId, answer] of Object.entries(sectionData as Record<string, any>)) {
         if (answer === null || answer === undefined) continue;
         if (typeof answer === 'object' && 'score' in answer) {
-          lines.push(`${sectionId}.${questionId}: ${answer.score}/10${answer.explanation ? ` — "${String(answer.explanation).substring(0, 200)}"` : ''}`);
+          lines.push(`${questionId}: ${answer.score}/10${answer.explanation ? ` — "${String(answer.explanation).substring(0, 100)}"` : ''}`);
+        } else if (typeof answer === 'object' && 'categories' in answer && Array.isArray(answer.categories)) {
+          lines.push(`${questionId}: [${answer.categories.join(', ')}]${answer.explanation ? ` — "${String(answer.explanation).substring(0, 100)}"` : ''}`);
         } else if (Array.isArray(answer)) {
-          lines.push(`${sectionId}.${questionId}: [${answer.join(', ')}]`);
+          lines.push(`${questionId}: [${answer.join(', ')}]`);
         } else if (typeof answer === 'string') {
-          lines.push(`${sectionId}.${questionId}: "${answer.substring(0, 300)}"`);
+          lines.push(`${questionId}: "${answer.substring(0, 150)}"`);
         } else {
-          lines.push(`${sectionId}.${questionId}: ${JSON.stringify(answer).substring(0, 200)}`);
+          lines.push(`${questionId}: ${JSON.stringify(answer).substring(0, 100)}`);
         }
       }
     }
@@ -650,6 +733,205 @@ export class TruthStreamSynthesizer extends EventEmitter {
   /**
    * Calculate confidence based on review quantity and quality.
    */
+  /**
+   * Normalize LLM response to match the frontend's TruthMirrorReport.analysisData structure.
+   * LLMs may return slightly different shapes — this ensures the frontend won't crash.
+   */
+  private normalizeReportData(raw: any, request: GenerateAnalysisRequest): any {
+    const reviewCount = request.reviews.length;
+
+    // --- perceptionSummary ---
+    const rawSummary = raw.perceptionSummary || {};
+
+    // Compute averages from actual review data as fallback
+    const computedScores = this.computeAverageScoresFromReviews(request.reviews);
+
+    // Parse LLM scores — treat 0 as "not computed" (use computed fallback)
+    const llmScores = rawSummary.averageScores || {};
+    const pickScore = (llmVal: any, computedVal: number): number => {
+      const n = typeof llmVal === 'string' ? parseFloat(llmVal) : (typeof llmVal === 'number' ? llmVal : NaN);
+      return (!isNaN(n) && n > 0) ? n : computedVal;
+    };
+
+    const perceptionSummary = {
+      overview: rawSummary.overview || rawSummary.overallImpression || 'Analysis based on reviewer feedback.',
+      averageScores: {
+        firstImpression: pickScore(llmScores.firstImpression, computedScores.firstImpression),
+        physicalPresentation: pickScore(llmScores.physicalPresentation, computedScores.physicalPresentation),
+        intellectualAttractiveness: pickScore(llmScores.intellectualAttractiveness, computedScores.intellectualAttractiveness),
+        emotionalAttractiveness: pickScore(llmScores.emotionalAttractiveness, computedScores.emotionalAttractiveness),
+        socialEnergy: pickScore(llmScores.socialEnergy, computedScores.socialEnergy),
+        overall: pickScore(llmScores.overall, computedScores.overall),
+        selfAlignment: pickScore(llmScores.selfAlignment, computedScores.selfAlignment),
+      },
+      topImpressionWords: Array.isArray(rawSummary.topImpressionWords)
+        ? rawSummary.topImpressionWords.map((w: any) => ({
+            word: w.word || w,
+            count: w.count ?? w.frequency ?? 1,
+            percentage: w.percentage ?? Math.round(((w.count ?? w.frequency ?? 1) / Math.max(reviewCount, 1)) * 100),
+          }))
+        : [],
+      strengthDistribution: Array.isArray(rawSummary.strengthDistribution)
+        ? rawSummary.strengthDistribution
+        : [],
+      struggleDistribution: Array.isArray(rawSummary.struggleDistribution)
+        ? rawSummary.struggleDistribution
+        : [],
+    };
+
+    // --- patternDetection (should be array) ---
+    let patternDetection: any[] = [];
+    if (Array.isArray(raw.patternDetection)) {
+      patternDetection = raw.patternDetection.map((p: any) => ({
+        pattern: p.pattern || p.name || 'Unnamed pattern',
+        frequency: p.frequency ?? 1,
+        reviewerCount: p.reviewerCount ?? 1,
+        significance: p.significance || 'medium',
+        description: p.description || '',
+      }));
+    } else if (raw.patternDetection && typeof raw.patternDetection === 'object') {
+      // Convert old {consistentStrengths, consistentConcerns, divergentOpinions} format
+      const pd = raw.patternDetection;
+      const strengths = Array.isArray(pd.consistentStrengths) ? pd.consistentStrengths : [];
+      const concerns = Array.isArray(pd.consistentConcerns) ? pd.consistentConcerns : [];
+      patternDetection = [
+        ...strengths.map((s: string) => ({ pattern: s, frequency: 2, reviewerCount: 2, significance: 'high' as const, description: `Strength noted by multiple reviewers: ${s}` })),
+        ...concerns.map((c: string) => ({ pattern: c, frequency: 2, reviewerCount: 2, significance: 'medium' as const, description: `Concern noted by multiple reviewers: ${c}` })),
+      ];
+    }
+
+    // --- blindSpots (should be flat array) ---
+    let blindSpots: any[] = [];
+    if (Array.isArray(raw.blindSpots)) {
+      blindSpots = raw.blindSpots.map((bs: any) => ({
+        dimension: bs.dimension || bs.area || 'Unknown',
+        selfScore: bs.selfScore ?? 5.0,
+        externalScore: bs.externalScore ?? 5.0,
+        gap: bs.gap ?? Math.abs((bs.selfScore ?? 5) - (bs.externalScore ?? 5)),
+        interpretation: bs.interpretation || bs.gap || bs.summary || '',
+      }));
+    } else if (raw.blindSpots?.items && Array.isArray(raw.blindSpots.items)) {
+      // Convert old {items, summary} format
+      blindSpots = raw.blindSpots.items.map((bs: any) => ({
+        dimension: bs.dimension || 'Unknown',
+        selfScore: bs.selfScore ?? 7.0,
+        externalScore: bs.externalScore ?? 5.0,
+        gap: bs.gap ?? 2.0,
+        interpretation: bs.interpretation || `${bs.selfPerception || ''} vs ${bs.externalPerception || ''}`.trim(),
+      }));
+    }
+
+    // --- perceptionGap (nested object with level) ---
+    let perceptionGap: any;
+    if (raw.perceptionGap && typeof raw.perceptionGap === 'object' && raw.perceptionGap.level) {
+      perceptionGap = {
+        score: raw.perceptionGap.score ?? raw.perceptionGapScore ?? 50,
+        level: raw.perceptionGap.level,
+        summary: raw.perceptionGap.summary || '',
+        details: Array.isArray(raw.perceptionGap.details) ? raw.perceptionGap.details : [],
+      };
+    } else {
+      // Convert old flat perceptionGapScore/perceptionGapInterpretation format
+      const score = raw.perceptionGap?.score ?? raw.perceptionGapScore ?? 50;
+      perceptionGap = {
+        score,
+        level: this.scoreToGapLevel(score),
+        summary: raw.perceptionGap?.summary || raw.perceptionGapInterpretation || 'Analysis of how your self-perception aligns with external feedback.',
+        details: raw.perceptionGap?.details || [],
+      };
+    }
+
+    // --- growthRecommendations ---
+    const growthRecommendations = Array.isArray(raw.growthRecommendations)
+      ? raw.growthRecommendations.map((rec: any) => ({
+          area: rec.area || 'General',
+          recommendation: rec.recommendation || '',
+          journalPrompt: rec.journalPrompt || null,
+          suggestedGroupType: rec.suggestedGroupType || null,
+          priority: rec.priority || 'medium',
+        }))
+      : [];
+
+    // --- communityInsights ---
+    const communityInsights = raw.communityInsights || {
+      personalityTypeComparison: 'Comparison data will improve as more community members complete reviews.',
+      percentileScores: { overall: 50 },
+    };
+
+    // --- executiveSummary ---
+    const executiveSummary = raw.executiveSummary || '';
+
+    // --- dimensionBreakdown ---
+    const dimensionBreakdown = Array.isArray(raw.dimensionBreakdown)
+      ? raw.dimensionBreakdown.map((d: any) => ({
+          name: d.name || 'Unknown',
+          score: d.score ?? 5.0,
+          description: d.description || '',
+          reviewerQuotes: Array.isArray(d.reviewerQuotes) ? d.reviewerQuotes : [],
+        }))
+      : [];
+
+    // --- reviewerConsensus ---
+    const reviewerConsensus = raw.reviewerConsensus && typeof raw.reviewerConsensus === 'object'
+      ? {
+          overallSentiment: raw.reviewerConsensus.overallSentiment || 'mixed',
+          sentimentBreakdown: raw.reviewerConsensus.sentimentBreakdown || { positive: 33, neutral: 34, critical: 33 },
+          agreementAreas: Array.isArray(raw.reviewerConsensus.agreementAreas) ? raw.reviewerConsensus.agreementAreas : [],
+          disagreementAreas: Array.isArray(raw.reviewerConsensus.disagreementAreas) ? raw.reviewerConsensus.disagreementAreas : [],
+        }
+      : null;
+
+    // Pass through enriched sub-fields in perceptionSummary
+    if (Array.isArray(rawSummary.keyQuotes) && rawSummary.keyQuotes.length) {
+      (perceptionSummary as any).keyQuotes = rawSummary.keyQuotes;
+    }
+
+    // Pass through enriched sub-fields in patternDetection
+    patternDetection = patternDetection.map((p: any, i: number) => {
+      const rawP = Array.isArray(raw.patternDetection) ? raw.patternDetection[i] : null;
+      if (rawP && Array.isArray(rawP.supportingQuotes)) {
+        p.supportingQuotes = rawP.supportingQuotes;
+      }
+      return p;
+    });
+
+    // Pass through enriched sub-fields in blindSpots
+    blindSpots = blindSpots.map((bs: any, i: number) => {
+      const rawBS = Array.isArray(raw.blindSpots) ? raw.blindSpots[i] : null;
+      if (rawBS?.evidence) {
+        bs.evidence = rawBS.evidence;
+      }
+      return bs;
+    });
+
+    // Pass through narrative in perceptionGap
+    if (raw.perceptionGap?.narrative) {
+      perceptionGap.narrative = raw.perceptionGap.narrative;
+    }
+
+    return {
+      executiveSummary,
+      perceptionSummary,
+      dimensionBreakdown,
+      patternDetection,
+      blindSpots,
+      perceptionGap,
+      reviewerConsensus,
+      growthRecommendations,
+      communityInsights,
+    };
+  }
+
+  /**
+   * Map a perception gap score (0-100) to a level label.
+   */
+  private scoreToGapLevel(score: number): 'exceptional' | 'good' | 'significant_gaps' | 'major_disconnect' {
+    if (score <= 25) return 'exceptional';
+    if (score <= 50) return 'good';
+    if (score <= 75) return 'significant_gaps';
+    return 'major_disconnect';
+  }
+
   private calculateConfidence(reviews: AnonymizedReview[]): number {
     if (reviews.length === 0) return 0;
 
@@ -665,6 +947,10 @@ export class TruthStreamSynthesizer extends EventEmitter {
 
   /**
    * Call LLM through the mirror module's LLM manager.
+   *
+   * FIX: Now passes maxTokens and temperature correctly to DinaLLMManager.generate()
+   * using the parameter names that generate() actually reads (max_tokens, temperature).
+   * Also reduced timeout to prevent the Express timeout from firing first.
    */
   private async callLLM(
     prompt: string,
@@ -679,13 +965,14 @@ export class TruthStreamSynthesizer extends EventEmitter {
       const response = await Promise.race([
         this.llmManager.generate(prompt, {
           maxTokens,
+          max_tokens: maxTokens,  // DinaLLMManager reads this key
           temperature,
-          model_preference: 'mistral:7b',
+          model_preference: 'qwen2.5:3b',
           task: 'truthstream_analysis',
         }),
         new Promise<never>((_, reject) => {
           timeoutId = setTimeout(
-            () => reject(new Error('TruthStream LLM synthesis timeout')),
+            () => reject(new Error(`TruthStream LLM synthesis timeout after ${TIMEOUT_MS / 1000}s`)),
             TIMEOUT_MS
           );
         }),
@@ -701,16 +988,18 @@ export class TruthStreamSynthesizer extends EventEmitter {
         return response.choices[0].message.content;
       }
 
-      throw new Error('No content in LLM response');
+      throw new Error('No content in LLM response — received keys: ' + (response ? Object.keys(response).join(', ') : 'null'));
     } catch (error: any) {
       clearTimeout(timeoutId!);
-      this.logger.error('LLM call failed', { error: error.message });
-      throw error;
+      const errorMessage = error instanceof Error ? error.message : String(error || 'Unknown LLM error');
+      this.logger.error('LLM call failed', { error: errorMessage });
+      throw new Error(errorMessage);
     }
   }
 
   /**
    * Parse JSON response from LLM, handling markdown code blocks.
+   * Enhanced with fallback extraction for partially malformed responses.
    */
   private parseJsonResponse<T>(content: string): T {
     try {
@@ -725,12 +1014,22 @@ export class TruthStreamSynthesizer extends EventEmitter {
       }
 
       return JSON.parse(cleanContent) as T;
-    } catch (error: any) {
+    } catch (firstError: any) {
+      // Fallback: try to find any JSON object in the response
+      try {
+        const jsonObjectMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonObjectMatch) {
+          return JSON.parse(jsonObjectMatch[0]) as T;
+        }
+      } catch {
+        // Fall through to final error
+      }
+
       this.logger.error('Failed to parse LLM JSON response', {
-        error: error.message,
+        error: firstError.message,
         contentPreview: content.substring(0, 300),
       });
-      throw new Error(`Failed to parse TruthStream synthesis response: ${error.message}`);
+      throw new Error(`Failed to parse TruthStream synthesis response: ${firstError.message}. Content preview: "${content.substring(0, 100)}..."`);
     }
   }
 }

@@ -204,53 +204,85 @@ export interface GenerateAnalysisResponse {
 // ============================================================================
 
 export interface TruthMirrorReportData {
-  /** How others see them — aggregate perception */
+  /** Professional executive summary — 3-5 sentences */
+  executiveSummary: string;
+
+  /** How others see them — aggregate perception with quotes */
   perceptionSummary: {
-    overallImpression: string;
-    topImpressionWords: Array<{ word: string; frequency: number }>;
-    averageScores: Record<string, number>;
+    overview: string;
+    averageScores: {
+      firstImpression: number;
+      physicalPresentation: number;
+      intellectualAttractiveness: number;
+      emotionalAttractiveness: number;
+      socialEnergy: number;
+      overall: number;
+      selfAlignment: number;
+    };
+    topImpressionWords: Array<{ word: string; count: number; percentage: number }>;
+    strengthDistribution: Array<{ category: string; count: number; percentage: number }>;
+    struggleDistribution: Array<{ category: string; count: number; percentage: number }>;
+    keyQuotes: string[];
   };
 
-  /** Patterns multiple reviewers independently noticed */
-  patternDetection: {
-    consistentStrengths: string[];
-    consistentConcerns: string[];
-    divergentOpinions: string[];
-  };
+  /** Per-dimension score breakdown with reviewer quotes */
+  dimensionBreakdown: Array<{
+    name: string;
+    score: number;
+    description: string;
+    reviewerQuotes: string[];
+  }>;
 
-  /** Self vs external perception gaps */
-  blindSpots: {
-    items: Array<{
-      dimension: string;
-      selfPerception: string;
-      externalPerception: string;
-      gap: string;
-      severity: 'minor' | 'moderate' | 'significant';
-    }>;
+  /** Patterns multiple reviewers independently noticed, with evidence */
+  patternDetection: Array<{
+    pattern: string;
+    frequency: number;
+    reviewerCount: number;
+    significance: 'high' | 'medium' | 'low';
+    description: string;
+    supportingQuotes: string[];
+  }>;
+
+  /** Self vs external perception gaps (blind spots) */
+  blindSpots: Array<{
+    dimension: string;
+    selfScore: number;
+    externalScore: number;
+    gap: number;
+    interpretation: string;
+    evidence: string;
+  }>;
+
+  /** Perception Gap — self-awareness alignment metric */
+  perceptionGap: {
+    score: number;
+    level: 'exceptional' | 'good' | 'significant_gaps' | 'major_disconnect';
     summary: string;
+    narrative: string;
+    details: string[];
   };
 
-  /** Perception Gap Score (0-100) — self-awareness alignment metric */
-  perceptionGapScore: number;
-  perceptionGapInterpretation: string;
+  /** Reviewer consensus — areas of agreement and disagreement */
+  reviewerConsensus: {
+    overallSentiment: 'positive' | 'mixed' | 'critical';
+    sentimentBreakdown: { positive: number; neutral: number; critical: number };
+    agreementAreas: string[];
+    disagreementAreas: string[];
+  };
 
   /** Goal-specific growth recommendations */
   growthRecommendations: Array<{
     area: string;
     recommendation: string;
+    journalPrompt?: string;
+    suggestedGroupType?: string;
     priority: 'high' | 'medium' | 'low';
-    actionSteps: string[];
   }>;
 
-  /** Honest assessment — what the data actually says */
-  honestAssessment: string;
-
-  /** Classification distribution */
-  reviewDistribution: {
-    constructive: number;
-    affirming: number;
-    rawTruth: number;
-    hostile: number;
+  /** Community insights — how user compares to cohort */
+  communityInsights: {
+    personalityTypeComparison: string;
+    percentileScores: Record<string, number>;
   };
 }
 

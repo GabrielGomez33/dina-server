@@ -399,9 +399,9 @@ export const requireModelAccess = (modelName: string) => {
     
     // Model access by trust level
     const modelAccess: { [key: string]: string[] } = {
-      'new': ['mxbai-embed-large'],
-      'trusted': ['mxbai-embed-large', 'mistral:7b', 'codellama:34b'],
-      'suspicious': ['mxbai-embed-large'],
+      'new': ['mxbai-embed-large', 'qwen2.5:3b'],
+      'trusted': ['mxbai-embed-large', 'qwen2.5:3b', 'mistral:7b', 'codellama:34b'],
+      'suspicious': ['mxbai-embed-large', 'qwen2.5:3b'],
       'blocked': []
     };
     

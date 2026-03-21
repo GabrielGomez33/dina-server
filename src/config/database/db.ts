@@ -775,7 +775,7 @@ private async createNewUser(request: DinaAuthRequest, deviceFingerprint: string)
     if (user.trust_level === 'trusted') {
       user.max_requests_per_minute = 100;
       user.max_tokens_per_request = 1000;
-      user.allowed_models = ['mxbai-embed-large', 'mistral:7b', 'codellama:34b'];
+      user.allowed_models = ['mxbai-embed-large', 'qwen2.5:3b', 'mistral:7b', 'codellama:34b'];
       user.allowed_endpoints = ['/health', '/models/*/embeddings', '/models/*/chat', '/models'];
     } else if (user.trust_level === 'suspicious') {
       user.max_requests_per_minute = 5;
@@ -1841,4 +1841,3 @@ private mapRowToUser(row: any): DinaUser {
 }
 
 export const database = new DinaDatabase();
-
