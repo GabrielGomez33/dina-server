@@ -472,7 +472,7 @@ export class MirrorModule extends EventEmitter {
         payload: null,
         error: {
           code: 'CLASSIFICATION_ERROR',
-          message: error instanceof Error ? error.message : 'Review classification failed',
+          message: 'Review classification failed',
         },
         metrics: { processing_time_ms: Date.now() - startTime },
       });
@@ -564,6 +564,17 @@ export class MirrorModule extends EventEmitter {
     _sessionInfo: SessionInfo
   ): Promise<DinaResponse> {
     const startTime = Date.now();
+
+    if (!this.initialized) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: { code: 'NOT_INITIALIZED', message: 'Mirror Module not initialized' },
+        metrics: { processing_time_ms: 0 },
+      });
+    }
+
     const requestData = message.payload?.data as ValidateTruthCardRequest;
 
     if (!requestData || !requestData.goal || !requestData.goalCategory
@@ -593,7 +604,7 @@ export class MirrorModule extends EventEmitter {
         request_id: message.id,
         status: 'error',
         payload: null,
-        error: { code: 'VALIDATION_ERROR', message: error.message },
+        error: { code: 'VALIDATION_ERROR', message: 'Truth card validation failed' },
         metrics: { processing_time_ms: Date.now() - startTime },
       });
     }
@@ -608,6 +619,17 @@ export class MirrorModule extends EventEmitter {
     _sessionInfo: SessionInfo
   ): Promise<DinaResponse> {
     const startTime = Date.now();
+
+    if (!this.initialized) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: { code: 'NOT_INITIALIZED', message: 'Mirror Module not initialized' },
+        metrics: { processing_time_ms: 0 },
+      });
+    }
+
     const requestData = message.payload?.data as ScoreReviewQualityRequest;
 
     if (!requestData || !requestData.responses || !requestData.questionnaireSections) {
@@ -636,7 +658,7 @@ export class MirrorModule extends EventEmitter {
         request_id: message.id,
         status: 'error',
         payload: null,
-        error: { code: 'SCORING_ERROR', message: error.message },
+        error: { code: 'SCORING_ERROR', message: 'Review quality scoring failed' },
         metrics: { processing_time_ms: Date.now() - startTime },
       });
     }
@@ -651,6 +673,17 @@ export class MirrorModule extends EventEmitter {
     _sessionInfo: SessionInfo
   ): Promise<DinaResponse> {
     const startTime = Date.now();
+
+    if (!this.initialized) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: { code: 'NOT_INITIALIZED', message: 'Mirror Module not initialized' },
+        metrics: { processing_time_ms: 0 },
+      });
+    }
+
     const data = message.payload?.data;
 
     if (!data || typeof data.hostilityCount !== 'number' || typeof data.totalReviews !== 'number') {
@@ -679,7 +712,7 @@ export class MirrorModule extends EventEmitter {
         request_id: message.id,
         status: 'error',
         payload: null,
-        error: { code: 'ASSESSMENT_ERROR', message: error.message },
+        error: { code: 'ASSESSMENT_ERROR', message: 'Hostility pattern assessment failed' },
         metrics: { processing_time_ms: Date.now() - startTime },
       });
     }

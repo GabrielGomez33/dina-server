@@ -296,8 +296,11 @@ export class TruthStreamSynthesizer extends EventEmitter {
     parts.push('- raw_truth: Honest and potentially uncomfortable, but fair. Not attacking the person — just being direct about what they see.');
     parts.push('- hostile: Mean-spirited, personal attacks, non-constructive negativity. Intended to harm rather than help.');
     parts.push('');
-    parts.push(`REVIEWEE'S GOAL: ${request.revieweeGoal}${request.revieweeGoalText ? ` — "${request.revieweeGoalText}"` : ''}`);
-    parts.push(`REVIEWER'S SELF-TAGGED TONE: ${request.reviewTone || 'not specified'}`);
+    const sanitizedGoal = this.sanitizeForPrompt(request.revieweeGoal || '', MAX_CONTEXT_CHARS);
+    const sanitizedGoalText = request.revieweeGoalText ? this.sanitizeForPrompt(request.revieweeGoalText, MAX_CONTEXT_CHARS) : '';
+    const sanitizedTone = this.sanitizeForPrompt(request.reviewTone || 'not specified', 200);
+    parts.push(`REVIEWEE'S GOAL: ${sanitizedGoal}${sanitizedGoalText ? ` — "${sanitizedGoalText}"` : ''}`);
+    parts.push(`REVIEWER'S SELF-TAGGED TONE: ${sanitizedTone}`);
     parts.push('');
     parts.push('REVIEW CONTENT:');
     parts.push(reviewText);
@@ -404,7 +407,7 @@ export class TruthStreamSynthesizer extends EventEmitter {
 
     // Response format instructions — compact to reduce token count and generation time
     parts.push('Generate a Truth Mirror Report. Respond ONLY with valid JSON. Rules:');
-    parts.push('- IMPORTANT: Refer to the subject as "You" or "you" — NEVER use the self-description text as a name');
+    parts.push('- IMPORTANT: Refer to the subject as "the individual" or "the reviewee" — NEVER use the self-description text as a name');
     parts.push('- Cite EXACT reviewer quotes in supportingQuotes/keyQuotes/evidence fields');
     parts.push('- Scores are 0-10 (except perceptionGap.score: 0-100)');
     parts.push('- perceptionGap.level: "exceptional"(0-25),"good"(26-50),"significant_gaps"(51-75),"major_disconnect"(76-100)');

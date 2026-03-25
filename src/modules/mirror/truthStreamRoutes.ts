@@ -157,13 +157,13 @@ export function registerTruthStreamRoutes(
             sanitized: true,
           },
           payload: {
-            reviewId,
+            reviewId: String(reviewId).substring(0, 100),
             reviewText: sanitizedReviewText,
-            responses,
+            responses: typeof responses === 'object' && !Array.isArray(responses) ? responses : {},
             reviewTone: reviewTone ? String(reviewTone).substring(0, 100) : undefined,
-            revieweeGoal,
+            revieweeGoal: String(revieweeGoal).substring(0, 200),
             revieweeGoalText: revieweeGoalText ? String(revieweeGoalText).substring(0, 500) : undefined,
-            qualityMetrics,
+            qualityMetrics: qualityMetrics && typeof qualityMetrics === 'object' ? qualityMetrics : undefined,
           },
         });
 
@@ -197,7 +197,6 @@ export function registerTruthStreamRoutes(
           success: false,
           error: 'Review classification failed',
           code: 'CLASSIFICATION_ERROR',
-          message: error instanceof Error ? error.message : 'Unknown error',
         });
       }
     }
@@ -271,6 +270,9 @@ export function registerTruthStreamRoutes(
           return;
         }
 
+        // Cap reviews array to prevent resource exhaustion
+        const cappedReviews = reviews.slice(0, 100);
+
         const validAnalysisTypes = [
           'truth_mirror_report', 'perception_gap', 'temporal_trend',
           'blind_spot', 'growth_recommendation',
@@ -297,13 +299,13 @@ export function registerTruthStreamRoutes(
           payload: {
             userId: targetUserId,
             analysisType,
-            reviews,
-            selfAssessmentData,
+            reviews: cappedReviews,
+            selfAssessmentData: selfAssessmentData && typeof selfAssessmentData === 'object' ? selfAssessmentData : undefined,
             goal: String(goal).substring(0, 1000),
-            goalCategory,
+            goalCategory: String(goalCategory).substring(0, 100),
             selfStatement: selfStatement ? String(selfStatement).substring(0, 2000) : undefined,
-            totalReviewCount: totalReviewCount || reviews.length,
-            previousAnalysis,
+            totalReviewCount: totalReviewCount || cappedReviews.length,
+            previousAnalysis: previousAnalysis && typeof previousAnalysis === 'object' ? previousAnalysis : undefined,
           },
         });
 
@@ -337,7 +339,6 @@ export function registerTruthStreamRoutes(
           success: false,
           error: 'Analysis generation failed',
           code: 'ANALYSIS_ERROR',
-          message: error instanceof Error ? error.message : 'Unknown error',
         });
       }
     }
@@ -385,12 +386,12 @@ export function registerTruthStreamRoutes(
             sanitized: true,
           },
           payload: {
-            selfStatement,
-            goal,
-            goalCategory,
-            sharedDataTypes: Array.isArray(sharedDataTypes) ? sharedDataTypes : [],
-            feedbackAreas: Array.isArray(feedbackAreas) ? feedbackAreas : undefined,
-            displayAlias,
+            selfStatement: selfStatement ? String(selfStatement).substring(0, 2000) : undefined,
+            goal: String(goal).substring(0, 1000),
+            goalCategory: String(goalCategory).substring(0, 100),
+            sharedDataTypes: Array.isArray(sharedDataTypes) ? sharedDataTypes.slice(0, 20) : [],
+            feedbackAreas: Array.isArray(feedbackAreas) ? feedbackAreas.slice(0, 20) : undefined,
+            displayAlias: String(displayAlias).substring(0, 100),
           },
         });
 
@@ -470,10 +471,10 @@ export function registerTruthStreamRoutes(
             sanitized: true,
           },
           payload: {
-            responses,
-            questionnaireSections: Array.isArray(questionnaireSections) ? questionnaireSections : [],
+            responses: typeof responses === 'object' && !Array.isArray(responses) ? responses : {},
+            questionnaireSections: Array.isArray(questionnaireSections) ? questionnaireSections.slice(0, 50) : [],
             timeSpentSeconds: typeof timeSpentSeconds === 'number' ? timeSpentSeconds : 0,
-            freeFormText: freeFormText ? String(freeFormText) : undefined,
+            freeFormText: freeFormText ? String(freeFormText).substring(0, 10000) : undefined,
           },
         });
 
@@ -626,6 +627,7 @@ export function registerTruthStreamRoutes(
           safeJsonResponse(res, 500, {
             success: false,
             error: 'Health check failed',
+            code: 'HEALTH_ERROR',
           });
         }
       } catch (error: any) {
@@ -637,12 +639,4 @@ export function registerTruthStreamRoutes(
     }
   );
 
-  console.log('[TruthStream] Mirror TruthStream routes registered successfully (DUMP protocol)');
-  console.log('[TruthStream] Endpoints:');
-  console.log('  POST /mirror/truthstream/classify-review');
-  console.log('  POST /mirror/truthstream/generate-analysis');
-  console.log('  POST /mirror/truthstream/validate-truth-card');
-  console.log('  POST /mirror/truthstream/score-review-quality');
-  console.log('  POST /mirror/truthstream/assess-hostility-pattern');
-  console.log('  GET  /mirror/truthstream/health');
 }
