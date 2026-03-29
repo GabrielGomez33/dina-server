@@ -10,6 +10,7 @@ import { database } from '../../config/database/db';
 import { digiMOrchestrator } from '../../modules/digim';
 import { isDigiMMethod } from '../../modules/digim/types';
 import { registerTruthStreamRoutes } from '../../modules/mirror/truthStreamRoutes';
+import { registerPersonalAnalysisRoutes } from '../../modules/mirror/personalAnalysisRoutes';
 
 // FIXED: Add helper function to map trust levels to security clearances
 function mapTrustLevelToSecurityLevel(trustLevel: string): SecurityLevel {
@@ -57,7 +58,8 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     // Timeout hierarchy: Synthesizer (240s) < Queue processor (280s) < Express route (300s)
     const isTruthStreamLLM = req.path.startsWith('/mirror/truthstream/classify-review')
       || req.path.startsWith('/mirror/truthstream/generate-analysis');
-    const timeoutMs = isTruthStreamLLM ? 300000 : 60000;
+    const isPersonalAnalysisLLM = req.path.startsWith('/mirror/personal-analysis/generate');
+    const timeoutMs = (isTruthStreamLLM || isPersonalAnalysisLLM) ? 300000 : 60000;
 
     const timeout = setTimeout(() => {
       if (!res.headersSent && !timeoutHandled) {
@@ -1505,13 +1507,18 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   registerTruthStreamRoutes(apiRouter, dina, createDinaMessage, mapTrustLevelToSecurityLevel);
 
   // ================================
+  // PERSONAL ANALYSIS ROUTES (Mirror Module - DUMP Protocol)
+  // ================================
+  registerPersonalAnalysisRoutes(apiRouter, dina, createDinaMessage, mapTrustLevelToSecurityLevel);
+
+  // ================================
   // INTEGRATION COMPLETION
   // ================================
 
   // Mount the router
   app.use(apiPath, apiRouter);
 
-console.log(`   📡 API mounted at ${apiPath} (Mirror, DIGIM, LLM, Admin, TruthStream)`);
+console.log(`   📡 API mounted at ${apiPath} (Mirror, DIGIM, LLM, Admin, TruthStream, PersonalAnalysis)`);
 
   // Optional: Add a routes listing endpoint
   apiRouter.get('/routes', (req: AuthenticatedRequest, res: Response) => {

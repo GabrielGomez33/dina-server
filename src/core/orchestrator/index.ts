@@ -758,6 +758,13 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
           console.log('🔮 Processing TruthStream Health Check');
           return await mirrorModule.handleTruthStreamHealth();
 
+        // ================================================================
+        // PERSONAL ANALYSIS: Comprehensive personal report generation
+        // ================================================================
+        case 'mirror_personal_analysis':
+          console.log('🪞 Processing Personal Analysis Generation');
+          return await mirrorModule.handlePersonalAnalysis(message, sessionInfo);
+
         case 'get_insights':
         case 'get_patterns':
         case 'get_questions':

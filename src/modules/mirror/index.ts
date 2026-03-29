@@ -35,6 +35,7 @@ import { MirrorInsightGenerator } from './processors/insightGenerator';
 import { MirrorNotificationSystem } from './systems/notificationSystem';
 import { InsightSynthesizer, InsightSynthesisRequest, InsightSynthesisResponse } from './processors/insightSynthesizer';
 import { TruthStreamSynthesizer } from './processors/truthStreamSynthesizer';
+import { PersonalAnalysisSynthesizer, PersonalAnalysisRequest } from './processors/personalAnalysisSynthesizer';
 import { truthStreamManager } from './truthStreamManager';
 import type {
   ClassifyReviewRequest,
@@ -114,6 +115,7 @@ export class MirrorModule extends EventEmitter {
   private notificationSystem: MirrorNotificationSystem;
   private insightSynthesizer: InsightSynthesizer;
   private truthStreamSynthesizer: TruthStreamSynthesizer;
+  private personalAnalysisSynthesizer: PersonalAnalysisSynthesizer;
   private llmManager: DinaLLMManager;
   private redis: typeof redisManager;
   private initialized: boolean = false;
@@ -142,6 +144,7 @@ export class MirrorModule extends EventEmitter {
     this.notificationSystem = new MirrorNotificationSystem();
     this.insightSynthesizer = new InsightSynthesizer(this.llmManager);
     this.truthStreamSynthesizer = new TruthStreamSynthesizer(this.llmManager);
+    this.personalAnalysisSynthesizer = new PersonalAnalysisSynthesizer(this.llmManager);
 
     this.setupErrorHandling();
   }
@@ -169,6 +172,7 @@ export class MirrorModule extends EventEmitter {
         this.notificationSystem.initialize(),
         this.insightSynthesizer.initialize(),
         this.truthStreamSynthesizer.initialize(),
+        this.personalAnalysisSynthesizer.initialize(),
         truthStreamManager.initialize(),
       ]);
 
@@ -178,7 +182,7 @@ export class MirrorModule extends EventEmitter {
       await this.setupProcessingQueues();
 
       this.initialized = true;
-      console.log('✅ Mirror Module initialized successfully (with InsightSynthesizer + TruthStreamSynthesizer)');
+      console.log('✅ Mirror Module initialized successfully (with InsightSynthesizer + TruthStreamSynthesizer + PersonalAnalysisSynthesizer)');
 
       this.emit('initialized');
     } catch (error) {
@@ -208,6 +212,7 @@ export class MirrorModule extends EventEmitter {
     this.notificationSystem.on('error', (error) => this.handleComponentError('NotificationSystem', error));
     this.insightSynthesizer.on('error', (error) => this.handleComponentError('InsightSynthesizer', error));
     this.truthStreamSynthesizer.on('error', (error) => this.handleComponentError('TruthStreamSynthesizer', error));
+    this.personalAnalysisSynthesizer.on('error', (error) => this.handleComponentError('PersonalAnalysisSynthesizer', error));
   }
 
   private handleComponentError(component: string, error: any): void {
@@ -739,6 +744,88 @@ export class MirrorModule extends EventEmitter {
     });
   }
 
+  // ============================================================================
+  // PERSONAL ANALYSIS HANDLER - Invoked via DUMP protocol from orchestrator
+  // ============================================================================
+
+  /**
+   * Generate comprehensive personal analysis using intake data + journal entries.
+   * Called by orchestrator.processMirrorRequest() -> 'mirror_personal_analysis_generate'
+   */
+  async handlePersonalAnalysis(
+    message: DinaUniversalMessage,
+    sessionInfo: SessionInfo
+  ): Promise<DinaResponse> {
+    const startTime = Date.now();
+
+    if (!this.initialized) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: { code: 'NOT_INITIALIZED', message: 'Mirror Module not initialized' },
+        metrics: { processing_time_ms: 0 },
+      });
+    }
+
+    const requestData = message.payload?.data as PersonalAnalysisRequest;
+
+    if (!requestData || !requestData.userId || !requestData.analysisType) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Missing required fields: userId, analysisType',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+
+    // Must have either intake data or journal entries
+    const hasIntake = requestData.intakeData && Object.keys(requestData.intakeData).length > 0;
+    const hasJournal = requestData.journalEntries && requestData.journalEntries.length > 0;
+    if (!hasIntake && !hasJournal) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'INSUFFICIENT_DATA',
+          message: 'At least intake data or journal entries are required for personal analysis',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+
+    try {
+      console.log(`🪞 PersonalAnalysis: Generating ${requestData.analysisType} analysis for user ${requestData.userId}`);
+
+      const result = await this.personalAnalysisSynthesizer.generateAnalysis(requestData);
+
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'success',
+        payload: { data: result },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    } catch (error: any) {
+      console.error('❌ PersonalAnalysis generation failed:', error.message);
+
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'ANALYSIS_ERROR',
+          message: error instanceof Error ? error.message : 'Personal analysis generation failed',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+  }
+
   /**
    * Build textual summary from structured review responses when freeFormText is empty.
    */
@@ -1110,6 +1197,7 @@ export class MirrorModule extends EventEmitter {
         this.notificationSystem.healthCheck(),
         this.insightSynthesizer.healthCheck(),
         this.truthStreamSynthesizer.healthCheck(),
+        this.personalAnalysisSynthesizer.healthCheck(),
       ]);
 
       const healthyComponents = componentHealth.filter(result =>
@@ -1211,6 +1299,7 @@ export class MirrorModule extends EventEmitter {
         this.notificationSystem.shutdown(),
         this.insightSynthesizer.shutdown(),
         this.truthStreamSynthesizer.shutdown(),
+        this.personalAnalysisSynthesizer.shutdown(),
       ]);
 
       this.initialized = false;
