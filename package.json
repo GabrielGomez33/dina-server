@@ -4,10 +4,20 @@
   "description": "DINA Distributed Intelligence Neural Architect - Backend System",
   "main": "dist/index.js",
   "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "rebuild": "npm run clean && npm run build",
+    "start": "node dist/index.js",
+    "start:pm2": "sudo pm2 start ecosystem.config.js",
+    "stop": "sudo pm2 stop dina-server",
+    "restart": "sudo pm2 restart dina-server",
+    "reload": "sudo pm2 reload dina-server",
+    "logs": "sudo pm2 logs dina-server",
+    "status": "sudo pm2 status",
+    "monit": "sudo pm2 monit",
     "dev": "ts-node src/index.ts",
     "dev:watch": "nodemon --exec ts-node src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "deploy": "npm run rebuild && sudo pm2 reload ecosystem.config.js",
     "test": "jest",
     "type-check": "tsc --noEmit"
   },
@@ -52,3 +62,4 @@
     "typescript": "^5.3.3"
   }
 }
+
