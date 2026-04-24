@@ -37,7 +37,7 @@ module.exports = {
       restart_delay: 3000,
 
       // Resource limits
-      max_memory_restart: '512M',
+      max_memory_restart: '2048M',
 
       // Logging
       out_file: path.join(LOGS, 'dina-server-out.log'),
@@ -50,6 +50,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         NODE_OPTIONS: '--enable-source-maps',
+        CUDA_VISIBLE_DEVICES: '0',
       },
 
       // Graceful shutdown
