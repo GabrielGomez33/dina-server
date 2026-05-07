@@ -18,7 +18,7 @@
 #
 # DEPLOYMENT:
 #   - SSH into production server as dina
-#   - Git pull → npm ci → build → PM2 zero-downtime reload
+#   - Git pull → npm ci → build → PM2 hard restart
 #   - Health check verification with automatic rollback on failure
 #   - Git tag + GitHub Release on success
 #
@@ -26,6 +26,13 @@
 #       It communicates with mirror-server via WebSocket (DUMP protocol).
 #       Deploy order matters: if both change, deploy dina-server FIRST,
 #       then mirror-server, since mirror-server depends on dina-server.
+#
+# WHY pm2 restart vs reload:
+#   See mirror-server pipeline notes — same reasoning. Hard restart is
+#   bulletproof against any lingering state (e.g. an LLM streaming
+#   connection that didn't close cleanly during a graceful shutdown).
+#   User impact is sub-second; mirror-server's reconnect logic re-
+#   establishes the DUMP-protocol WebSocket within ~1-2s.
 # =============================================================================
 
 name: DINA Server CI/CD
@@ -119,7 +126,7 @@ jobs:
     name: Deploy to Production
     needs: quality
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true')
@@ -164,7 +171,7 @@ jobs:
           cd ${{ secrets.SERVER_DEPLOY_PATH }}
 
           # Step 1: Pull latest code
-          echo "[1/5] Pulling latest code..."
+          echo "[1/6] Pulling latest code..."
           git fetch origin master
           git reset --hard origin/master
 
@@ -193,13 +200,15 @@ jobs:
             exit 1
           fi
 
-          # Step 6: Zero-downtime PM2 reload
-          echo "[6/6] Reloading PM2..."
-          sudo pm2 reload ecosystem.config.js
+          # Step 6: Hard restart PM2 (was 'reload', changed to 'restart'
+          # for bulletproof state reset — graceful shutdown could leave
+          # LLM streaming connections in stuck states).
+          echo "[6/6] Restarting PM2..."
+          sudo pm2 restart ecosystem.config.js
 
           echo ""
           echo "Deploy complete. Waiting for process to stabilize..."
-          sleep 10
+          sleep 15
 
           sudo pm2 list
           DEPLOY_SCRIPT
@@ -208,7 +217,11 @@ jobs:
         id: health_check
         run: |
           echo "Running health check..."
-          MAX_RETRIES=6
+          # 12 retries × 5s + initial sleep = up to ~75s grace period.
+          # DINA's startup involves loading LLM module, opening WS to
+          # mirror-server, registering message handlers — can take longer
+          # than a simple HTTP server on a cold restart.
+          MAX_RETRIES=12
           RETRY_INTERVAL=5
 
           for i in $(seq 1 $MAX_RETRIES); do
@@ -256,10 +269,11 @@ jobs:
           git checkout "$ROLLBACK_COMMIT"
           npm ci --production
           npm run build
-          sudo pm2 reload ecosystem.config.js
+          # Hard restart on rollback too — same reasoning as deploy.
+          sudo pm2 restart ecosystem.config.js
 
           echo "Rollback complete. Waiting for stabilization..."
-          sleep 10
+          sleep 15
           sudo pm2 list
           ROLLBACK_SCRIPT
 
