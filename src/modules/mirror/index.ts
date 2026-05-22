@@ -37,6 +37,7 @@ import { InsightSynthesizer, InsightSynthesisRequest, InsightSynthesisResponse }
 import { TruthStreamSynthesizer } from './processors/truthStreamSynthesizer';
 import { PersonalAnalysisSynthesizer, PersonalAnalysisRequest } from './processors/personalAnalysisSynthesizer';
 import { truthStreamManager } from './truthStreamManager';
+import { userPurgeManager, UserPurgeResult } from './managers/userPurgeManager';
 import type {
   ClassifyReviewRequest,
   GenerateAnalysisRequest,
@@ -116,6 +117,7 @@ export class MirrorModule extends EventEmitter {
   private insightSynthesizer: InsightSynthesizer;
   private truthStreamSynthesizer: TruthStreamSynthesizer;
   private personalAnalysisSynthesizer: PersonalAnalysisSynthesizer;
+  private userPurgeManager: typeof userPurgeManager;
   private llmManager: DinaLLMManager;
   private redis: typeof redisManager;
   private initialized: boolean = false;
@@ -145,6 +147,7 @@ export class MirrorModule extends EventEmitter {
     this.insightSynthesizer = new InsightSynthesizer(this.llmManager);
     this.truthStreamSynthesizer = new TruthStreamSynthesizer(this.llmManager);
     this.personalAnalysisSynthesizer = new PersonalAnalysisSynthesizer(this.llmManager);
+    this.userPurgeManager = userPurgeManager;
 
     this.setupErrorHandling();
   }
@@ -173,6 +176,7 @@ export class MirrorModule extends EventEmitter {
         this.insightSynthesizer.initialize(),
         this.truthStreamSynthesizer.initialize(),
         this.personalAnalysisSynthesizer.initialize(),
+        this.userPurgeManager.initialize(),
         truthStreamManager.initialize(),
       ]);
 
@@ -213,6 +217,7 @@ export class MirrorModule extends EventEmitter {
     this.insightSynthesizer.on('error', (error) => this.handleComponentError('InsightSynthesizer', error));
     this.truthStreamSynthesizer.on('error', (error) => this.handleComponentError('TruthStreamSynthesizer', error));
     this.personalAnalysisSynthesizer.on('error', (error) => this.handleComponentError('PersonalAnalysisSynthesizer', error));
+    this.userPurgeManager.on('error', (error) => this.handleComponentError('UserPurgeManager', error));
   }
 
   private handleComponentError(component: string, error: any): void {
@@ -826,6 +831,117 @@ export class MirrorModule extends EventEmitter {
     }
   }
 
+  // ============================================================================
+  // USER PURGE HANDLER — Invoked via DUMP protocol from orchestrator
+  // ============================================================================
+
+  /**
+   * Purge every Dina-side artefact for the given Mirror userId.
+   * Called by orchestrator.processMirrorRequest() -> 'mirror_purge_user'
+   * after mirror-server has already removed the user locally.
+   *
+   * Payload shape (message.payload.data):
+   *   {
+   *     userId: string,            // required — the Mirror userId
+   *     sessionId?: string|null,   // optional — for audit log only
+   *     reason?: string,           // optional — defaults to user_account_deletion
+   *     requestedAt?: string       // optional — ISO timestamp from caller
+   *   }
+   *
+   * Local deletion (mirror-server side) is the source of truth. A failure
+   * here is reported back to the caller but does NOT unwind mirror-server's
+   * own delete — orphaned rows here are harmless until garbage collected.
+   */
+  async handleUserDeletion(
+    message: DinaUniversalMessage,
+    sessionInfo: SessionInfo
+  ): Promise<DinaResponse> {
+    const startTime = Date.now();
+
+    if (!this.initialized) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: { code: 'NOT_INITIALIZED', message: 'Mirror Module not initialized' },
+        metrics: { processing_time_ms: 0 },
+      });
+    }
+
+    const requestData = (message.payload?.data || {}) as {
+      userId?: unknown;
+      sessionId?: unknown;
+      reason?: unknown;
+      requestedAt?: unknown;
+    };
+
+    // userId is the only field we strictly require. We prefer payload.userId
+    // (set by mirror-server) but fall back to message.security.user_id for
+    // resilience against missing fields.
+    const userIdRaw = requestData.userId ?? sessionInfo.userId ?? message.security?.user_id;
+    const userId = userIdRaw === null || userIdRaw === undefined
+      ? ''
+      : String(userIdRaw).trim();
+
+    if (!userId) {
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Missing required field: userId',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+
+    try {
+      console.log(`🪞 [MirrorModule] User deletion requested for ${userId} (reason=${String(requestData.reason || 'user_account_deletion')})`);
+
+      const result: UserPurgeResult = await this.userPurgeManager.purgeUser(userId);
+
+      // No in-memory context cleanup needed here — the purgeManager has
+      // already removed the durable rows (mirror_user_context) and dropped
+      // the cached `mirror:context:<userId>` Redis key. Any in-process
+      // references will release on the next GC cycle.
+
+      this.emit('userPurged', {
+        userId,
+        result,
+        triggeredBy: sessionInfo.sessionId || null,
+      });
+
+      // DinaResponse.status only models success/error — we surface partial
+      // outcomes inside the payload (result.allTablesPurged) so the caller
+      // (mirror-server) can decide what to relay.
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'success',
+        payload: {
+          data: {
+            ...result,
+            partial: !result.allTablesPurged,
+          },
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    } catch (error: any) {
+      console.error(`❌ [MirrorModule] User deletion failed for ${userId}:`, error?.message || error);
+
+      return createDinaResponse({
+        request_id: message.id,
+        status: 'error',
+        payload: null,
+        error: {
+          code: 'PURGE_ERROR',
+          message: error?.message || 'User purge failed',
+        },
+        metrics: { processing_time_ms: Date.now() - startTime },
+      });
+    }
+  }
+
   /**
    * Build textual summary from structured review responses when freeFormText is empty.
    */
@@ -1198,6 +1314,7 @@ export class MirrorModule extends EventEmitter {
         this.insightSynthesizer.healthCheck(),
         this.truthStreamSynthesizer.healthCheck(),
         this.personalAnalysisSynthesizer.healthCheck(),
+        this.userPurgeManager.healthCheck(),
       ]);
 
       const healthyComponents = componentHealth.filter(result =>
@@ -1300,6 +1417,7 @@ export class MirrorModule extends EventEmitter {
         this.insightSynthesizer.shutdown(),
         this.truthStreamSynthesizer.shutdown(),
         this.personalAnalysisSynthesizer.shutdown(),
+        this.userPurgeManager.shutdown(),
       ]);
 
       this.initialized = false;
