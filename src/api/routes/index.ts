@@ -833,6 +833,120 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   );
 
+  // ==========================================================================
+  // MIRROR: Purge User (account deletion downstream half)
+  // ==========================================================================
+  // Invoked by mirror-server's deleteAccount controller AFTER it has already
+  // removed the user from its own DB + filesystem. Wipes every Dina-side
+  // artefact for the given userId (SQL rows in mirror_*, cache keys, etc.).
+  //
+  // Auth: standard `authenticate` middleware applies. We additionally require
+  // 'trusted' trust level — mirror-server holds DINA_SERVICE_KEY which maps
+  // to that level, while a random end-user token does not. The userId in the
+  // body is the SUBJECT of the purge, not the caller — the caller is identified
+  // by its service-key auth.
+  //
+  // Idempotent: re-running this against an already-purged user is a no-op.
+  // ==========================================================================
+  apiRouter.post('/mirror/purge-user', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const callerKey = req.dina?.dina_key;
+      if (!callerKey) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required',
+          code: 'NO_AUTH',
+        });
+        return;
+      }
+
+      const { userId, sessionId, reason, requestedAt } = (req.body || {}) as {
+        userId?: unknown;
+        sessionId?: unknown;
+        reason?: unknown;
+        requestedAt?: unknown;
+      };
+
+      const subjectUserId = userId === null || userId === undefined ? '' : String(userId).trim();
+      if (!subjectUserId) {
+        res.status(400).json({
+          success: false,
+          error: 'Missing required field: userId',
+          code: 'INVALID_REQUEST',
+        });
+        return;
+      }
+
+      console.log(
+        `🪞 [api/mirror/purge-user] caller=${callerKey} subject=${subjectUserId} reason=${String(reason || 'user_account_deletion')}`
+      );
+
+      // DUMP message — see orchestrator.processMirrorRequest case 'mirror_purge_user'
+      const mirrorMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: {
+          module: 'mirror',
+          method: 'mirror_purge_user',
+          priority: 8,
+        },
+        security: {
+          // For audit logs the caller is the service-key holder. The subject
+          // userId is in the payload so handleUserDeletion can use it without
+          // confusing identity-of-caller with identity-of-target.
+          user_id: callerKey,
+          session_id: req.dina?.session_id,
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true,
+        },
+        payload: {
+          userId: subjectUserId,
+          sessionId: typeof sessionId === 'string' ? sessionId : null,
+          reason: typeof reason === 'string' ? reason : 'user_account_deletion',
+          requestedAt: typeof requestedAt === 'string' ? requestedAt : new Date().toISOString(),
+        },
+      });
+
+      const mirrorResponse = await dina.handleIncomingMessage(mirrorMessage);
+
+      // Same double-wrap shape as the other mirror endpoints:
+      //   mirrorModule.handleUserDeletion() -> createDinaResponse({ payload: { data: PurgeResult+{partial} } })
+      //   orchestrator.handleIncomingMessage() -> createDinaResponse({ payload: <inner DinaResponse> })
+      // DinaResponse.status is only success/error — the partial signal is
+      // carried inside the payload (purgeData.partial / allTablesPurged).
+      const innerResponse = mirrorResponse.payload?.data;
+      const purgeData = innerResponse?.payload?.data;
+      const innerStatus: string = innerResponse?.status || mirrorResponse.status || 'error';
+
+      if (innerStatus === 'success') {
+        const partial = !!purgeData?.partial;
+        res.json({
+          success: true,
+          status: partial ? 'partial' : 'success',
+          data: purgeData || null,
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          error:
+            innerResponse?.error?.message
+            || mirrorResponse.error?.message
+            || 'User purge failed',
+          code:
+            innerResponse?.error?.code
+            || mirrorResponse.error?.code
+            || 'PURGE_ERROR',
+        });
+      }
+    } catch (error: any) {
+      console.error('❌ Error in mirror/purge-user:', error);
+      res.status(500).json({
+        success: false,
+        error: 'User purge failed',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
   // Get User Context and Patterns (trusted users only)
   apiRouter.get('/mirror/context', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
     try {

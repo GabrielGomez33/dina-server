@@ -765,6 +765,15 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
           console.log('🪞 Processing Personal Analysis Generation');
           return await mirrorModule.handlePersonalAnalysis(message, sessionInfo);
 
+        // ================================================================
+        // ACCOUNT DELETION: Purge every Dina-side trace of a Mirror user.
+        // Invoked by mirror-server's deleteAccount controller AFTER it has
+        // already removed the user locally.
+        // ================================================================
+        case 'mirror_purge_user':
+          console.log('🪞 Processing Mirror User Purge');
+          return await mirrorModule.handleUserDeletion(message, sessionInfo);
+
         case 'get_insights':
         case 'get_patterns':
         case 'get_questions':
