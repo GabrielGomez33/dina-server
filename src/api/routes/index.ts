@@ -3,7 +3,7 @@
 
 import express, { Request, Response, NextFunction } from 'express';
 import { DinaCore } from '../../core/orchestrator';
-import { authenticate, rateLimit, sanitizeInput, handleError, requireTrustLevel, corsMiddleware, AuthenticatedRequest } from '../middleware/security';
+import { authenticate, rateLimit, sanitizeInput, handleError, requireTrustLevel, requireServiceAuth, corsMiddleware, AuthenticatedRequest } from '../middleware/security';
 import { DinaUniversalMessage, createDinaMessage, MessagePriority, SecurityLevel } from '../../core/protocol';
 import { v4 as uuidv4 } from 'uuid';
 import { database } from '../../config/database/db';
@@ -840,15 +840,20 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // removed the user from its own DB + filesystem. Wipes every Dina-side
   // artefact for the given userId (SQL rows in mirror_*, cache keys, etc.).
   //
-  // Auth: standard `authenticate` middleware applies. We additionally require
-  // 'trusted' trust level — mirror-server holds DINA_SERVICE_KEY which maps
-  // to that level, while a random end-user token does not. The userId in the
-  // body is the SUBJECT of the purge, not the caller — the caller is identified
-  // by its service-key auth.
+  // Auth: `requireServiceAuth` — the same shared-secret pattern used elsewhere
+  // for service-to-service calls. Expects header `X-Service-Key` matching
+  // `MIRROR_SERVICE_KEY` on dina-server. If `MIRROR_SERVICE_KEY` is unset on
+  // dina-server, the middleware logs a warning and allows the call through
+  // (backwards-compatible fallback), so this works on a fresh deploy without
+  // operator action and tightens automatically once the env var is set on
+  // both fleets.
+  //
+  // The userId in the body is the SUBJECT of the purge, not the caller —
+  // the caller is identified by the service-key handshake.
   //
   // Idempotent: re-running this against an already-purged user is a no-op.
   // ==========================================================================
-  apiRouter.post('/mirror/purge-user', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+  apiRouter.post('/mirror/purge-user', requireServiceAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const callerKey = req.dina?.dina_key;
       if (!callerKey) {
