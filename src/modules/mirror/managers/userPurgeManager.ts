@@ -172,8 +172,18 @@ export class UserPurgeManager extends EventEmitter {
       const column = entry.column || 'user_id';
       const sql = `DELETE FROM \`${entry.table}\` WHERE \`${column}\` = ?`;
       try {
-        const [res] = await DB.query(sql, [id]);
-        const affected = Number((res as any)?.affectedRows ?? 0);
+        // DinaDatabase.query() returns the OkPacket directly for DML
+        // statements (see config/database/db.ts: `const [rows] =
+        // await this.pool.execute(...); return rows;`). A prior version
+        // of this code destructured `const [res] = await DB.query(...)`
+        // which tried to iterate the OkPacket — mysql2's ResultSetHeader
+        // is not iterable, so every DELETE threw a TypeError into the
+        // catch, was misclassified as a "real" error (not table-missing),
+        // and the manager reported `ok=false` + `0 rows` even though the
+        // DELETE itself had succeeded server-side. Use the result
+        // directly.
+        const res: any = await DB.query(sql, [id]);
+        const affected = Number(res?.affectedRows ?? 0);
         result.tables.push({ table: entry.table, affectedRows: affected, ok: true });
         result.totalRowsAffected += affected;
       } catch (err: any) {
@@ -245,10 +255,19 @@ export class UserPurgeManager extends EventEmitter {
     result.durationMs = finishedAt.getTime() - startedAt.getTime();
 
     this.emit('userPurged', { userId: id, result });
+    // Surface enough detail in the one summary line that the operator
+    // can tell "0 rows because nothing existed" from "0 rows because
+    // something broke". Per-table failures and redis errors both flip
+    // a flag visible here.
+    const failedTables = result.tables.filter(t => !t.ok).length;
+    const redisStatus = result.redis.errors.length === 0
+      ? `redis=${result.redis.deletedKeys} keys`
+      : `redis=${result.redis.deletedKeys} keys, ${result.redis.errors.length} error(s): ${result.redis.errors.slice(0, 2).join(' | ')}`;
     console.log(
       `🧹 [UserPurgeManager] Finished purge for user ${id}: `
-      + `tables=${result.totalRowsAffected} rows across ${result.tables.length} tables, `
-      + `redis=${result.redis.deletedKeys} keys, `
+      + `tables=${result.totalRowsAffected} rows across ${result.tables.length} tables`
+      + (failedTables > 0 ? ` (${failedTables} failed)` : '')
+      + `, ${redisStatus}, `
       + `ok=${result.allTablesPurged}, `
       + `took=${result.durationMs}ms`
     );
