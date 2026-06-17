@@ -12,6 +12,13 @@ import {
   ComplexityScore,
   LLMResponse
 } from './intelligence';
+import {
+  getLlmConfig,
+  estimateTotalVramMb,
+  isOversized,
+  fitsBudget,
+} from './llmConfig';
+import { gpuMonitor } from './gpuMonitor';
 
 interface OllamaResponse {
   model: string;
@@ -44,16 +51,23 @@ interface OllamaGenerateOptions {
   maxTokens?: number;
   /** Sampling temperature (0.0 - 1.0). Lower = more deterministic. */
   temperature?: number;
+  /** Override GPU layer count (defaults to llmConfig.numGpu = force full GPU). */
+  numGpu?: number;
+  /** Override context window (defaults to llmConfig.numCtx). */
+  numCtx?: number;
+  /** Override keep_alive (defaults to llmConfig.keepAlive). */
+  keepAlive?: string;
 }
 
 export class OllamaClient {
   private baseUrl: string;
   private timeoutMs: number;
 
-  constructor(baseUrl: string = 'http://localhost:11434', timeoutMs: number = 60000) {
-    this.baseUrl = baseUrl;
-    this.timeoutMs = timeoutMs;
-    console.log(`🚀 Initializing OllamaClient with baseUrl: ${baseUrl}`);
+  constructor(baseUrl?: string, timeoutMs?: number) {
+    const cfg = getLlmConfig();
+    this.baseUrl = baseUrl ?? cfg.ollamaBaseUrl;
+    this.timeoutMs = timeoutMs ?? cfg.requestTimeoutMs;
+    console.log(`🚀 Initializing OllamaClient with baseUrl: ${this.baseUrl}`);
   }
 
   async listModels(): Promise<string[]> {
@@ -76,15 +90,16 @@ export class OllamaClient {
    *
    * @param prompt  - The user-facing prompt / query text
    * @param model   - Ollama model identifier (e.g. "mistral:7b")
-   * @param opts    - Optional: system prompt, maxTokens, temperature
+   * @param opts    - Optional: system prompt, maxTokens, temperature, GPU opts
    *
-   * FIX: Previously this method accepted only (prompt, model) and hardcoded
-   *      num_predict=500 / temperature=0.7 with NO system prompt support.
-   *      The Ollama /api/generate endpoint accepts a "system" field that
-   *      sets the model's system-level instructions. This was never used,
-   *      causing Dina to respond without any persona or conversation context.
+   * GPU NOTE: num_gpu / num_ctx / keep_alive now come from llmConfig (env-driven)
+   *           so the GPU is used explicitly and consistently. num_gpu=999 forces
+   *           Ollama to offload every layer that fits to the GPU; the upstream
+   *           resolveModel() guard ensures the model actually fits in VRAM so
+   *           this does not trigger a CPU split.
    */
   async generate(prompt: string, model: string, opts?: OllamaGenerateOptions): Promise<OllamaResponse> {
+    const cfg = getLlmConfig();
     const hasSystem = opts?.system && opts.system.trim().length > 0;
     console.log(`📡 Sending request to Ollama for model ${model}, prompt: "${prompt.substring(0, 50)}..."`);
     if (hasSystem) {
@@ -96,7 +111,7 @@ export class OllamaClient {
       const timeoutId = setTimeout(() => {
         console.error(`⏰ Ollama generate timeout for model ${model}`);
         controller.abort();
-      }, 600000); // 600 second timeout
+      }, cfg.generateTimeoutMs);
 
       // Build the request body. Include "system" only when provided so that
       // requests without a system prompt behave identically to before.
@@ -104,10 +119,12 @@ export class OllamaClient {
         model,
         prompt,
         stream: false,
-        keep_alive: '24h', // Keep model loaded in GPU memory to avoid 150s+ cold starts
+        keep_alive: opts?.keepAlive ?? cfg.keepAlive, // Keep model loaded in GPU memory to avoid 150s+ cold starts
         options: {
           num_predict: opts?.maxTokens || 500,
-          temperature: opts?.temperature ?? 0.7
+          temperature: opts?.temperature ?? 0.7,
+          num_gpu: opts?.numGpu ?? cfg.numGpu, // force full GPU offload
+          num_ctx: opts?.numCtx ?? cfg.numCtx,
         }
       };
 
@@ -202,24 +219,30 @@ export class OllamaClient {
     maxTokens?: number;
     temperature?: number;
     system?: string;
+    numGpu?: number;
+    numCtx?: number;
+    keepAlive?: string;
   }): AsyncGenerator<{ content: string; done: boolean }> {
+    const cfg = getLlmConfig();
     console.log(`📡 Starting streaming generation for model ${model}`);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       console.error(`⏰ Ollama stream timeout for model ${model}`);
       controller.abort();
-    }, 300000);
+    }, cfg.generateTimeoutMs);
 
     try {
       const requestBody: Record<string, any> = {
         model,
         prompt,
         stream: true,
-        keep_alive: '24h',
+        keep_alive: options?.keepAlive ?? cfg.keepAlive,
         options: {
           num_predict: options?.maxTokens || 1000,
-          temperature: options?.temperature || 0.7
+          temperature: options?.temperature || 0.7,
+          num_gpu: options?.numGpu ?? cfg.numGpu,
+          num_ctx: options?.numCtx ?? cfg.numCtx,
         }
       };
 
@@ -288,13 +311,15 @@ export class OllamaClient {
     }
   }
 
-  async embed(input: string, model: string = 'mxbai-embed-large'): Promise<OllamaEmbeddingResponse> {
-    console.log(`📡 Generating embedding for input: "${input.substring(0, 50)}..." using ${model}`);
+  async embed(input: string, model?: string): Promise<OllamaEmbeddingResponse> {
+    const cfg = getLlmConfig();
+    const embedModel = model || cfg.embedModel;
+    console.log(`📡 Generating embedding for input: "${input.substring(0, 50)}..." using ${embedModel}`);
     try {
       const response = await fetch(`${this.baseUrl}/api/embed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, input, keep_alive: '24h' }),
+        body: JSON.stringify({ model: embedModel, input, keep_alive: cfg.keepAlive }),
         signal: AbortSignal.timeout(this.timeoutMs)
       });
       // FIXED: Proper type casting
@@ -305,7 +330,7 @@ export class OllamaClient {
       console.error(`❌ Ollama embed error: ${error}`);
       // Fallback mock response
       return {
-        model,
+        model: embedModel,
         embeddings: Array(1024).fill(0).map(() => Math.random()), // mxbai-embed-large: ~1024 dimensions
         total_duration: 1000
       };
@@ -335,6 +360,13 @@ export class DinaLLMManager {
       this._isInitialized = true;
       console.log('✅ DinaLLMManager initialized successfully');
 
+      // Start the GPU residency monitor (idempotent across instances). This is
+      // what catches a silent CPU fallback (e.g. driver/library mismatch) and
+      // raises a loud, observable alert instead of degrading quietly.
+      if (getLlmConfig().monitorEnabled) {
+        gpuMonitor.start();
+      }
+
       // Warm up primary models so they're loaded in GPU memory and ready for requests.
       // This eliminates the 150-160s cold start on the first TruthStream analysis.
       this.warmupModels().catch(err => {
@@ -350,7 +382,7 @@ export class DinaLLMManager {
   /**
    * Pre-load models into GPU memory by sending a minimal prompt.
    * Runs in the background (fire-and-forget) so it doesn't block startup.
-   * The keep_alive: "24h" in generate() ensures they stay loaded.
+   * The keep_alive (llmConfig.keepAlive) in generate() ensures they stay loaded.
    */
   private async warmupModels(): Promise<void> {
     // If another instance already started warming, just wait for it.
@@ -370,15 +402,24 @@ export class DinaLLMManager {
   }
 
   private async doWarmup(): Promise<void> {
-    const modelsToWarm = ['qwen2.5:3b', 'mistral:7b', 'mxbai-embed-large'];
+    const cfg = getLlmConfig();
+    // Warm the configured set (chat + analysis + embed by default). Driven by
+    // llmConfig so the warm set always tracks the models we actually use.
+    const modelsToWarm = cfg.warmupModels;
     const available = this.availableModels;
     console.log(`🔥 Starting warmup. Available models: [${available.join(', ')}]`);
     console.log(`🔥 Models to warm: [${modelsToWarm.join(', ')}]`);
 
     for (const model of modelsToWarm) {
-      const modelBase = model.split(':')[0];
-      if (!available.some(m => m === model || m.startsWith(modelBase))) {
+      if (!this.isInstalled(model, available)) {
         console.log(`⏩ Skipping warmup for ${model} (not found in available models)`);
+        continue;
+      }
+
+      // Never warm a model that cannot fit the GPU (would force a CPU load and
+      // evict the small models we actually want resident).
+      if (isOversized(model, cfg) && !cfg.allowOversized) {
+        console.warn(`🛡️ Skipping warmup for oversized model ${model} (~${estimateTotalVramMb(model, cfg)}MB > ${cfg.vramBudgetMb}MB budget)`);
         continue;
       }
 
@@ -403,6 +444,111 @@ export class DinaLLMManager {
 
   public get isInitialized(): boolean {
     return this._isInitialized;
+  }
+
+  // ==========================================================================
+  // MODEL RESOLUTION GUARDRAIL ("no silent CPU offload")
+  // ==========================================================================
+
+  /**
+   * Decide whether a model name is installed on the local Ollama.
+   * Tagged names (e.g. "mistral:7b") require an exact match; untagged names
+   * (e.g. "mxbai-embed-large") match any tag of the same family.
+   */
+  private isInstalled(model: string, available: string[]): boolean {
+    if (!model) return false;
+    if (available.includes(model)) return true;
+    if (!model.includes(':')) {
+      // family match: "mistral" matches "mistral:7b" / "mistral:latest"
+      return available.some(a => a === model || a.startsWith(`${model}:`));
+    }
+    return false;
+  }
+
+  /**
+   * Pick the best model that is BOTH installed and fits the VRAM budget.
+   * Preference order: configured chat model → largest fitting auto model →
+   * any fitting installed model → smallest installed model (last resort).
+   */
+  private pickFittingAutoModel(available: string[]): string {
+    const cfg = getLlmConfig();
+
+    const installedAuto = cfg.autoModels.filter(m => this.isInstalled(m, available));
+    const fittingAuto = installedAuto.filter(m => fitsBudget(m, cfg));
+    if (fittingAuto.length > 0) {
+      if (fittingAuto.includes(cfg.chatModel)) return cfg.chatModel;
+      // Largest fitting auto model = best quality that still stays on the GPU.
+      return fittingAuto.slice().sort((a, b) => estimateTotalVramMb(b, cfg) - estimateTotalVramMb(a, cfg))[0];
+    }
+
+    // No auto model available/fits → any installed model that fits.
+    const anyFitting = available.filter(m => fitsBudget(m, cfg));
+    if (anyFitting.length > 0) {
+      return anyFitting.slice().sort((a, b) => estimateTotalVramMb(a, cfg) - estimateTotalVramMb(b, cfg))[0];
+    }
+
+    // Nothing fits the budget (misconfiguration) → smallest installed model.
+    if (available.length > 0) {
+      return available.slice().sort((a, b) => estimateTotalVramMb(a, cfg) - estimateTotalVramMb(b, cfg))[0];
+    }
+
+    // No model list at all → fall back to the configured chat model and let
+    // Ollama attempt it (covers a transient listModels() failure).
+    return cfg.chatModel;
+  }
+
+  /**
+   * Resolve the model that will actually be sent to Ollama.
+   * Enforces three rules, in order:
+   *   1. Honour an explicit, installed model_preference.
+   *   2. Never use a model that isn't installed.
+   *   3. Never auto-run a model that exceeds the VRAM budget (it would offload
+   *      to CPU). Oversized models run ONLY via explicit opt-in
+   *      (DINA_ALLOW_OVERSIZED=true or options.allow_oversized === true).
+   */
+  private resolveModel(
+    requested: string | undefined,
+    recommended: string,
+    available: string[],
+    opts?: any
+  ): string {
+    const cfg = getLlmConfig();
+    const allowOversized = cfg.allowOversized || opts?.allow_oversized === true;
+    const haveList = available.length > 0;
+
+    const wasExplicit = !!(requested && String(requested).trim());
+    let candidate = wasExplicit ? String(requested).trim() : recommended;
+    if (!candidate) candidate = cfg.chatModel;
+
+    // Rule 2: must be installed (only enforceable when we have a model list).
+    if (haveList && !this.isInstalled(candidate, available)) {
+      const fallback = this.pickFittingAutoModel(available);
+      console.warn(`⚠️ [resolveModel] Model "${candidate}" is not installed — using "${fallback}" instead.`);
+      candidate = fallback;
+    }
+
+    // Rule 3: must fit the GPU unless oversized execution is opted into.
+    if (isOversized(candidate, cfg) && !allowOversized) {
+      const fallback = this.pickFittingAutoModel(available);
+      console.warn(
+        `🛡️ [resolveModel] "${candidate}" (~${estimateTotalVramMb(candidate, cfg)}MB) exceeds the VRAM budget ` +
+        `(${cfg.vramBudgetMb}MB) and would offload to CPU. ` +
+        `${wasExplicit ? 'Explicit request' : 'Auto-selection'} downgraded to "${fallback}". ` +
+        `Set DINA_ALLOW_OVERSIZED=true or pass options.allow_oversized to override.`
+      );
+      candidate = fallback;
+    } else if (isOversized(candidate, cfg) && allowOversized) {
+      console.warn(`⚠️ [resolveModel] Running oversized model "${candidate}" by explicit opt-in — it may partially execute on CPU.`);
+    }
+
+    // Final safety net.
+    if (haveList && !this.isInstalled(candidate, available)) {
+      const fallback = this.pickFittingAutoModel(available);
+      console.warn(`⚠️ [resolveModel] Final candidate "${candidate}" still not installed; using "${fallback}".`);
+      candidate = fallback;
+    }
+
+    return candidate;
   }
 
   async processLLMRequest(message: DinaUniversalMessage): Promise<LLMResponse | null> {
@@ -496,9 +642,12 @@ export class DinaLLMManager {
     const startTime = performance.now();
 
     const complexity = await llmIntelligenceEngine.analyzeQuery(query, options?.context);
-    const model = options?.model_preference && this.availableModels.includes(options.model_preference)
-      ? options.model_preference
-      : complexity.recommendedModel;
+
+    // GUARDRAIL: resolveModel() honours an installed model_preference, refuses
+    // uninstalled models, and refuses oversized models that would offload to CPU
+    // (unless explicitly opted in). This is the central choke point — every
+    // generate path benefits, including @Dina chat routed via the orchestrator.
+    const model = this.resolveModel(options?.model_preference, complexity.recommendedModel, this.availableModels, options);
 
     // FIX: Forward system_prompt, max_tokens, and temperature to OllamaClient.
     // Before this fix, only (query, model) was passed — the system prompt
@@ -563,9 +712,7 @@ export class DinaLLMManager {
     const startTime = performance.now();
 
     const complexity = await llmIntelligenceEngine.analyzeQuery(query, options?.context);
-    const model = options?.model_preference && this.availableModels.includes(options.model_preference)
-      ? options.model_preference
-      : complexity.recommendedModel;
+    const model = this.resolveModel(options?.model_preference, complexity.recommendedModel, this.availableModels, options);
 
     const prompt = `Generate code for the following request: ${query}`;
     const ollamaResponse = await this.ollama.generate(prompt, model);
@@ -602,9 +749,7 @@ export class DinaLLMManager {
     const startTime = performance.now();
 
     const complexity = await llmIntelligenceEngine.analyzeQuery(query, options?.context);
-    const model = options?.model_preference && this.availableModels.includes(options.model_preference)
-      ? options.model_preference
-      : complexity.recommendedModel;
+    const model = this.resolveModel(options?.model_preference, complexity.recommendedModel, this.availableModels, options);
 
     const prompt = `Analyze and provide detailed insights for: ${query}`;
     const ollamaResponse = await this.ollama.generate(prompt, model);
@@ -648,9 +793,10 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
     // ADD DEBUG LOG:
     console.log(`🔍 MANAGER DEBUG: Intelligence analysis complete: level=${complexity.level}`);
 
-    const model = options?.model_preference && this.availableModels.includes(options.model_preference)
+    const cfg = getLlmConfig();
+    const model = options?.model_preference && this.isInstalled(options.model_preference, this.availableModels)
       ? options.model_preference
-      : 'mxbai-embed-large';
+      : cfg.embedModel;
 
     // ADD DEBUG LOG:
     console.log(`🔍 MANAGER DEBUG: Model selected: ${model}, about to call ollama.embed()`);
@@ -695,14 +841,30 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
   public async getSystemStatus(): Promise<Record<string, any>> {
     console.log('📋 Fetching LLM system status...');
 
+    const cfg = getLlmConfig();
     const intelligenceStats = await llmIntelligenceEngine.getIntelligenceStats();
     const performanceStats = performanceOptimizer.getPerformanceStats();
     const contextStats = contextMemorySystem.getContextStats();
+    const gpu = gpuMonitor.getStatus();
 
     return {
       ollamaHealthy: this._isInitialized,
       availableModels: this.availableModels,
-      loadedModels: this.availableModels,
+      loadedModels: gpu.loadedModels.map(m => m.name),
+      // GPU residency — the field operators should watch. healthy=false means
+      // Ollama is (partially or fully) running on CPU.
+      gpu,
+      llmConfig: {
+        chatModel: cfg.chatModel,
+        analysisModel: cfg.analysisModel,
+        embedModel: cfg.embedModel,
+        autoModels: cfg.autoModels,
+        vramBudgetMb: cfg.vramBudgetMb,
+        allowOversized: cfg.allowOversized,
+        numCtx: cfg.numCtx,
+        numGpu: cfg.numGpu,
+        keepAlive: cfg.keepAlive,
+      },
       memoryUsage: '0 MB',
       cacheSize: 0,
       performanceStats,
@@ -710,6 +872,58 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
       contextStats,
       timestamp: new Date().toISOString()
     };
+  }
+
+  /**
+   * Rich, on-demand LLM/GPU diagnostics. Forces a fresh GPU residency check and
+   * returns actionable advisories. This is the payload the mirror module exposes
+   * to mirror-server so operators can see "Dina is on CPU" in real time.
+   */
+  public async getDiagnostics(): Promise<Record<string, any>> {
+    const cfg = getLlmConfig();
+    const gpu = await gpuMonitor.refresh();
+
+    const warmInstalled = cfg.warmupModels.filter(m => this.isInstalled(m, this.availableModels));
+    const warmMissing = cfg.warmupModels.filter(m => !this.isInstalled(m, this.availableModels));
+
+    return {
+      timestamp: new Date().toISOString(),
+      initialized: this._isInitialized,
+      ollamaBaseUrl: cfg.ollamaBaseUrl,
+      availableModels: this.availableModels,
+      warmup: { configured: cfg.warmupModels, installed: warmInstalled, missing: warmMissing },
+      gpu,
+      config: {
+        chatModel: cfg.chatModel,
+        analysisModel: cfg.analysisModel,
+        embedModel: cfg.embedModel,
+        autoModels: cfg.autoModels,
+        vramBudgetMb: cfg.vramBudgetMb,
+        allowOversized: cfg.allowOversized,
+        numCtx: cfg.numCtx,
+        numGpu: cfg.numGpu,
+        keepAlive: cfg.keepAlive,
+      },
+      advisories: this.buildAdvisories(gpu, warmMissing),
+    };
+  }
+
+  private buildAdvisories(gpu: ReturnType<typeof gpuMonitor.getStatus>, warmMissing: string[]): string[] {
+    const advisories: string[] = [];
+    if (gpu.state === 'cpu') {
+      advisories.push('CRITICAL: Ollama is running on CPU. Run `nvidia-smi`; if it reports a driver/library mismatch, reboot the host. See ops/GPU_RUNBOOK.md.');
+    } else if (gpu.state === 'partial') {
+      advisories.push('WARNING: A model is split across GPU/CPU (VRAM exceeded). Reduce model size, lower DINA_NUM_CTX, or stop competing models.');
+    } else if (gpu.state === 'unreachable') {
+      advisories.push('Ollama is unreachable. Check `systemctl status ollama`.');
+    }
+    if (warmMissing.length > 0) {
+      advisories.push(`Warmup models not installed: ${warmMissing.join(', ')}. Install with \`ollama pull <model>\` or update DINA_WARMUP_MODELS.`);
+    }
+    if (advisories.length === 0) {
+      advisories.push('All systems nominal — models resident on GPU.');
+    }
+    return advisories;
   }
 
   public async getOptimizationRecommendations(): Promise<any[]> {
@@ -735,7 +949,9 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
    *      so that streaming responses also receive persona/context.
    */
   public async *generateStream(query: string, options?: any): AsyncGenerator<{ content: string; done: boolean }> {
-    const model = options?.model || 'mistral:7b';
+    // Apply the same guardrail to streaming: honour an installed preference,
+    // otherwise fall back to a fitting model (never an oversized one).
+    const model = this.resolveModel(options?.model || options?.model_preference, getLlmConfig().chatModel, this.availableModels, options);
     let prompt = query;
     if (options?.context) {
       prompt = `Context:\n${options.context}\n\nUser Query: ${query}`;
