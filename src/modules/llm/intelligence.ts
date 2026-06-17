@@ -2,6 +2,7 @@
 import { performance } from 'perf_hooks';
 import { database } from '../../config/database/db';
 import { redisManager } from '../../config/redis';
+import { getLlmConfig } from './llmConfig';
 
 // ================================
 // CORE INTERFACES
@@ -11,7 +12,9 @@ export interface ComplexityScore {
   level: number;
   confidence: number;
   reasoning: string;
-  recommendedModel: ModelType;
+  // String (not ModelType) so the recommendation can be any configured model
+  // name (e.g. a newly-installed workhorse) without requiring an enum change.
+  recommendedModel: string;
   estimatedTokens: number;
   processingTime: number;
   cacheKey?: string;
@@ -333,28 +336,35 @@ export class QueryComplexityAnalyzer {
     return Math.round(Math.min(Math.max(weightedSum, 1), 10));
   }
 
-  private selectOptimalModel(complexityLevel: number, analysis: ComplexityAnalysis): ModelType {
-    // High computational complexity → code-specialized models
-    if (analysis.computational > 6) {
-      return complexityLevel > 7 ? ModelType.CODELLAMA_34B : ModelType.MISTRAL_7B;
+  private selectOptimalModel(complexityLevel: number, analysis: ComplexityAnalysis): string {
+    const cfg = getLlmConfig();
+
+    // GPU-SAFETY: Oversized models (codellama:34b ~19GB, llama2:70b ~39GB) are
+    // NEVER auto-selected on a 24 GB card — they would offload to CPU and crater
+    // latency. They run ONLY when explicitly requested AND opted into via
+    // DINA_ALLOW_OVERSIZED / options.allow_oversized (enforced in
+    // DinaLLMManager.resolveModel). The legacy escalation below is therefore
+    // gated behind that same opt-in for backwards compatibility.
+    if (cfg.allowOversized) {
+      if (analysis.computational > 6) {
+        return complexityLevel > 7 ? ModelType.CODELLAMA_34B : cfg.analysisModel;
+      }
+      if (complexityLevel > 8) {
+        return ModelType.LLAMA2_70B;
+      }
+      if (complexityLevel > 5) {
+        return ModelType.CODELLAMA_34B;
+      }
     }
 
-    // Very high overall complexity → largest model
-    if (complexityLevel > 8) {
-      return ModelType.LLAMA2_70B;
-    }
-
-    // Medium-high complexity → mid-tier model
-    if (complexityLevel > 5) {
-      return ModelType.CODELLAMA_34B;
-    }
-
-    // Low complexity (summarization, JSON output, simple Q&A) → fast small model
+    // Bounded, GPU-safe routing:
+    //   low complexity (summaries, JSON, simple Q&A) → fast chat model
+    //   everything else                              → analysis workhorse
+    // Both tiers are kept within the VRAM budget by configuration.
     if (complexityLevel <= 3) {
-      return ModelType.QWEN25_3B;
+      return cfg.chatModel;
     }
-
-    return ModelType.MISTRAL_7B;
+    return cfg.analysisModel;
   }
 
   private calculateConfidence(analysis: ComplexityAnalysis, complexityLevel: number): number {
@@ -395,17 +405,18 @@ export class QueryComplexityAnalyzer {
     return Math.round(baseTokens + outputEstimate);
   }
 
-  private estimateProcessingTime(complexityLevel: number, model: ModelType): number {
-    const modelBaseTimes = {
+  private estimateProcessingTime(complexityLevel: number, model: string): number {
+    const modelBaseTimes: Record<string, number> = {
       [ModelType.QWEN25_3B]: 50,
       [ModelType.MISTRAL_7B]: 150,
       [ModelType.CODELLAMA_34B]: 800,
       [ModelType.LLAMA2_70B]: 2500
     };
-    
-    const baseTime = modelBaseTimes[model];
+
+    // Unknown / newly-configured models default to a mid-range estimate.
+    const baseTime = modelBaseTimes[model] ?? 200;
     const complexityMultiplier = 1 + (complexityLevel / 20);
-    
+
     return Math.round(baseTime * complexityMultiplier);
   }
 
