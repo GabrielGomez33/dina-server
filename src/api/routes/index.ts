@@ -1570,6 +1570,32 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // ADMIN ENDPOINTS (Trusted users only)
   // ================================
 
+  // DIGIM Memory Backfill — embed pending content into semantic memory
+  apiRouter.post('/digim/memory/backfill', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { limit } = req.body || {};
+      const digiMMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'digim', method: 'digim_memory_backfill', priority: 4 },
+        security: {
+          user_id: req.dina!.dina_key,
+          session_id: req.dina!.session_id,
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true
+        },
+        payload: { limit: typeof limit === 'number' ? limit : undefined }
+      });
+      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      res.json({ ...digiMResponse.payload.data, admin_user: req.dina?.dina_key });
+    } catch (error) {
+      console.error('❌ Error in DIGIM memory backfill:', error);
+      res.status(500).json({
+        error: 'DIGIM memory backfill failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
   // Admin authentication stats
   apiRouter.get('/admin/auth/stats', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
     try {

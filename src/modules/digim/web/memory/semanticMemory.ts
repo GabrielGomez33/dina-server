@@ -34,6 +34,12 @@ export interface RetrieveOptions {
   minScore?: number;
 }
 
+export interface EmbedItem {
+  id: string;
+  text: string;
+  metadata?: Record<string, any>;
+}
+
 export class SemanticMemory {
   private embeddingService: EmbeddingService;
   private store: WebResearchStore;
@@ -78,6 +84,45 @@ export class SemanticMemory {
       await this.store.markEmbeddingFailed(contentId);
       return false;
     }
+  }
+
+  /** Embed many items with bounded concurrency. Returns counts; never throws. */
+  async embedMany(items: EmbedItem[], concurrency = 3): Promise<{ embedded: number; failed: number }> {
+    if (!this.cfg.memoryEnabled || items.length === 0) return { embedded: 0, failed: 0 };
+    let embedded = 0;
+    let failed = 0;
+    let idx = 0;
+    const n = Math.max(1, Math.min(concurrency, items.length));
+    const worker = async (): Promise<void> => {
+      while (idx < items.length) {
+        const it = items[idx++];
+        const success = await this.embedAndStore(it.id, it.text, it.metadata || {});
+        if (success) embedded++;
+        else failed++;
+      }
+    };
+    await Promise.all(new Array(n).fill(0).map(() => worker()));
+    return { embedded, failed };
+  }
+
+  /**
+   * Backfill embeddings for content still marked 'pending' — populates memory
+   * for documents gathered before Phase 1, and repairs after a Redis data loss
+   * (reset rows to 'pending' first, then run this). Best-effort.
+   */
+  async backfillPending(limit = 100, concurrency = 3): Promise<{ processed: number; embedded: number; failed: number }> {
+    if (!this.cfg.memoryEnabled) return { processed: 0, embedded: 0, failed: 0 };
+    const rows = await this.store.getPendingEmbeddingContent(limit);
+    const items: EmbedItem[] = rows.map((r) => ({
+      id: r.id,
+      text: r.content || '',
+      metadata: { url: r.url, title: r.title },
+    }));
+    const { embedded, failed } = await this.embedMany(items, concurrency);
+    if (items.length > 0) {
+      console.log(`🧩 [semanticMemory] backfill: processed=${items.length} embedded=${embedded} failed=${failed}`);
+    }
+    return { processed: items.length, embedded, failed };
   }
 
   /**

@@ -54,6 +54,22 @@ export class ContentExtractor {
     );
     const language = extractLang(safeHtml);
 
+    // (1b) OPTIONAL high-quality extraction — used only if @mozilla/readability
+    // and linkedom are installed (guarded require, no forced dependency). This
+    // yields much cleaner main-content text on complex pages. Falls through to
+    // the heuristic when unavailable or when it produces too little.
+    const readable = tryReadability(safeHtml);
+    if (readable && countWords(readable.text) >= 40) {
+      return this.finalize(
+        readable.text,
+        readable.title || title,
+        readable.author || author,
+        publishedAt,
+        language,
+        'readability'
+      );
+    }
+
     // (2) Remove non-content regions.
     let body = extractBodyRegion(safeHtml);
     body = stripRegions(body);
@@ -177,7 +193,11 @@ function stripRegions(html: string): string {
   return out;
 }
 
-const BLOCK_RE = /<(p|li|h[1-6]|article|section|blockquote|td|dd|figcaption)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+// NOTE: `article`/`section` are intentionally NOT matched as blocks — they are
+// containers, and matching them would swallow all inner paragraphs (including
+// hatnotes) into one block, defeating per-block boilerplate filtering. We
+// extract the leaf text blocks (p/li/h/blockquote/td/dd/figcaption) instead.
+const BLOCK_RE = /<(p|li|h[1-6]|blockquote|td|dd|figcaption)\b[^>]*>([\s\S]*?)<\/\1>/gi;
 
 /**
  * Extract text from substantial block-level elements. Blocks whose cleaned
@@ -193,7 +213,7 @@ function extractMainText(html: string): string {
     const words = countWords(text);
     const tag = match[1].toLowerCase();
     const minWords = /^h[1-6]$/.test(tag) ? 1 : 4;
-    if (words >= minWords && !seen.has(text)) {
+    if (words >= minWords && !seen.has(text) && !isBoilerplateLine(text)) {
       seen.add(text);
       blocks.push(text);
     }
@@ -209,13 +229,39 @@ function stripTags(html: string): string {
 // TEXT NORMALIZATION
 // ----------------------------------------------------------------------------
 
+// Inline reference/edit artifacts common to wikis and CMS pages, e.g. "[1]",
+// "[ citation needed ]", "[ edit ]". Safe to strip everywhere.
+const ARTIFACT_RE =
+  /\[\s*(?:\d+|citation needed|citation\s*needed|edit|update|clarification needed|dubious|discuss|according to whom\??|by whom\??|when\??|who\??|note \d+|page needed|verification needed|failed verification|original research\?)\s*\]/gi;
+
 function normalizeWhitespace(text: string): string {
   return text
     .replace(/\r\n?/g, '\n')
+    .replace(ARTIFACT_RE, '')
     .replace(/[ \t\f\v]+/g, ' ')
     .replace(/ *\n */g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+// Whole-block navigation/hatnote/boilerplate lines to drop (Wikipedia + common
+// CMS chrome). Matched against a block's cleaned text.
+const BOILERPLATE_LINE_RE =
+  /^(from wikipedia|jump to (navigation|search|content)|redirects here|for other uses|this article is about\b.*\bsee\b|not to be confused with|this article (needs|may|is missing)|this section (needs|does not)|see also$|main article:|further information:|retrieved from|privacy policy|terms of (use|service)|cookie policy|all rights reserved|©\s*\d{4}|share this|sign in|log in|subscribe( now)?$|advertisement$)/i;
+
+// High-signal nav phrases that can appear MID-line (not just at the start),
+// so they're matched with a contains-check rather than an anchor.
+const BOILERPLATE_CONTAINS_RE =
+  /\b(redirects here|for other uses,?\s*see|not to be confused with|jump to (navigation|search)|from wikipedia, the free encyclopedia)\b/i;
+
+function isBoilerplateLine(text: string): boolean {
+  const t = text.trim();
+  if (t.length === 0) return true;
+  if (BOILERPLATE_LINE_RE.test(t)) return true;
+  if (BOILERPLATE_CONTAINS_RE.test(t)) return true;
+  // Very short nav-ish fragments.
+  if (t.length <= 3) return true;
+  return false;
 }
 
 const NAMED_ENTITIES: Record<string, string> = {
@@ -259,6 +305,55 @@ function deriveTitleFromUrl(url: string): string {
     return decodeURIComponent(last).replace(/[-_]+/g, ' ').replace(/\.[a-z0-9]+$/i, '').trim() || u.hostname;
   } catch {
     return '(untitled)';
+  }
+}
+
+// ----------------------------------------------------------------------------
+// OPTIONAL MOZILLA READABILITY ADAPTER
+// ----------------------------------------------------------------------------
+// If `@mozilla/readability` + `linkedom` are installed, use the industry-
+// standard extractor for much cleaner main-content text. Loaded via guarded
+// require() so the packages are a soft, optional dependency — absent them,
+// extraction transparently uses the built-in heuristic. To enable:
+//   npm i @mozilla/readability linkedom
+// ----------------------------------------------------------------------------
+
+let _readabilityChecked = false;
+let _Readability: any = null;
+let _parseHTML: any = null;
+
+function loadReadability(): void {
+  if (_readabilityChecked) return;
+  _readabilityChecked = true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    _Readability = require('@mozilla/readability').Readability;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    _parseHTML = require('linkedom').parseHTML;
+    console.log('✅ [contentExtractor] @mozilla/readability + linkedom detected — using high-quality extraction');
+  } catch {
+    _Readability = null;
+    _parseHTML = null;
+  }
+}
+
+function tryReadability(html: string): { title: string; text: string; author?: string } | null {
+  loadReadability();
+  if (!_Readability || !_parseHTML || !html) return null;
+  try {
+    const { document } = _parseHTML(html);
+    const article = new _Readability(document).parse();
+    if (!article || typeof article.textContent !== 'string') return null;
+    const text = normalizeWhitespace(article.textContent);
+    if (!text) return null;
+    return {
+      title: typeof article.title === 'string' ? decodeEntities(article.title) : '',
+      text,
+      author: typeof article.byline === 'string' && article.byline.trim() ? article.byline.trim() : undefined,
+    };
+  } catch (err) {
+    console.warn(`⚠️ [contentExtractor] readability failed, using heuristic: ${(err as Error).message}`);
+    return null;
   }
 }
 
