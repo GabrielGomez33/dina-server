@@ -55,14 +55,18 @@ class MockConnection {
     if (s.includes('information_schema.columns') && s.includes('is_nullable')) {
       const col = params[1];
       const meta = this.st.columns.get(col);
-      return [meta ? [{ is_nullable: meta.nullable }] : [], []];
+      // NOTE: UPPERCASE key — mirrors real MySQL, which returns bare
+      // information_schema column names uppercased (the bug that slipped past
+      // the mock the first time). Helpers must read case-insensitively.
+      return [meta ? [{ IS_NULLABLE: meta.nullable }] : [], []];
     }
     if (s.includes('information_schema.statistics')) {
       const idx = params[1];
       return [[{ c: this.st.indexes.has(idx) ? 1 : 0 }], []];
     }
     if (s.includes('key_column_usage')) {
-      return [[...this.st.fks].map((n) => ({ constraint_name: n })), []];
+      // UPPERCASE key — see note above.
+      return [[...this.st.fks].map((n) => ({ CONSTRAINT_NAME: n })), []];
     }
     if (s.includes('table_constraints')) {
       const name = params[1];

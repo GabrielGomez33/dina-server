@@ -14,9 +14,19 @@ async function scalar(conn: Connection, sql: string, params: any[]): Promise<num
   const [rows] = await conn.query(sql, params);
   const arr = rows as Array<Record<string, any>>;
   if (!arr || arr.length === 0) return 0;
-  const first = arr[0];
-  const key = Object.keys(first)[0];
-  return Number(first[key]) || 0;
+  return Number(firstValue(arr[0])) || 0;
+}
+
+/**
+ * Read the first column value of a row WITHOUT depending on the property-name
+ * case. MySQL returns information_schema column names in UPPERCASE on some
+ * servers (e.g. `CONSTRAINT_NAME`) and lower on others, so `row.constraint_name`
+ * is not portable — `Object.values(row)[0]` is.
+ */
+function firstValue(row: Record<string, any> | undefined | null): any {
+  if (!row) return undefined;
+  const vals = Object.values(row);
+  return vals.length > 0 ? vals[0] : undefined;
 }
 
 /** True if `table` exists in the current database. */
@@ -52,19 +62,19 @@ export async function indexExists(conn: Connection, table: string, index: string
   return c > 0;
 }
 
-/** Returns 'YES' | 'NO' | null (null = column absent). */
+/** Returns 'YES' | 'NO' | null (null = column absent). Case-insensitive read. */
 export async function columnNullability(conn: Connection, table: string, column: string): Promise<'YES' | 'NO' | null> {
   const [rows] = await conn.query(
     `SELECT is_nullable FROM information_schema.columns
      WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
     [table, column]
   );
-  const arr = rows as Array<{ is_nullable: string }>;
+  const arr = rows as Array<Record<string, any>>;
   if (!arr || arr.length === 0) return null;
-  return arr[0].is_nullable === 'YES' ? 'YES' : 'NO';
+  return String(firstValue(arr[0]) ?? '').toUpperCase() === 'YES' ? 'YES' : 'NO';
 }
 
-/** Names of foreign-key constraints on `table.column`. */
+/** Names of foreign-key constraints on `table.column`. Case-insensitive read. */
 export async function foreignKeysOnColumn(conn: Connection, table: string, column: string): Promise<string[]> {
   const [rows] = await conn.query(
     `SELECT constraint_name FROM information_schema.key_column_usage
@@ -72,8 +82,11 @@ export async function foreignKeysOnColumn(conn: Connection, table: string, colum
        AND referenced_table_name IS NOT NULL`,
     [table, column]
   );
-  const arr = rows as Array<{ constraint_name: string }>;
-  return arr.map((r) => r.constraint_name);
+  const arr = rows as Array<Record<string, any>>;
+  return arr
+    .map((r) => firstValue(r))
+    .filter((v) => v != null && String(v).length > 0 && String(v) !== 'undefined')
+    .map((v) => String(v));
 }
 
 /** True if a named foreign-key constraint exists on `table`. */
