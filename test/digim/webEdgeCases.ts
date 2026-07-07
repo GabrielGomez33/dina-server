@@ -225,6 +225,21 @@ async function main(): Promise<void> {
     ok(out.text.includes('solid electrolyte'), 'real content retained (solid electrolyte)');
   });
 
+  await section('ContentExtractor — final-stage line filter (covers Readability output)', () => {
+    // The plain-text path goes straight to finalize(), the same post-processing
+    // Readability output flows through — so this proves the nav lines are
+    // dropped regardless of the upstream extractor.
+    const extractor = new ContentExtractor();
+    const readabilityLikeText =
+      'This article is about rechargeable batteries. For non-rechargeable cells, see primary battery.\n' +
+      '"Li-ion" redirects here. For other uses, see lithium.\n' +
+      'Lithium-ion batteries store energy chemically and are widely used in electric vehicles and portable electronics across the world today.';
+    const out = extractor.extract(readabilityLikeText, 'text/plain', 'https://example.com/x');
+    ok(!/this article is about/i.test(out.text), 'hatnote line dropped in final stage');
+    ok(!/redirects here/i.test(out.text), '"redirects here" line dropped in final stage');
+    ok(out.text.includes('store energy chemically'), 'real content sentence retained');
+  });
+
   await section('QualityScorer — bounded, sensible facets', () => {
     const scorer = new QualityScorer();
     const q = scorer.score({

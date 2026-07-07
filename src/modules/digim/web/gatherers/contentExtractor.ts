@@ -98,7 +98,11 @@ export class ContentExtractor {
     language?: string,
     method = 'heuristic'
   ): ExtractedContent {
-    const normalized = normalizeWhitespace(text);
+    // dropBoilerplateLines runs on the FINAL text so nav/hatnote lines are
+    // removed regardless of which extractor produced it — including Readability,
+    // which on wiki pages keeps the leading "This article is about… / redirects
+    // here" dablinks that live inside the content region.
+    const normalized = dropBoilerplateLines(normalizeWhitespace(text));
     const wordCount = countWords(normalized);
     const contentHash = crypto
       .createHash('sha256')
@@ -273,6 +277,21 @@ function isBoilerplateLine(text: string): boolean {
   // Very short nav-ish fragments.
   if (t.length <= 3) return true;
   return false;
+}
+
+/**
+ * Final-stage cleanup applied to the extracted text of EVERY method. Drops
+ * boilerplate/nav lines (hatnotes, "redirects here", etc.) while preserving
+ * blank lines so paragraph structure survives. This is the single choke point
+ * that guarantees nav chrome never reaches storage — even when an upstream
+ * extractor (e.g. Readability) leaves it in.
+ */
+function dropBoilerplateLines(text: string): string {
+  if (!text) return '';
+  const kept = text
+    .split('\n')
+    .filter((line) => line.trim().length === 0 || !isBoilerplateLine(line));
+  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 const NAMED_ENTITIES: Record<string, string> = {
