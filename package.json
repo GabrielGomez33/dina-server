@@ -18,7 +18,12 @@
     "dev": "ts-node src/index.ts",
     "dev:watch": "nodemon --exec ts-node src/index.ts",
     "deploy": "npm run rebuild && sudo pm2 reload ecosystem.config.js",
+    "migrate": "ts-node scripts/migrate.ts up",
+    "migrate:status": "ts-node scripts/migrate.ts status",
+    "migrate:list": "ts-node scripts/migrate.ts list",
+    "migrate:down": "ts-node scripts/migrate.ts down",
     "test": "jest",
+    "test:digim": "ts-node test/digim/webEdgeCases.ts",
     "type-check": "tsc --noEmit"
   },
   "keywords": [

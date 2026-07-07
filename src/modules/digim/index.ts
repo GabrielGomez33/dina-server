@@ -627,7 +627,7 @@ async  initialize(): Promise<void> {
             
               'digim_content': `CREATE TABLE IF NOT EXISTS digim_content (
                   id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
-                  source_id VARCHAR(36) NOT NULL,
+                  source_id VARCHAR(36) NULL, -- nullable: ad-hoc web docs need no configured source (migration 001)
                   content_hash VARCHAR(64) UNIQUE NOT NULL,
                   title TEXT,
                   content LONGTEXT NOT NULL,
@@ -649,12 +649,18 @@ async  initialize(): Promise<void> {
                   language VARCHAR(10),
                   word_count INT UNSIGNED,
                   metadata JSON,
-                  FOREIGN KEY (source_id) REFERENCES digim_sources(id) ON DELETE CASCADE,
+                  -- Phase 1 semantic-memory bookkeeping (vectors live in Redis; MySQL tracks status)
+                  embedding_status ENUM('pending','embedded','failed','skipped') NOT NULL DEFAULT 'pending',
+                  embedded_at TIMESTAMP NULL,
+                  embedding_model VARCHAR(100) NULL,
+                  embedding_ref VARCHAR(128) NULL, -- Redis vector id
+                  CONSTRAINT fk_digim_content_source FOREIGN KEY (source_id) REFERENCES digim_sources(id) ON DELETE SET NULL,
                   INDEX idx_content_hash (content_hash),
                   INDEX idx_cluster_status (cluster_id, processing_status),
                   INDEX idx_quality_metrics (quality_score DESC, relevance_score DESC),
                   INDEX idx_security_status (security_status, gathered_at),
                   INDEX idx_published_fresh (published_at DESC, freshness_score DESC),
+                  INDEX idx_embedding_status (embedding_status, gathered_at),
                   FULLTEXT idx_content_search (title, content),
                   CHECK (quality_score >= 0.0000 AND quality_score <= 1.0000),
                   CHECK (relevance_score >= 0.0000 AND relevance_score <= 1.0000),

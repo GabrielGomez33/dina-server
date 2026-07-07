@@ -2,9 +2,12 @@
 
 **Teaching DINA to gather information, surf the web, and generate insights.**
 
-This folder is the delivery package for Goal #1. It documents the analysis,
-the research that grounded the design, the architecture, every file that
-changed, how to enable it, and how each edge case is handled.
+This folder (`docs/digim/`) documents the DIGIM web-research subsystem: the
+analysis, the research that grounded the design, the architecture, every file
+that changed, how to enable it, and how each edge case is handled. The code is
+integrated normally under `src/modules/digim/web/` — nothing here needs
+copy-pasting. See [`PHASE0.md`](./PHASE0.md) for the foundation work (migration
+runner, schema corrections) built on top of this initial delivery.
 
 > **No-disruption guarantee.** The subsystem is **disabled by default**
 > (`DIGIM_WEB_ENABLED` unset ⇒ `false`). With it unset, DINA's runtime behavior

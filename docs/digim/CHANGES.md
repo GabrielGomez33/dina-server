@@ -60,9 +60,14 @@ changes are **additive and reversible**; the subsystem is **off by default**.
 
 ## Reverting
 
-Delete `src/modules/digim/web/` and `digim-web-research/`, then revert the three
-modified files. Or simply leave `DIGIM_WEB_ENABLED` unset — the subsystem stays
-dormant.
+Delete `src/modules/digim/web/`, then revert the three modified files. Or simply
+leave `DIGIM_WEB_ENABLED` unset — the subsystem stays dormant.
+
+> Docs live in `docs/digim/` and the edge-case harness in `test/digim/`
+> (`npm run test:digim`). An earlier revision placed these under a root
+> `digim-web-research/` folder; they were relocated so a normal `git pull`
+> picks everything up with no copy-paste. Phase 0 (migration runner + schema
+> corrections) is documented in [`PHASE0.md`](./PHASE0.md).
 
 ## mirror-server
 
