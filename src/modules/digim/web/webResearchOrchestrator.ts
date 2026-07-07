@@ -48,6 +48,8 @@ export class WebResearchOrchestrator {
   private store: WebResearchStore;
   private memory: SemanticMemory;
   private initialized = false;
+  private sweepTimer: NodeJS.Timeout | null = null;
+  private pruning = false;
 
   constructor(cfg: DigimWebConfig = getDigimWebConfig()) {
     this.cfg = cfg;
@@ -83,6 +85,17 @@ export class WebResearchOrchestrator {
         console.warn(`⚠️ [webResearchOrchestrator] system source init deferred: ${(err as Error).message}`);
       }
     }
+    // Start the retention sweep (bounded, self-limiting; unref'd so it never
+    // holds the process open). Only when enabled.
+    if (this.cfg.enabled && this.cfg.retentionSweepEnabled && !this.sweepTimer) {
+      const intervalMs = this.cfg.retentionSweepIntervalHours * 3600 * 1000;
+      this.sweepTimer = setInterval(() => {
+        this.prune().catch((err) => console.warn(`⚠️ [webResearchOrchestrator] scheduled prune error: ${(err as Error).message}`));
+      }, intervalMs);
+      if (typeof this.sweepTimer.unref === 'function') this.sweepTimer.unref();
+      console.log(`🧹 [webResearchOrchestrator] retention sweep scheduled every ${this.cfg.retentionSweepIntervalHours}h (retention=${this.cfg.contentRetentionDays}d)`);
+    }
+
     this.initialized = true;
     console.log(
       `🌐 [webResearchOrchestrator] ready — enabled=${this.cfg.enabled}, provider=${this.providerName}`
@@ -90,6 +103,10 @@ export class WebResearchOrchestrator {
   }
 
   async shutdown(): Promise<void> {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
     try {
       await this.synthesizer.shutdown();
       await this.llmManager.shutdown();
@@ -139,6 +156,31 @@ export class WebResearchOrchestrator {
   async backfillMemory(limit = 100): Promise<{ processed: number; embedded: number; failed: number }> {
     this.assertEnabled();
     return this.memory.backfillPending(limit);
+  }
+
+  /**
+   * Prune aged content (older than contentRetentionDays) — removes the content
+   * rows AND their vectors — plus expired cached intelligence. Bounded per run
+   * by retentionSweepBatch. Runs on a schedule and on demand. Never throws.
+   */
+  async prune(): Promise<{ contentDeleted: number; vectorsRemoved: number; intelligencePruned: number }> {
+    if (this.pruning) return { contentDeleted: 0, vectorsRemoved: 0, intelligencePruned: 0 };
+    this.pruning = true;
+    try {
+      const ids = await this.store.getExpiredContentIds(this.cfg.contentRetentionDays, this.cfg.retentionSweepBatch);
+      const vectorsRemoved = ids.length ? await this.memory.forget(ids) : 0;
+      const contentDeleted = ids.length ? await this.store.deleteContentByIds(ids) : 0;
+      const intelligencePruned = await this.store.pruneExpiredIntelligence();
+      if (contentDeleted > 0 || intelligencePruned > 0) {
+        console.log(`🧹 [webResearchOrchestrator] retention sweep: content=${contentDeleted} vectors=${vectorsRemoved} intelligence=${intelligencePruned}`);
+      }
+      return { contentDeleted, vectorsRemoved, intelligencePruned };
+    } catch (err) {
+      console.warn(`⚠️ [webResearchOrchestrator] prune failed: ${(err as Error).message}`);
+      return { contentDeleted: 0, vectorsRemoved: 0, intelligencePruned: 0 };
+    } finally {
+      this.pruning = false;
+    }
   }
 
   /**

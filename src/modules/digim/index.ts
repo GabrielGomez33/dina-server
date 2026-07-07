@@ -282,6 +282,9 @@ async  initialize(): Promise<void> {
       case 'digim_memory_backfill':
         return await this.handleMemoryBackfillRequest(requestData);
 
+      case 'digim_memory_prune':
+        return await this.handleMemoryPruneRequest();
+
       case 'digim_query':
         return await this.handleQueryRequest(requestData, message.security.user_id);
 
@@ -526,6 +529,23 @@ async  initialize(): Promise<void> {
       status: 'success',
       ...result,
       message: `Backfill complete: ${result.embedded} embedded, ${result.failed} failed of ${result.processed} pending`,
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_memory_prune — run the retention sweep on demand: delete aged content
+   * (+ their vectors) and expired cached intelligence. Admin-only at the route.
+   */
+  private async handleMemoryPruneRequest(): Promise<any> {
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    const result = await this.webResearch.prune();
+    return {
+      status: 'success',
+      ...result,
+      message: `Retention sweep: ${result.contentDeleted} content + ${result.vectorsRemoved} vectors + ${result.intelligencePruned} intelligence removed`,
       generated_at: new Date(),
     };
   }

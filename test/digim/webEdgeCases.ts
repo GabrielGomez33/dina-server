@@ -26,6 +26,7 @@ import {
   __rebuildDigimWebConfigForTests,
   DigimWebConfig,
 } from '../../src/modules/digim/web/config/webConfig';
+import { canonicalizeUrl } from '../../src/modules/digim/web/pipeline/gatheringPipeline';
 
 // ----------------------------------------------------------------------------
 // Tiny assertion framework
@@ -302,6 +303,15 @@ async function main(): Promise<void> {
     ok(c.fetchTimeoutMs === 15000, 'invalid timeout → default');
     ok(c.enabled === true, 'enabled parsed');
     ok(c.allowedPorts.includes(80) && c.allowedPorts.includes(443), 'default ports');
+  });
+
+  await section('canonicalizeUrl — dedup key normalization', () => {
+    eq(canonicalizeUrl('https://ex.com/a?utm_source=x&utm_medium=y&id=5'), 'https://ex.com/a?id=5', 'strips utm params, keeps real ones');
+    eq(canonicalizeUrl('https://ex.com/a?fbclid=abc'), 'https://ex.com/a', 'strips fbclid');
+    eq(canonicalizeUrl('https://ex.com/a#section'), 'https://ex.com/a', 'strips hash');
+    eq(canonicalizeUrl('https://ex.com/a/'), 'https://ex.com/a', 'strips trailing slash');
+    eq(canonicalizeUrl('https://ex.com/a'), canonicalizeUrl('https://ex.com/a/?utm_campaign=z#top'), 'same page → same key');
+    eq(canonicalizeUrl('not a url'), '', 'invalid → empty key');
   });
 
   // --------------------------------------------------------------------------

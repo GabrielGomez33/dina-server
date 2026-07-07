@@ -255,7 +255,7 @@ function dedupeByUrl(results: SearchResult[]): SearchResult[] {
   return out;
 }
 
-function canonicalizeUrl(url: string): string {
+export function canonicalizeUrl(url: string): string {
   try {
     const u = new URL(url);
     u.hash = '';

@@ -105,6 +105,12 @@ export interface DigimWebConfig {
   intelligenceCacheTtlHours: number;
   /** Days to retain gathered content before it is eligible for cleanup. */
   contentRetentionDays: number;
+  /** When true, a periodic sweep prunes aged content + expired intelligence. */
+  retentionSweepEnabled: boolean;
+  /** How often (hours) the retention sweep runs. */
+  retentionSweepIntervalHours: number;
+  /** Max content rows pruned per sweep pass (bounds each run). */
+  retentionSweepBatch: number;
 }
 
 // ----------------------------------------------------------------------------
@@ -213,6 +219,9 @@ function buildConfig(): DigimWebConfig {
 
     intelligenceCacheTtlHours: clampInt(envInt('DIGIM_WEB_INTEL_CACHE_TTL_HOURS', 6), 0, 720),
     contentRetentionDays: clampInt(envInt('DIGIM_WEB_CONTENT_RETENTION_DAYS', 30), 1, 3650),
+    retentionSweepEnabled: envBool('DIGIM_WEB_RETENTION_SWEEP', true),
+    retentionSweepIntervalHours: clampInt(envInt('DIGIM_WEB_RETENTION_SWEEP_HOURS', 24), 1, 720),
+    retentionSweepBatch: clampInt(envInt('DIGIM_WEB_RETENTION_BATCH', 500), 1, 5000),
   });
 }
 
