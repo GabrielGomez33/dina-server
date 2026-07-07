@@ -1327,18 +1327,19 @@ private mapRowToUser(row: any): DinaUser {
   private async createIntelligentSchema(): Promise<void> {
     console.log('🎨 Creating beautiful, secure, and efficient schema...');
     
+    // NOTE: the digim_* tables are intentionally NOT listed here. They have no
+    // definition in createTable()'s tableDefinitions, so listing them caused a
+    // "No definition found for table digim_*" throw during first-boot schema
+    // creation on a fresh database. DIGIM owns and creates its own tables in
+    // digim/index.ts -> initializeDatabaseSchemas() during its init phase.
     const tables = [
-      'users', 
-      'system_logs', 
-      'system_intelligence', 
-      'dina_requests', 
+      'users',
+      'system_logs',
+      'system_intelligence',
+      'dina_requests',
       'neural_memory',
       'dina_users',
-      'dina_security_events',
-      'digim_sources',
-      'digim_content',
-      'digim_intelligence',
-      'digim_clusters'
+      'dina_security_events'
     ];
 
     for (const tableName of tables) {

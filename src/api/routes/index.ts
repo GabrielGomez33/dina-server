@@ -1380,9 +1380,11 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // DIGIM List Data Sources
   apiRouter.get('/digim/sources', async (req: AuthenticatedRequest, res: Response) => {
     try {
+      // FIX: the handler method is `digim_sources` with an `action`, not the
+      // non-existent `digim_list_sources` (which threw "Unknown DIGIM method").
       const digiMMessage = createDinaMessage({
         source: { module: 'api', version: '1.0.0' },
-        target: { module: 'digim', method: 'digim_list_sources', priority: 5 },
+        target: { module: 'digim', method: 'digim_sources', priority: 5 },
         security: {
           user_id: req.dina!.dina_key,
           session_id: req.dina!.session_id,
@@ -1390,6 +1392,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
           sanitized: true
         },
         payload: {
+          action: 'list',
           include_stats: req.dina!.trust_level === 'trusted',
           include_private: req.dina!.trust_level === 'trusted'
         }
@@ -1408,6 +1411,107 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
       console.error('❌ Error listing DIGIM sources:', error);
       res.status(500).json({
         error: 'Failed to list data sources',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // DIGIM Web Research — surf the web + synthesize insights (gather → synthesize)
+  // Behaviour is gated by DIGIM_WEB_ENABLED on the server; when disabled it
+  // returns a clear "disabled" status rather than doing anything.
+  apiRouter.post('/digim/research', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { query, seed_urls, intelligence_level, max_documents, force_refresh } = req.body || {};
+
+      if ((!query || String(query).trim().length === 0) && !Array.isArray(seed_urls)) {
+        res.status(400).json({
+          error: 'Bad Request',
+          message: 'A "query" string or "seed_urls" array is required',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+
+      const digiMMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'digim', method: 'digim_research', priority: 7 },
+        security: {
+          user_id: req.dina!.dina_key,
+          session_id: req.dina!.session_id,
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true
+        },
+        payload: {
+          query: query ? String(query) : '',
+          seed_urls: Array.isArray(seed_urls) ? seed_urls : [],
+          intelligence_level: intelligence_level || 'surface',
+          max_documents: typeof max_documents === 'number' ? max_documents : undefined,
+          force_refresh: force_refresh === true
+        }
+      });
+
+      console.log(`🌐 DIGIM research: "${String(query || '(seeds)').substring(0, 60)}..." from ${req.dina!.trust_level} user`);
+      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+
+      res.json({
+        ...digiMResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level,
+          rate_limit_remaining: req.dina?.rate_limit_remaining
+        }
+      });
+    } catch (error) {
+      console.error('❌ Error in DIGIM research:', error);
+      res.status(500).json({
+        error: 'DIGIM research failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // DIGIM Gather — surf + collect + store documents only (no synthesis)
+  apiRouter.post('/digim/gather', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { query, seed_urls, max_documents } = req.body || {};
+
+      if ((!query || String(query).trim().length === 0) && !Array.isArray(seed_urls)) {
+        res.status(400).json({
+          error: 'Bad Request',
+          message: 'A "query" string or "seed_urls" array is required',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+
+      const digiMMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'digim', method: 'digim_gather', priority: 6 },
+        security: {
+          user_id: req.dina!.dina_key,
+          session_id: req.dina!.session_id,
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true
+        },
+        payload: {
+          query: query ? String(query) : '',
+          seed_urls: Array.isArray(seed_urls) ? seed_urls : [],
+          max_documents: typeof max_documents === 'number' ? max_documents : undefined
+        }
+      });
+
+      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+
+      res.json({
+        ...digiMResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level,
+          rate_limit_remaining: req.dina?.rate_limit_remaining
+        }
+      });
+    } catch (error) {
+      console.error('❌ Error in DIGIM gather:', error);
+      res.status(500).json({
+        error: 'DIGIM gather failed',
         message: error instanceof Error ? error.message : 'Unknown error'
       });
     }

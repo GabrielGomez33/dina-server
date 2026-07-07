@@ -8,6 +8,8 @@ import { DinaUniversalMessage, DinaResponse, DinaProtocol, createDinaResponse } 
 import { database } from '../../config/database/db';
 import { redisManager } from '../../config/redis';
 import { contextMemorySystem, llmIntelligenceEngine } from '../llm/intelligence';
+// Web-research subsystem (self-contained; additive; config-gated default-off).
+import { getWebResearchOrchestrator, WebResearchOrchestrator, IntelligenceLevel, checkUrlSafety } from './web';
 import {
   DigiMMessage,
   DigiMResponse,
@@ -32,6 +34,9 @@ export class DigiMOrchestrator {
   private activeSources: Map<string, DigiMSource> = new Map();
   private gatheringIntervals: Map<string, NodeJS.Timeout> = new Map();
   private moduleHealth: 'healthy' | 'degraded' | 'critical' = 'healthy';
+  // Web-research subsystem — its own concern, its own LLM instance. Constructed
+  // lazily (no I/O); only does work when DIGIM_WEB_ENABLED=true.
+  private webResearch: WebResearchOrchestrator = getWebResearchOrchestrator();
 
   constructor() {
     console.log('🧠 Initializing DIGIM Orchestrator...');
@@ -115,6 +120,17 @@ async  initialize(): Promise<void> {
       // Step 4: Start monitoring and health checks
       this.startHealthMonitoring();
      console.log('✅ Health monitoring started');
+
+      // Step 5: Initialize the web-research subsystem (non-fatal, self-gating).
+      // When DIGIM_WEB_ENABLED is not set this is a cheap no-op — it does not
+      // touch the network or spin up an LLM, so it cannot disrupt startup.
+      try {
+        await this.webResearch.initialize();
+        console.log(`✅ DIGIM web-research subsystem ready (enabled=${this.webResearch.enabled}, provider=${this.webResearch.providerName})`);
+      } catch (webErr) {
+        // Never let the optional subsystem break DIGIM startup.
+        console.warn(`⚠️ DIGIM web-research init degraded (continuing): ${(webErr as Error).message}`);
+      }
 
       this.initialized = true;
       this.moduleHealth = 'healthy';
@@ -257,6 +273,9 @@ async  initialize(): Promise<void> {
       case 'digim_gather':
         return await this.handleGatherRequest(requestData, message.security.user_id);
 
+      case 'digim_research':
+        return await this.handleResearchRequest(requestData, message.security.user_id);
+
       case 'digim_query':
         return await this.handleQueryRequest(requestData, message.security.user_id);
 
@@ -358,25 +377,132 @@ async  initialize(): Promise<void> {
   }
 
   private async handleGatherRequest(requestData: any, userId?: string): Promise<any> {
-    console.log('🔍 Handling gather request (Phase 1 placeholder)');
-    
-    // Phase 1: Return placeholder response
+    console.log('🔍 Handling gather request');
+
+    // When the web-research subsystem is enabled, actually surf + collect.
+    if (this.webResearch.enabled) {
+      const query: string = (requestData?.query || requestData?.q || '').trim();
+      const seedUrls: string[] = Array.isArray(requestData?.seed_urls) ? requestData.seed_urls : [];
+      if (!query && seedUrls.length === 0) {
+        throw new Error('digim_gather requires a "query" or "seed_urls"');
+      }
+      const gather = await this.webResearch.gather(query, {
+        maxDocuments: requestData?.max_documents,
+        seedUrls,
+        userId,
+      });
+      return {
+        status: 'completed',
+        query: gather.query,
+        documents_gathered: gather.documents.length,
+        documents: gather.documents.map((d) => ({
+          id: d.id,
+          title: d.title,
+          url: d.url,
+          published_at: d.publishedAt,
+          word_count: d.wordCount,
+          quality: d.quality,
+          duplicate: d.duplicate,
+        })),
+        diagnostics: gather.diagnostics,
+        duration_ms: gather.durationMs,
+        provider: gather.diagnostics.searchProvider,
+      };
+    }
+
+    // Disabled → the original Phase-1 placeholder (unchanged behavior).
     return {
       status: 'queued',
-      message: 'Content gathering queued for processing',
+      message: 'Content gathering queued for processing (web-research disabled — set DIGIM_WEB_ENABLED=true)',
       sources_queued: requestData.source_ids?.length || 0,
       estimated_completion: new Date(Date.now() + 300000), // 5 minutes
       phase: 'foundation'
     };
   }
 
+  /**
+   * digim_research — the headline capability: surf the web for the query,
+   * gather + score sources, then synthesize a grounded WebInsight.
+   */
+  private async handleResearchRequest(requestData: any, userId?: string): Promise<any> {
+    const query: string = (requestData?.query || requestData?.q || '').trim();
+    const seedUrls: string[] = Array.isArray(requestData?.seed_urls) ? requestData.seed_urls : [];
+    console.log(`🌐 Handling research request: "${query.substring(0, 60)}..."`);
+
+    if (!this.webResearch.enabled) {
+      return {
+        status: 'disabled',
+        message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true and configure DIGIM_WEB_SEARCH_PROVIDER to enable.',
+        phase: 'foundation',
+      };
+    }
+    if (!query && seedUrls.length === 0) {
+      throw new Error('digim_research requires a "query" or "seed_urls"');
+    }
+
+    const level = normalizeIntelligenceLevel(requestData?.intelligence_level);
+    const result = await this.webResearch.research(query, {
+      level,
+      maxDocuments: requestData?.max_documents,
+      seedUrls,
+      userId,
+      forceRefresh: requestData?.force_refresh === true,
+    });
+
+    return {
+      status: 'success',
+      query: result.query,
+      intelligence_level: result.level,
+      cached: result.cached,
+      insight: result.insight,
+      sources_consulted: result.insight.sources.length,
+      documents_gathered: result.gather.documents.length,
+      diagnostics: result.gather.diagnostics,
+      intelligence_id: result.intelligenceId,
+      processing_time_ms: Math.round(result.processingTimeMs),
+      generated_at: new Date(),
+    };
+  }
+
   private async handleQueryRequest(requestData: any, userId?: string): Promise<any> {
     console.log(`🧠 Handling query request: "${requestData.query?.substring(0, 50)}..."`);
-    
-    // Phase 1: Use existing LLM intelligence to provide basic response
+
+    // When web-research is enabled, a natural-language query IS a research run.
+    if (this.webResearch.enabled && (requestData?.query || '').trim()) {
+      const level = normalizeIntelligenceLevel(requestData?.intelligence_level);
+      const result = await this.webResearch.research(String(requestData.query).trim(), {
+        level,
+        maxDocuments: requestData?.max_results,
+        userId,
+      });
+      return {
+        query: result.query,
+        intelligence_level: result.level,
+        cached: result.cached,
+        results: {
+          summary: result.insight.summary,
+          key_insights: result.insight.keyInsights,
+          entities: result.insight.entities,
+          topics: result.insight.topics,
+          trends: result.insight.trends,
+          confidence_score: result.insight.confidence,
+          caveats: result.insight.caveats,
+          sources: result.insight.sources,
+        },
+        processing_metadata: {
+          model_used: this.webResearch.enabled ? 'digim-web-research' : 'digim-orchestrator',
+          processing_time_ms: Math.round(result.processingTimeMs),
+          sources_consulted: result.insight.sources.length,
+          analysis_depth: result.level,
+        },
+        generated_at: new Date(),
+      };
+    }
+
+    // Disabled → the original Phase-1 complexity-only placeholder (unchanged).
     try {
       const complexity = await llmIntelligenceEngine.analyzeQuery(requestData.query);
-      
+
       return {
         query: requestData.query,
         intelligence_level: requestData.intelligence_level || 'surface',
@@ -385,7 +511,7 @@ async  initialize(): Promise<void> {
           key_insights: [
             'DIGIM intelligence gathering system is in Phase 1',
             'Query complexity analysis completed using existing LLM intelligence',
-            'Full query processing will be available in Phase 2'
+            'Enable web-research (DIGIM_WEB_ENABLED=true) for full query processing'
           ],
           confidence_score: complexity.confidence
         },
@@ -501,7 +627,7 @@ async  initialize(): Promise<void> {
             
               'digim_content': `CREATE TABLE IF NOT EXISTS digim_content (
                   id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
-                  source_id VARCHAR(36) NOT NULL,
+                  source_id VARCHAR(36) NULL, -- nullable: ad-hoc web docs need no configured source (migration 001)
                   content_hash VARCHAR(64) UNIQUE NOT NULL,
                   title TEXT,
                   content LONGTEXT NOT NULL,
@@ -523,12 +649,18 @@ async  initialize(): Promise<void> {
                   language VARCHAR(10),
                   word_count INT UNSIGNED,
                   metadata JSON,
-                  FOREIGN KEY (source_id) REFERENCES digim_sources(id) ON DELETE CASCADE,
+                  -- Phase 1 semantic-memory bookkeeping (vectors live in Redis; MySQL tracks status)
+                  embedding_status ENUM('pending','embedded','failed','skipped') NOT NULL DEFAULT 'pending',
+                  embedded_at TIMESTAMP NULL,
+                  embedding_model VARCHAR(100) NULL,
+                  embedding_ref VARCHAR(128) NULL, -- Redis vector id
+                  CONSTRAINT fk_digim_content_source FOREIGN KEY (source_id) REFERENCES digim_sources(id) ON DELETE SET NULL,
                   INDEX idx_content_hash (content_hash),
                   INDEX idx_cluster_status (cluster_id, processing_status),
                   INDEX idx_quality_metrics (quality_score DESC, relevance_score DESC),
                   INDEX idx_security_status (security_status, gathered_at),
                   INDEX idx_published_fresh (published_at DESC, freshness_score DESC),
+                  INDEX idx_embedding_status (embedding_status, gathered_at),
                   FULLTEXT idx_content_search (title, content),
                   CHECK (quality_score >= 0.0000 AND quality_score <= 1.0000),
                   CHECK (relevance_score >= 0.0000 AND relevance_score <= 1.0000),
@@ -696,6 +828,22 @@ async  initialize(): Promise<void> {
     // Phase 1: Basic connectivity test
     if (source.url) {
       try {
+        // SECURITY FIX: guard the source URL against SSRF before connecting.
+        // Previously this fetched an arbitrary, user-supplied URL with no
+        // validation — a source pointing at 169.254.169.254 or an internal
+        // host would have been reachable. The guard blocks private/loopback/
+        // link-local/metadata targets and non-http(s) schemes.
+        const safety = await checkUrlSafety(source.url);
+        if (!safety.safe) {
+          return {
+            source_id: sourceId,
+            status: 'blocked',
+            reason: safety.reason,
+            error: safety.detail || 'URL failed safety validation',
+            last_tested: new Date()
+          };
+        }
+
         const response = await fetch(source.url, {
           method: 'HEAD',
           headers: { 'User-Agent': 'DINA-DIGIM/1.0' }
@@ -974,14 +1122,37 @@ async  initialize(): Promise<void> {
       // Clear sources
       this.activeSources.clear();
 
+      // Shut down the web-research subsystem (best-effort).
+      try {
+        await this.webResearch.shutdown();
+      } catch (webErr) {
+        console.warn(`⚠️ DIGIM web-research shutdown error (ignored): ${(webErr as Error).message}`);
+      }
+
       this.initialized = false;
       this.moduleHealth = 'critical';
-      
+
       console.log('✅ DIGIM shutdown complete');
     } catch (error) {
       console.error('❌ DIGIM shutdown error:', error);
     }
   }
+}
+
+// ================================
+// HELPERS
+// ================================
+
+/**
+ * Coerce any caller-supplied intelligence level into a valid one. Notably maps
+ * the legacy/route value 'basic' (which is NOT a valid enum) → 'surface', which
+ * previously flowed straight through as an invalid value.
+ */
+function normalizeIntelligenceLevel(value: any): IntelligenceLevel {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (v === 'deep' || v === 'predictive' || v === 'surface') return v;
+  if (v === 'basic' || v === '' || v === 'structured') return 'surface';
+  return 'surface';
 }
 
 // ================================
