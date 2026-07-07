@@ -8,8 +8,9 @@ import { DinaUniversalMessage, MessagePriority, SecurityLevel } from '../../../c
 // ================================
 
 // Extend DUMP protocol with DIGIM-specific methods
-export type DigiMMethod = 
+export type DigiMMethod =
   | 'digim_gather'        // Gather content from sources
+  | 'digim_research'      // Surf the web + synthesize insights (gather → synthesize)
   | 'digim_query'         // Natural language intelligence query
   | 'digim_analyze'       // Deep analysis of content/topics
   | 'digim_generate'      // Generate outputs (articles, reports, etc.)
@@ -554,7 +555,7 @@ export function isDigiMMessage(message: DinaUniversalMessage): message is DigiMM
 
 export function isDigiMMethod(method: string): method is DigiMMethod {
   const digiMethods: DigiMMethod[] = [
-    'digim_gather', 'digim_query', 'digim_analyze', 'digim_generate',
+    'digim_gather', 'digim_research', 'digim_query', 'digim_analyze', 'digim_generate',
     'digim_cluster', 'digim_export', 'digim_status', 'digim_sources', 'digim_security'
   ];
   return digiMethods.includes(method as DigiMMethod);
