@@ -76,6 +76,72 @@ loadmodule /path/to/redisearch.so
 ```
 then restart Redis.
 
+## 2D. YOUR SETUP — existing native Redis 7.0.15 with data (Ubuntu/systemd)
+
+You already run a native `redis-server` (7.0.15) with live data and no
+RediSearch. The safest, data-compatible upgrade is to switch the service to
+**Redis Stack** (which IS Redis + modules and reads your existing RDB), OR to
+load just the module into your current server. Back up first either way.
+
+```bash
+# 0) BACK UP current data (point-in-time snapshot).
+redis-cli SAVE
+sudo cp /var/lib/redis/dump.rdb /var/lib/redis/dump.rdb.bak.$(date +%s)
+
+# 1) Add the official Redis APT repo (provides Redis Stack + modules).
+curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" \
+  | sudo tee /etc/apt/sources.list.d/redis.list
+sudo apt-get update
+```
+
+### Option A (recommended) — switch the service to redis-stack-server
+
+`redis-stack-server` is Redis 7.x + RediSearch (+ JSON, etc.), fully compatible
+with your existing `dump.rdb`. It reuses the same port and data dir.
+
+```bash
+sudo apt-get install -y redis-stack-server
+# Stop the stock server so the port is free, then start the stack server.
+sudo systemctl disable --now redis-server
+# Point redis-stack at your existing data dir/RDB (adjust if your paths differ):
+sudo redis-stack-server --dir /var/lib/redis --dbfilename dump.rdb --daemonize yes
+# (or configure /etc/redis-stack.conf with your dir/port/requirepass and enable the unit)
+redis-cli FT._LIST     # should now return (an empty array is fine)
+```
+
+### Option B (least change) — load the module into your current redis-server
+
+Keep `redis-server`; just install the package to obtain the module `.so`,
+disable the extra service, and `loadmodule` it.
+
+```bash
+sudo apt-get install -y redis-stack-server
+sudo systemctl disable --now redis-stack-server     # we only want its module file
+# Find the module (path varies by package version):
+ls /opt/redis-stack/lib/redisearch.so 2>/dev/null || sudo find / -name 'redisearch.so' 2>/dev/null | head
+# Add it to your existing config and restart:
+echo 'loadmodule /opt/redis-stack/lib/redisearch.so' | sudo tee -a /etc/redis/redis.conf
+sudo systemctl restart redis-server
+redis-cli MODULE LIST                                # should list "search"
+```
+
+### After either option
+
+- **Enable durability for embeddings** (your `appendonly` is `no`): with only
+  RDB snapshots (`save 3600 1 300 100 60 10000`), embeddings created between
+  snapshots are lost on a hard restart. Turn on AOF:
+  ```bash
+  redis-cli CONFIG SET appendonly yes
+  # persist it in redis.conf / redis-stack.conf: appendonly yes
+  ```
+  Even without this, DINA can re-embed: content lives in MySQL and
+  `digim_content.embedding_status` tracks state (a backfill sweep re-embeds
+  anything missing).
+- **Restart DINA** so it detects RediSearch and creates the `embeddings` vector
+  index (DIM 1024 / COSINE). The boot log shows
+  `✅ RediSearch module detected and available` + `🔍 Created vector index: embeddings`.
+
 ## 3. Verify end-to-end
 
 ```bash
