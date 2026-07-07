@@ -12,6 +12,15 @@ export type { DigimWebConfig, SearchProviderName } from './config/webConfig';
 export { checkUrlSafety, assertUrlSafe, isPrivateAddress, UrlSafetyError } from './security/urlGuard';
 export type { UrlSafetyResult, UrlUnsafeReason } from './security/urlGuard';
 
+export { sanitizeUntrusted, buildFencedSources, INJECTION_SYSTEM_RULE } from './security/promptGuard';
+export type { SanitizeResult, FenceableSource } from './security/promptGuard';
+
+export { EmbeddingService, extractVector } from './memory/embeddingService';
+export { SemanticMemory } from './memory/semanticMemory';
+export type { RetrieveOptions } from './memory/semanticMemory';
+export { rankHybrid } from './memory/hybridRank';
+export type { MemoryCandidate } from './memory/hybridRank';
+
 export { createSearchProvider } from './gatherers/searchProvider';
 export type { SearchProvider } from './gatherers/searchProvider';
 export { WebFetcher } from './gatherers/webFetcher';

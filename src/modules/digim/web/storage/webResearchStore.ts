@@ -229,6 +229,47 @@ export class WebResearchStore {
     }
   }
 
+  /** Mark a content row as embedded into the vector index (best-effort). */
+  async markEmbedded(id: string, model: string, ref: string): Promise<void> {
+    try {
+      await DB.query(
+        `UPDATE digim_content
+         SET embedding_status = 'embedded', embedded_at = NOW(), embedding_model = ?, embedding_ref = ?
+         WHERE id = ?`,
+        [truncate(model, 100), truncate(ref, 128), id],
+        true
+      );
+    } catch (err) {
+      console.warn(`⚠️ [webResearchStore] markEmbedded failed for ${id}: ${(err as Error).message}`);
+    }
+  }
+
+  /** Mark a content row as having failed embedding (best-effort). */
+  async markEmbeddingFailed(id: string): Promise<void> {
+    try {
+      await DB.query(`UPDATE digim_content SET embedding_status = 'failed' WHERE id = ?`, [id], true);
+    } catch (err) {
+      console.warn(`⚠️ [webResearchStore] markEmbeddingFailed failed for ${id}: ${(err as Error).message}`);
+    }
+  }
+
+  /** Content rows still awaiting embedding (for a backfill sweep). */
+  async getPendingEmbeddingContent(limit = 50): Promise<any[]> {
+    try {
+      const rows = await DB.query(
+        `SELECT id, title, content, url FROM digim_content
+         WHERE embedding_status = 'pending'
+         ORDER BY gathered_at DESC LIMIT ?`,
+        [Math.max(1, Math.min(limit, 500))],
+        true
+      );
+      return Array.isArray(rows) ? rows : [];
+    } catch (err) {
+      console.warn(`⚠️ [webResearchStore] getPendingEmbeddingContent failed: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
   /** Load stored documents by id (for re-synthesis / inspection). */
   async getContentByIds(ids: string[]): Promise<any[]> {
     if (ids.length === 0) return [];

@@ -114,6 +114,20 @@ export interface GatherDiagnostics {
   errors: Array<{ url: string; error: string }>;
 }
 
+/** A document recalled from semantic memory, with its blended relevance score. */
+export interface RetrievedMemory {
+  id: string;
+  title: string;
+  url: string;
+  content: string;
+  publishedAt?: string;
+  /** Final blended score (vector + keyword + recency + authority). */
+  score: number;
+  /** Raw cosine similarity from the vector index. */
+  vectorScore: number;
+  provider?: string;
+}
+
 /** The synthesized intelligence produced from gathered documents. */
 export interface WebInsight {
   summary: string;

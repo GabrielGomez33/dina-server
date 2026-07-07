@@ -88,6 +88,18 @@ export interface DigimWebConfig {
   /** Per-document character budget injected into the synthesis prompt. */
   synthesisPerDocChars: number;
 
+  // ---- Semantic memory (Phase 1) ----
+  /** Embedding model for semantic memory (defaults to the LLM embed model). */
+  embedModel: string;
+  /** Max characters of a document fed to the embedder (token-limit guard). */
+  embedMaxChars: number;
+  /** Default number of memories retrieved per recall/research. */
+  memoryTopK: number;
+  /** Minimum cosine similarity for a memory to be considered relevant (0-1). */
+  memoryMinScore: number;
+  /** When true, gathered documents are embedded into semantic memory. */
+  memoryEnabled: boolean;
+
   // ---- Caching / retention ----
   /** TTL (hours) for a cached intelligence result keyed by query hash. */
   intelligenceCacheTtlHours: number;
@@ -134,6 +146,13 @@ function envIntCsv(name: string, fallback: number[]): number[] {
     .map((s) => parseInt(s.trim(), 10))
     .filter((n) => Number.isFinite(n) && n > 0 && n <= 65535);
   return parts.length > 0 ? Array.from(new Set(parts)) : Array.from(new Set(fallback));
+}
+
+function envFloat(name: string, fallback: number): number {
+  const v = process.env[name];
+  if (v === undefined || v.trim().length === 0) return fallback;
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function dedupe(list: string[]): string[] {
@@ -186,6 +205,12 @@ function buildConfig(): DigimWebConfig {
     synthesisMaxDocuments: clampInt(envInt('DIGIM_WEB_SYNTHESIS_MAX_DOCUMENTS', 6), 1, 20),
     synthesisPerDocChars: clampInt(envInt('DIGIM_WEB_SYNTHESIS_PER_DOC_CHARS', 2000), 200, 12000),
 
+    embedModel: envStr('DIGIM_WEB_EMBED_MODEL', envStr('DINA_EMBED_MODEL', 'mxbai-embed-large')),
+    embedMaxChars: clampInt(envInt('DIGIM_WEB_EMBED_MAX_CHARS', 6000), 200, 20000),
+    memoryTopK: clampInt(envInt('DIGIM_WEB_MEMORY_TOPK', 8), 1, 50),
+    memoryMinScore: clamp01f(envFloat('DIGIM_WEB_MEMORY_MIN_SCORE', 0.2)),
+    memoryEnabled: envBool('DIGIM_WEB_MEMORY_ENABLED', true),
+
     intelligenceCacheTtlHours: clampInt(envInt('DIGIM_WEB_INTEL_CACHE_TTL_HOURS', 6), 0, 720),
     contentRetentionDays: clampInt(envInt('DIGIM_WEB_CONTENT_RETENTION_DAYS', 30), 1, 3650),
   });
@@ -194,6 +219,11 @@ function buildConfig(): DigimWebConfig {
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(Math.max(Math.round(value), min), max);
+}
+
+function clamp01f(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
 }
 
 let _config: DigimWebConfig | null = null;

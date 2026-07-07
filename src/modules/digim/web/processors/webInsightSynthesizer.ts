@@ -24,7 +24,21 @@
 // ============================================================================
 
 import { getDigimWebConfig, DigimWebConfig } from '../config/webConfig';
-import { GatheredDocument, WebInsight } from '../types';
+import { WebInsight } from '../types';
+import { buildFencedSources, INJECTION_SYSTEM_RULE, FenceableSource } from '../security/promptGuard';
+
+/**
+ * Minimal structural shape the synthesizer needs from a source. Both
+ * GatheredDocument (fresh) and RetrievedMemory (recalled) satisfy it, so the
+ * synthesizer can blend web-fresh docs with prior semantic memory.
+ */
+export interface SynthSource {
+  title: string;
+  url: string;
+  content: string;
+  publishedAt?: string;
+  author?: string;
+}
 
 class Logger {
   constructor(private ctx: string) {}
@@ -65,14 +79,16 @@ export class WebInsightSynthesizer {
    */
   async synthesize(
     query: string,
-    documents: GatheredDocument[],
-    level: 'surface' | 'deep' | 'predictive' = 'surface'
+    documents: SynthSource[],
+    level: 'surface' | 'deep' | 'predictive' = 'surface',
+    priorMemory: SynthSource[] = []
   ): Promise<WebInsight> {
-    if (documents.length === 0) {
+    // Blend fresh gathered docs with recalled memory, fresh first, deduped by URL.
+    const used = dedupeByUrl([...documents, ...priorMemory]).slice(0, this.cfg.synthesisMaxDocuments);
+    if (used.length === 0) {
       return this.emptyInsight('No documents were gathered for this query.');
     }
 
-    const used = documents.slice(0, this.cfg.synthesisMaxDocuments);
     const prompt = this.buildPrompt(query, used, level);
 
     let raw: string;
@@ -96,19 +112,20 @@ export class WebInsightSynthesizer {
   // PROMPTING
   // --------------------------------------------------------------------------
 
-  private buildPrompt(query: string, docs: GatheredDocument[], level: string): string {
-    const perDoc = this.cfg.synthesisPerDocChars;
-    const sourceBlocks = docs
-      .map((d, i) => {
-        const meta = [
-          d.publishedAt ? `published: ${d.publishedAt}` : null,
-          d.author ? `author: ${d.author}` : null,
-        ]
-          .filter(Boolean)
-          .join(', ');
-        return `[Source ${i + 1}] ${d.title}\nURL: ${d.url}${meta ? `\n(${meta})` : ''}\n${clip(d.content, perDoc)}`;
-      })
-      .join('\n\n---\n\n');
+  private buildPrompt(query: string, docs: SynthSource[], level: string): string {
+    // Fence + sanitize every source (prompt-injection defense). The returned
+    // flags are logged for observability.
+    const fenceable: FenceableSource[] = docs.map((d) => ({
+      title: d.title,
+      url: d.url,
+      content: d.content,
+      publishedAt: d.publishedAt,
+      author: d.author,
+    }));
+    const { block: sourceBlocks, flags } = buildFencedSources(fenceable, this.cfg.synthesisPerDocChars);
+    if (flags.length > 0) {
+      this.logger.warn(`prompt-injection patterns flagged in ${flags.length} source(s)`, flags);
+    }
 
     const depthGuidance =
       level === 'predictive'
@@ -122,6 +139,8 @@ export class WebInsightSynthesizer {
 USER QUERY: "${query}"
 
 DEPTH: ${depthGuidance}
+
+${INJECTION_SYSTEM_RULE}
 
 RULES:
 - Base EVERY claim only on the provided sources. Do NOT invent facts, numbers, or quotes.
@@ -212,7 +231,7 @@ ${sourceBlocks}`;
   // NORMALIZATION (never trust the model's shape)
   // --------------------------------------------------------------------------
 
-  private normalizeInsight(parsed: Partial<WebInsight>, docs: GatheredDocument[]): WebInsight {
+  private normalizeInsight(parsed: Partial<WebInsight>, docs: SynthSource[]): WebInsight {
     const sources = docs.map((d) => ({ title: d.title, url: d.url }));
     return {
       summary: ensureString(parsed.summary, 'No summary produced.'),
@@ -243,7 +262,7 @@ ${sourceBlocks}`;
   // --------------------------------------------------------------------------
 
   /** Build a usable insight from document metadata when the LLM is unavailable. */
-  private degradedInsight(query: string, docs: GatheredDocument[]): WebInsight {
+  private degradedInsight(query: string, docs: SynthSource[]): WebInsight {
     const sources = docs.map((d) => ({ title: d.title, url: d.url }));
     return {
       summary: `Gathered ${docs.length} source(s) relevant to "${query}". Automated synthesis was unavailable; showing source-derived highlights.`,
@@ -306,4 +325,17 @@ function clamp01(n: number): number {
 function clip(text: string, max: number): string {
   if (typeof text !== 'string') return '';
   return text.length > max ? text.slice(0, max) + '…' : text;
+}
+
+/** Dedupe sources by URL, preserving order (fresh docs first). */
+function dedupeByUrl(sources: SynthSource[]): SynthSource[] {
+  const seen = new Set<string>();
+  const out: SynthSource[] = [];
+  for (const s of sources) {
+    const key = (s.url || '').trim().toLowerCase().replace(/\/+$/, '') || `${s.title}::${(s.content || '').slice(0, 40)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
 }

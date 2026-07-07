@@ -140,6 +140,42 @@ interface PersistedQuery {
 // ENHANCED REDIS MANAGER
 // ================================
 
+// ================================
+// VECTOR SEARCH HELPERS (module-scope, pure)
+// ================================
+
+/** Cosine similarity of two equal-length vectors. Returns 0 if either is zero. */
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length) return 0;
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  if (magA === 0 || magB === 0) return 0;
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+}
+
+/** True if every key in `filters` equals the same key in `metadata`. */
+function matchesFilters(metadata: Record<string, any> | undefined, filters: Record<string, any>): boolean {
+  if (!metadata) return false;
+  for (const key of Object.keys(filters)) {
+    if (metadata[key] !== filters[key]) return false;
+  }
+  return true;
+}
+
+/** Coerce a Redis reply element (string | Buffer | other) to a string. */
+function bufToStr(v: any): string {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  if (Buffer.isBuffer(v)) return v.toString('utf8');
+  return String(v);
+}
+
 export class EnhancedDinaRedisManager extends EventEmitter {
   // Core Redis connections
   private client: RedisClientType;
@@ -722,6 +758,150 @@ export class EnhancedDinaRedisManager extends EventEmitter {
       this.cacheMetrics.misses++;
       return null;
     }
+  }
+
+  // ================================
+  // VECTOR SIMILARITY SEARCH (KNN)
+  // ================================
+  //
+  // Returns the stored embeddings most similar to `queryVector`, best-first.
+  // Two paths:
+  //   • Fast path: RediSearch FT.SEARCH KNN over the `embeddings` index (used
+  //     only when the module is present). COSINE returns a DISTANCE, so
+  //     similarity = 1 - distance.
+  //   • Fallback: brute-force cosine over all stored embeddings. Correct at any
+  //     scale, O(N) — fine for thousands of docs. This is the path that runs
+  //     when RediSearch is not installed (see ops/REDIS_STACK_RUNBOOK.md).
+  //
+  // The fast path is wrapped in try/catch and any anomaly falls back to
+  // brute-force, so results are never silently wrong.
+
+  async searchSimilarEmbeddings(
+    queryVector: number[],
+    options: VectorSearchOptions = {}
+  ): Promise<VectorSearchResult[]> {
+    const topK = Math.max(1, Math.min(options.topK ?? 10, 200));
+    const threshold = typeof options.threshold === 'number' ? options.threshold : 0;
+    const filters = options.filters;
+
+    if (!Array.isArray(queryVector) || queryVector.length === 0) {
+      console.warn('⚠️ searchSimilarEmbeddings called with an empty query vector');
+      return [];
+    }
+
+    // Fast path — RediSearch KNN.
+    if (this.redisSearchAvailable) {
+      try {
+        const fast = await this.searchViaRediSearch(queryVector, topK, threshold, filters);
+        if (fast) return fast;
+      } catch (err) {
+        console.warn(`⚠️ RediSearch KNN failed, falling back to brute-force: ${(err as Error)?.message ?? err}`);
+      }
+    }
+
+    // Fallback — brute-force cosine.
+    const corpus = await this.collectEmbeddingsForSearch();
+    const scored: VectorSearchResult[] = [];
+    for (const emb of corpus) {
+      if (filters && !matchesFilters(emb.metadata, filters)) continue;
+      if (emb.vector.length !== queryVector.length) continue;
+      const score = cosineSimilarity(queryVector, emb.vector);
+      if (score >= threshold) {
+        scored.push({
+          id: emb.id,
+          score,
+          metadata: options.includeMetadata === false ? undefined : emb.metadata,
+        });
+      }
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, topK);
+  }
+
+  /** RediSearch KNN. Returns null if the reply can't be parsed (→ caller falls back). */
+  private async searchViaRediSearch(
+    queryVector: number[],
+    topK: number,
+    threshold: number,
+    filters?: Record<string, any>
+  ): Promise<VectorSearchResult[] | null> {
+    const knn = `*=>[KNN ${topK} @vector_data $vec AS score]`;
+    const reply: any = await this.vectorClient.sendCommand([
+      'FT.SEARCH', 'embeddings', knn,
+      'PARAMS', '2', 'vec', this.serializeVector(queryVector) as any,
+      'SORTBY', 'score', 'ASC',
+      'RETURN', '2', 'score', 'metadata',
+      'DIALECT', '2',
+      'LIMIT', '0', String(topK),
+    ]);
+
+    if (!Array.isArray(reply) || reply.length < 1) return null;
+
+    const results: VectorSearchResult[] = [];
+    // reply = [total, key1, [f,v,...], key2, [f,v,...], ...]
+    for (let i = 1; i + 1 < reply.length; i += 2) {
+      const key = bufToStr(reply[i]);
+      const fields = reply[i + 1];
+      if (!key || !Array.isArray(fields)) continue;
+      const id = key.startsWith('embedding:') ? key.slice('embedding:'.length) : key;
+      let distance = 1;
+      let metadata: Record<string, any> = {};
+      for (let j = 0; j + 1 < fields.length; j += 2) {
+        const fname = bufToStr(fields[j]);
+        const fval = bufToStr(fields[j + 1]);
+        if (fname === 'score') distance = parseFloat(fval);
+        else if (fname === 'metadata') { try { metadata = JSON.parse(fval); } catch { /* keep {} */ } }
+      }
+      const score = 1 - (Number.isFinite(distance) ? distance : 1); // COSINE distance → similarity
+      if (score >= threshold && (!filters || matchesFilters(metadata, filters))) {
+        results.push({ id, score, metadata });
+      }
+    }
+    results.sort((a, b) => b.score - a.score);
+    return results.slice(0, topK);
+  }
+
+  /**
+   * Gather all stored embeddings for brute-force search. Prefers the in-memory
+   * persistence map (fast); if empty, SCANs the `embedding:*` keyspace (capped).
+   */
+  private async collectEmbeddingsForSearch(): Promise<VectorEmbedding[]> {
+    if (this.persistedEmbeddings.size > 0) {
+      const out: VectorEmbedding[] = [];
+      for (const e of this.persistedEmbeddings.values()) {
+        out.push({
+          id: e.id,
+          vector: e.vector,
+          metadata: e.metadata,
+          model: e.model,
+          dimensions: e.vector.length,
+          timestamp: e.timestamp,
+        });
+      }
+      return out;
+    }
+
+    // SCAN fallback (bounded) — works even when in-process persistence is off.
+    const out: VectorEmbedding[] = [];
+    const MAX = 5000;
+    try {
+      let cursor = '0';
+      do {
+        const res: any = await this.vectorClient.sendCommand(['SCAN', cursor, 'MATCH', 'embedding:*', 'COUNT', '200']);
+        cursor = bufToStr(Array.isArray(res) ? res[0] : '0') || '0';
+        const keys: any[] = Array.isArray(res) && Array.isArray(res[1]) ? res[1] : [];
+        for (const k of keys) {
+          const key = bufToStr(k);
+          const id = key.startsWith('embedding:') ? key.slice('embedding:'.length) : key;
+          const emb = await this.getEmbedding(id);
+          if (emb) out.push(emb);
+          if (out.length >= MAX) { cursor = '0'; break; }
+        }
+      } while (cursor !== '0' && out.length < MAX);
+    } catch (err) {
+      console.warn(`⚠️ SCAN for embeddings failed: ${(err as Error)?.message ?? err}`);
+    }
+    return out;
   }
 
   // ================================
