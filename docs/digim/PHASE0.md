@@ -76,6 +76,40 @@ so a normal `git pull` picks everything up — no parallel tree, no copy-paste.
   backward-compatible (new columns are nullable/defaulted; `source_id` is still
   populated, just no longer forced).
 
+## Verification
+
+| Check | Result |
+|---|---|
+| `tsc --noEmit` (src + migration/ops/test files) | ✅ clean, 0 errors |
+| `npm run migrate:list` (offline discovery + typecheck) | ✅ discovers 001 |
+| `npm run test:digim` (web-research edge cases) | ✅ 90/90 |
+| `npm run test:migration` (migration 001 logic harness) | ✅ 18/18 |
+| Latent `db.ts` first-boot fix | ✅ confirmed (0 `digim_*` entries remain in the builder array) |
+| Corrected `digim_content` DDL in `digim/index.ts` | ✅ confirmed (nullable source_id, named FK SET NULL, embedding cols) |
+
+**On live-DB testing:** a real MySQL/MariaDB server could **not** be started in
+the CI sandbox — the container's seccomp policy kills the DB server on startup
+(InnoDB's io_uring/AIO), and even a plain `mysqld` foreground start is
+terminated before it logs anything. So migration 001 was verified with
+`test/digim/migrationTest.ts`, which drives the **real** migration code against a
+mock connection that answers `INFORMATION_SCHEMA` probes and records the DDL
+emitted. It exercises every branch — legacy→migrate (exact DDL + ordering),
+idempotent re-run (zero DDL), already-migrated (no-op), missing table (skip),
+partial state, and `down()` rollback.
+
+**Operators should still run it once against a real database.** Expected:
+
+```
+$ npm run migrate:status        # 001 shown as ⏳ pending
+$ npm run migrate               # applies 001, logs each ALTER, records it
+$ npm run migrate               # "✅ No pending migrations" (idempotent)
+$ npm run migrate:status        # 001 shown as ✅ applied
+```
+
+After applying, `digim_content.source_id` is nullable, the FK is
+`fk_digim_content_source ON DELETE SET NULL`, and the four `embedding_*` columns
+exist with `idx_embedding_status`.
+
 ## Next: Phase 1 — Semantic memory
 
 Embed gathered content with `mxbai-embed-large` → store in the Redis vector

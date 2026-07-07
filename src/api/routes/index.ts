@@ -1517,6 +1517,52 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
+  // DIGIM Recall — retrieve from semantic memory by meaning (no gathering)
+  apiRouter.post('/digim/recall', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { query, top_k, min_score } = req.body || {};
+      if (!query || String(query).trim().length === 0) {
+        res.status(400).json({
+          error: 'Bad Request',
+          message: 'A "query" string is required',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+
+      const digiMMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'digim', method: 'digim_recall', priority: 6 },
+        security: {
+          user_id: req.dina!.dina_key,
+          session_id: req.dina!.session_id,
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true
+        },
+        payload: {
+          query: String(query),
+          top_k: typeof top_k === 'number' ? top_k : undefined,
+          min_score: typeof min_score === 'number' ? min_score : undefined
+        }
+      });
+
+      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      res.json({
+        ...digiMResponse.payload.data,
+        auth_info: {
+          trust_level: req.dina?.trust_level,
+          rate_limit_remaining: req.dina?.rate_limit_remaining
+        }
+      });
+    } catch (error) {
+      console.error('❌ Error in DIGIM recall:', error);
+      res.status(500).json({
+        error: 'DIGIM recall failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
   // ================================
   // ADMIN ENDPOINTS (Trusted users only)
   // ================================

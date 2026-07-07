@@ -24,8 +24,9 @@ import { getDigimWebConfig, DigimWebConfig } from './config/webConfig';
 import { GatheringPipeline } from './pipeline/gatheringPipeline';
 import { WebInsightSynthesizer } from './processors/webInsightSynthesizer';
 import { WebResearchStore } from './storage/webResearchStore';
+import { SemanticMemory } from './memory/semanticMemory';
 import { DinaLLMManager } from '../../llm/manager';
-import { GatherResult, WebInsight } from './types';
+import { GatherResult, WebInsight, RetrievedMemory } from './types';
 
 export type IntelligenceLevel = 'surface' | 'deep' | 'predictive';
 
@@ -45,6 +46,7 @@ export class WebResearchOrchestrator {
   private pipeline: GatheringPipeline;
   private synthesizer: WebInsightSynthesizer;
   private store: WebResearchStore;
+  private memory: SemanticMemory;
   private initialized = false;
 
   constructor(cfg: DigimWebConfig = getDigimWebConfig()) {
@@ -53,6 +55,7 @@ export class WebResearchOrchestrator {
     this.pipeline = new GatheringPipeline(cfg);
     this.synthesizer = new WebInsightSynthesizer(this.llmManager, cfg);
     this.store = new WebResearchStore(cfg);
+    this.memory = new SemanticMemory(this.llmManager, cfg);
   }
 
   get enabled(): boolean {
@@ -99,12 +102,40 @@ export class WebResearchOrchestrator {
   /** Gather only — surf the web and store documents, no synthesis. */
   async gather(query: string, opts?: { maxDocuments?: number; seedUrls?: string[]; userId?: string }): Promise<GatherResult> {
     this.assertEnabled();
-    return this.pipeline.gather({
+    const result = await this.pipeline.gather({
       query,
       maxDocuments: opts?.maxDocuments,
       seedUrls: opts?.seedUrls,
       userId: opts?.userId,
     });
+    await this.embedGathered(result);
+    return result;
+  }
+
+  /**
+   * Recall from semantic memory only — no gathering. Returns documents already
+   * in memory most relevant to the query, by meaning.
+   */
+  async recall(query: string, opts?: { topK?: number; minScore?: number }): Promise<RetrievedMemory[]> {
+    this.assertEnabled();
+    return this.memory.retrieve(query, { topK: opts?.topK, minScore: opts?.minScore });
+  }
+
+  /** Embed freshly-gathered (non-duplicate) documents into semantic memory. */
+  private async embedGathered(result: GatherResult): Promise<void> {
+    if (!this.memory.enabled) return;
+    for (const doc of result.documents) {
+      if (doc.duplicate) continue; // already embedded on a prior run
+      try {
+        await this.memory.embedAndStore(doc.id, doc.content, {
+          url: doc.url,
+          title: doc.title,
+          provider: doc.provider,
+        });
+      } catch (err) {
+        console.warn(`⚠️ [webResearchOrchestrator] embed failed for ${doc.id}: ${(err as Error).message}`);
+      }
+    }
   }
 
   /**
@@ -145,15 +176,25 @@ export class WebResearchOrchestrator {
       }
     }
 
-    // (gather → synthesize)
+    // (recall) Pull PRIOR knowledge from semantic memory before gathering, so
+    // synthesis can connect new findings to what DINA already knows.
+    let priorMemory: RetrievedMemory[] = [];
+    try {
+      priorMemory = await this.memory.retrieve(cleanQuery);
+    } catch (err) {
+      console.warn(`⚠️ [webResearchOrchestrator] memory recall failed: ${(err as Error).message}`);
+    }
+
+    // (gather → embed → synthesize)
     const gather = await this.pipeline.gather({
       query: cleanQuery,
       maxDocuments: opts?.maxDocuments,
       seedUrls: opts?.seedUrls,
       userId: opts?.userId,
     });
+    await this.embedGathered(gather);
 
-    const insight = await this.synthesizer.synthesize(cleanQuery, gather.documents, level);
+    const insight = await this.synthesizer.synthesize(cleanQuery, gather.documents, level, priorMemory);
 
     // (persist) Store the intelligence — best effort, never fails the response.
     let intelligenceId: string | undefined;

@@ -24,6 +24,8 @@
     "migrate:down": "ts-node scripts/migrate.ts down",
     "test": "jest",
     "test:digim": "ts-node test/digim/webEdgeCases.ts",
+    "test:migration": "ts-node test/digim/migrationTest.ts",
+    "test:memory": "ts-node test/digim/memoryTest.ts",
     "type-check": "tsc --noEmit"
   },
   "keywords": [

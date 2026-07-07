@@ -276,6 +276,9 @@ async  initialize(): Promise<void> {
       case 'digim_research':
         return await this.handleResearchRequest(requestData, message.security.user_id);
 
+      case 'digim_recall':
+        return await this.handleRecallRequest(requestData, message.security.user_id);
+
       case 'digim_query':
         return await this.handleQueryRequest(requestData, message.security.user_id);
 
@@ -460,6 +463,47 @@ async  initialize(): Promise<void> {
       diagnostics: result.gather.diagnostics,
       intelligence_id: result.intelligenceId,
       processing_time_ms: Math.round(result.processingTimeMs),
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_recall — retrieve documents from semantic memory by meaning, without
+   * gathering anything new. This is DINA reasoning over what it already knows.
+   */
+  private async handleRecallRequest(requestData: any, userId?: string): Promise<any> {
+    const query: string = (requestData?.query || requestData?.q || '').trim();
+    console.log(`🧩 Handling recall request: "${query.substring(0, 60)}..."`);
+
+    if (!this.webResearch.enabled) {
+      return {
+        status: 'disabled',
+        message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true to enable semantic memory.',
+        phase: 'foundation',
+      };
+    }
+    if (!query) {
+      throw new Error('digim_recall requires a "query"');
+    }
+
+    const memories = await this.webResearch.recall(query, {
+      topK: requestData?.top_k,
+      minScore: requestData?.min_score,
+    });
+
+    return {
+      status: 'success',
+      query,
+      count: memories.length,
+      memories: memories.map((m) => ({
+        id: m.id,
+        title: m.title,
+        url: m.url,
+        published_at: m.publishedAt,
+        score: m.score,
+        vector_score: m.vectorScore,
+        excerpt: (m.content || '').slice(0, 300),
+      })),
       generated_at: new Date(),
     };
   }
