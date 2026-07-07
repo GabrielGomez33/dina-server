@@ -190,6 +190,17 @@ function stripRegions(html: string): string {
     // Also drop any self-closing / unclosed leftovers.
     out = out.replace(new RegExp(`<\\/?${tag}\\b[^>]*>`, 'gi'), ' ');
   }
+  // Remove reference superscripts (the source of "[1]" markers).
+  out = out.replace(/<sup\b[^>]*class="[^"]*reference[^"]*"[^>]*>[\s\S]*?<\/sup>/gi, ' ');
+  // Remove common MediaWiki/CMS NOTE/NAV blocks that are chrome, not content:
+  // hatnotes/dablinks (the "This article is about… / redirects here" lines),
+  // short descriptions, reference lists, navboxes, and role="note"/role="navigation".
+  // Non-greedy → matches a single flat block (fine for these; nested navboxes may
+  // leave a remnant, which the block/boilerplate-line filters then catch).
+  out = out.replace(
+    /<div\b[^>]*(?:class="[^"]*(?:hatnote|dablink|shortdescription|reflist|mw-references|navbox|sidebar|metadata|noprint|mw-editsection)[^"]*"|role="(?:note|navigation)")[^>]*>[\s\S]*?<\/div>/gi,
+    ' '
+  );
   return out;
 }
 
