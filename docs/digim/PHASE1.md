@@ -97,6 +97,26 @@ redis-cli --scan --pattern 'embedding:*' | head
 #   SELECT embedding_status, COUNT(*) FROM digim_content GROUP BY embedding_status;
 ```
 
+## Live verification (real data) — 2026-07-07
+
+Validated end-to-end on the production host (MySQL + Redis **brute-force KNN**
+fallback — no RediSearch installed — + Ollama `mxbai-embed-large`/`mistral:7b`):
+
+- **research** (`seed_urls`, provider `none`): `fetched 2 / extracted 2 / stored 2 / 0 errors`;
+  produced a grounded, cited insight (energy density 250–900 Wh/kg, cycle life,
+  temperature range), `confidence 0.8`, with `caveats`; ~4.5 s warm.
+- **recall**: query *"how far can an electric car drive on one charge"* — which
+  shares **no keywords** with "solid state battery" — returned **both** battery
+  documents by meaning (`vector_score` ≈ 0.48–0.50). Semantic memory confirmed on
+  real 1024-dim vectors via the brute-force fallback.
+- **storage**: two `embedding:*` keys in Redis; `embedding_status='embedded'` ×2
+  in MySQL.
+
+Known tuning opportunity (not a bug): the dependency-free heuristic extractor
+retains some Wikipedia navigation/infobox fragments; synthesis handled them
+cleanly. A Mozilla-Readability adapter (behind the same `ContentExtractor`
+interface) is the optional quality upgrade if cleaner extracts are wanted.
+
 ## Next: Phase 2 — Tool ecosystem
 
 Headless-Chromium (Playwright) BrowserTool, RSS/feed tool, and clean public-API
