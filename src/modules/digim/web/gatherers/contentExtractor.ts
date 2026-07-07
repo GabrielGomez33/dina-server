@@ -58,7 +58,10 @@ export class ContentExtractor {
     // and linkedom are installed (guarded require, no forced dependency). This
     // yields much cleaner main-content text on complex pages. Falls through to
     // the heuristic when unavailable or when it produces too little.
-    const readable = tryReadability(safeHtml);
+    // Pre-strip known chrome (hatnotes/shortdescription/nav/script/…) BEFORE
+    // Readability parses, so its output doesn't include those regions. The
+    // final-stage line filter in finalize() is still a backstop.
+    const readable = tryReadability(stripRegions(safeHtml));
     if (readable && countWords(readable.text) >= 40) {
       return this.finalize(
         readable.text,
