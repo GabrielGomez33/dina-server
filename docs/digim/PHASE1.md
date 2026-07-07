@@ -117,6 +117,31 @@ retains some Wikipedia navigation/infobox fragments; synthesis handled them
 cleanly. A Mozilla-Readability adapter (behind the same `ContentExtractor`
 interface) is the optional quality upgrade if cleaner extracts are wanted.
 
+## Polish & hardening (post-live)
+
+After the live run surfaced extractor cruft, we hardened Phase 0/1:
+
+- **Extractor polish** — strip citation/edit artifacts (`[1]`, `[ citation needed ]`,
+  `[ edit ]`) and drop navigation/hatnote lines ("redirects here", "For other
+  uses, see…", "This article is about…"). Fixed a real bug where `<article>`/
+  `<section>` matched as one block and swallowed inner hatnotes; leaf blocks
+  (`p/li/h/blockquote/td/dd/figcaption`) are now extracted individually.
+- **Optional Mozilla Readability** — if installed it's used automatically for
+  much cleaner extraction; absent it, the heuristic runs. Enable with:
+  `npm i @mozilla/readability linkedom` (no forced dependency).
+- **Memory backfill** — `POST /digim/memory/backfill` (trusted) and
+  `SemanticMemory.backfillPending()` embed content still marked `pending`:
+  populates memory for pre-Phase-1 content and repairs after a Redis data loss
+  (reset rows to `pending`, then backfill). Content lives in MySQL, so nothing
+  is lost — only the vectors are rebuilt.
+- **Parallel embedding** — gathered docs embed with bounded concurrency
+  (`embedMany`) instead of one-at-a-time.
+- **Cache correctness** — the intelligence cache is now keyed by query **and**
+  level, so a `surface` result is never served for a `deep` request.
+
+All verified: tsc clean; web 97/97 (incl. extractor polish), memory 33/33,
+migration 18/18.
+
 ## Next: Phase 2 — Tool ecosystem
 
 Headless-Chromium (Playwright) BrowserTool, RSS/feed tool, and clean public-API

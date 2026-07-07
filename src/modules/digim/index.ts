@@ -279,6 +279,9 @@ async  initialize(): Promise<void> {
       case 'digim_recall':
         return await this.handleRecallRequest(requestData, message.security.user_id);
 
+      case 'digim_memory_backfill':
+        return await this.handleMemoryBackfillRequest(requestData);
+
       case 'digim_query':
         return await this.handleQueryRequest(requestData, message.security.user_id);
 
@@ -504,6 +507,25 @@ async  initialize(): Promise<void> {
         vector_score: m.vectorScore,
         excerpt: (m.content || '').slice(0, 300),
       })),
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_memory_backfill — embed content still marked 'pending' into semantic
+   * memory (maintenance: populate memory for pre-Phase-1 content, or repair
+   * after a Redis data loss). Admin-only at the route layer.
+   */
+  private async handleMemoryBackfillRequest(requestData: any): Promise<any> {
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    const limit = typeof requestData?.limit === 'number' ? requestData.limit : 100;
+    const result = await this.webResearch.backfillMemory(limit);
+    return {
+      status: 'success',
+      ...result,
+      message: `Backfill complete: ${result.embedded} embedded, ${result.failed} failed of ${result.processed} pending`,
       generated_at: new Date(),
     };
   }

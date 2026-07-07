@@ -203,6 +203,24 @@ async function main(): Promise<void> {
     ok(plain.text.includes('plain text content'), 'plain text passthrough');
   });
 
+  await section('ContentExtractor — polish: strip refs/edit brackets + nav/hatnotes', () => {
+    const extractor = new ContentExtractor();
+    const html = `<html><body><article>
+      <p>Lithium-ion batteries reached 300 Wh/kg in commercial cells and continue to improve steadily each year as manufacturers refine cathode and anode materials for greater usable capacity.[1] Newer chemistries push energy density even higher in laboratory prototypes under active development.[ citation needed ]</p>
+      <p>This article is about rechargeable batteries. For non-rechargeable cells, see primary battery.</p>
+      <p>"Li-ion" redirects here. For other uses, see lithium.</p>
+      <p>Researchers demonstrated a solid electrolyte that improves safety and energy density substantially compared with conventional liquid electrolytes, reducing flammability and enabling higher voltage operation in next generation automotive cells.[ edit ]</p>
+      </article></body></html>`;
+    const out = extractor.extract(html, 'text/html', 'https://example.com/x');
+    ok(!/\[\s*1\s*\]/.test(out.text), 'citation [1] stripped');
+    ok(!/citation needed/i.test(out.text), '[citation needed] stripped');
+    ok(!/\[\s*edit\s*\]/i.test(out.text), '[edit] stripped');
+    ok(!/redirects here/i.test(out.text), '"redirects here" hatnote dropped');
+    ok(!/this article is about/i.test(out.text), '"this article is about" hatnote dropped');
+    ok(out.text.includes('300 Wh/kg'), 'real content retained (energy density)');
+    ok(out.text.includes('solid electrolyte'), 'real content retained (solid electrolyte)');
+  });
+
   await section('QualityScorer — bounded, sensible facets', () => {
     const scorer = new QualityScorer();
     const q = scorer.score({

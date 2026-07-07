@@ -124,18 +124,21 @@ export class WebResearchOrchestrator {
   /** Embed freshly-gathered (non-duplicate) documents into semantic memory. */
   private async embedGathered(result: GatherResult): Promise<void> {
     if (!this.memory.enabled) return;
-    for (const doc of result.documents) {
-      if (doc.duplicate) continue; // already embedded on a prior run
-      try {
-        await this.memory.embedAndStore(doc.id, doc.content, {
-          url: doc.url,
-          title: doc.title,
-          provider: doc.provider,
-        });
-      } catch (err) {
-        console.warn(`⚠️ [webResearchOrchestrator] embed failed for ${doc.id}: ${(err as Error).message}`);
-      }
+    const items = result.documents
+      .filter((d) => !d.duplicate) // already embedded on a prior run
+      .map((d) => ({ id: d.id, text: d.content, metadata: { url: d.url, title: d.title, provider: d.provider } }));
+    if (items.length === 0) return;
+    try {
+      await this.memory.embedMany(items);
+    } catch (err) {
+      console.warn(`⚠️ [webResearchOrchestrator] batch embed failed: ${(err as Error).message}`);
     }
+  }
+
+  /** Backfill embeddings for content still pending (admin/maintenance). */
+  async backfillMemory(limit = 100): Promise<{ processed: number; embedded: number; failed: number }> {
+    this.assertEnabled();
+    return this.memory.backfillPending(limit);
   }
 
   /**
@@ -160,9 +163,10 @@ export class WebResearchOrchestrator {
       throw new Error('research requires a non-empty query or seed URLs');
     }
 
-    // (cache) Serve a fresh cached result unless refresh is forced.
+    // (cache) Serve a fresh cached result unless refresh is forced. Keyed by
+    // query AND level so a 'surface' result isn't served for a 'deep' request.
     if (!opts?.forceRefresh) {
-      const cachedRow = await this.store.getFreshIntelligence(cleanQuery);
+      const cachedRow = await this.store.getFreshIntelligence(cleanQuery, level);
       if (cachedRow) {
         return {
           query: cleanQuery,

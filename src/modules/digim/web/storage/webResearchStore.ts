@@ -164,7 +164,7 @@ export class WebResearchStore {
     processingTimeMs: number;
   }): Promise<string> {
     const id = uuidv4();
-    const queryHash = hashQuery(params.query);
+    const queryHash = hashQuery(params.query, params.level);
     const ttlHours = this.cfg.intelligenceCacheTtlHours;
     const expiresAt =
       ttlHours > 0 ? toMysqlDate(new Date(Date.now() + ttlHours * 3600 * 1000).toISOString()) : null;
@@ -212,14 +212,14 @@ export class WebResearchStore {
    * Return a fresh (non-expired) cached intelligence row for a query, if any.
    * Enables cheap re-serving of recent research without re-gathering.
    */
-  async getFreshIntelligence(query: string): Promise<any | null> {
+  async getFreshIntelligence(query: string, level?: string): Promise<any | null> {
     if (this.cfg.intelligenceCacheTtlHours <= 0) return null;
     try {
       const rows = await DB.query(
         `SELECT * FROM digim_intelligence
          WHERE query_hash = ? AND (expires_at IS NULL OR expires_at > NOW())
          ORDER BY generated_at DESC LIMIT 1`,
-        [hashQuery(query)],
+        [hashQuery(query, level)],
         true
       );
       return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
@@ -292,8 +292,8 @@ export class WebResearchStore {
 // UTIL
 // ----------------------------------------------------------------------------
 
-export function hashQuery(query: string): string {
-  const normalized = query.trim().toLowerCase().replace(/\s+/g, ' ');
+export function hashQuery(query: string, level?: string): string {
+  const normalized = query.trim().toLowerCase().replace(/\s+/g, ' ') + (level ? `::${level}` : '');
   return crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 32);
 }
 
