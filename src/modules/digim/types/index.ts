@@ -11,6 +11,7 @@ import { DinaUniversalMessage, MessagePriority, SecurityLevel } from '../../../c
 export type DigiMMethod =
   | 'digim_gather'        // Gather content from sources
   | 'digim_research'      // Surf the web + synthesize insights (gather → synthesize)
+  | 'digim_search'        // Discovery inspection: search provider candidates only
   | 'digim_recall'        // Retrieve from semantic memory (no gathering)
   | 'digim_memory_backfill' // Embed pending content into semantic memory (admin)
   | 'digim_memory_prune'  // Prune aged content + expired intelligence (admin)
@@ -558,9 +559,9 @@ export function isDigiMMessage(message: DinaUniversalMessage): message is DigiMM
 
 export function isDigiMMethod(method: string): method is DigiMMethod {
   const digiMethods: DigiMMethod[] = [
-    'digim_gather', 'digim_research', 'digim_recall', 'digim_memory_backfill', 'digim_memory_prune',
-    'digim_query', 'digim_analyze', 'digim_generate', 'digim_cluster', 'digim_export', 'digim_status',
-    'digim_sources', 'digim_security'
+    'digim_gather', 'digim_research', 'digim_search', 'digim_recall', 'digim_memory_backfill',
+    'digim_memory_prune', 'digim_query', 'digim_analyze', 'digim_generate', 'digim_cluster',
+    'digim_export', 'digim_status', 'digim_sources', 'digim_security'
   ];
   return digiMethods.includes(method as DigiMMethod);
 }
