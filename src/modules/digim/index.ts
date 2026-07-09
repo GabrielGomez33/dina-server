@@ -469,9 +469,14 @@ async  initialize(): Promise<void> {
       query: result.query,
       intelligence_level: result.level,
       cached: result.cached,
+      // Transparency: where did this answer come from? 'web' = freshly gathered,
+      // 'memory' = recalled from prior research (0 fetched this run), 'web+memory'
+      // = both, 'cache' = served from the intelligence cache, 'none' = nothing.
+      basis: result.basis,
+      documents_gathered: result.gather.documents.length,
+      memory_used: result.memoryUsed,
       insight: result.insight,
       sources_consulted: result.insight.sources.length,
-      documents_gathered: result.gather.documents.length,
       diagnostics: result.gather.diagnostics,
       intelligence_id: result.intelligenceId,
       processing_time_ms: Math.round(result.processingTimeMs),

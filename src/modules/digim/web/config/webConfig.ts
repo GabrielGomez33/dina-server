@@ -43,6 +43,12 @@ export interface DigimWebConfig {
   tavilyApiKey: string;
   /** Max results requested from the search provider per query. */
   maxSearchResults: number;
+  /**
+   * Search language/region for discovery. 'all' = worldwide/multilingual (best
+   * for global coverage); or an IETF tag like 'en-US', 'fa-IR', 'ar'. Passed to
+   * SearXNG's `language` param.
+   */
+  searchLanguage: string;
 
   // ---- Fetch / crawl governance ----
   /** How many URLs may be fetched concurrently within one gather run. */
@@ -196,6 +202,7 @@ function buildConfig(): DigimWebConfig {
     braveApiKey: envStr('DIGIM_WEB_BRAVE_API_KEY', ''),
     tavilyApiKey: envStr('DIGIM_WEB_TAVILY_API_KEY', ''),
     maxSearchResults: clampInt(envInt('DIGIM_WEB_MAX_SEARCH_RESULTS', 10), 1, 50),
+    searchLanguage: envStr('DIGIM_WEB_SEARCH_LANGUAGE', 'all'),
 
     fetchConcurrency: clampInt(envInt('DIGIM_WEB_FETCH_CONCURRENCY', 4), 1, 16),
     perHostDelayMs: clampInt(envInt('DIGIM_WEB_PER_HOST_DELAY_MS', 1000), 0, 60000),
