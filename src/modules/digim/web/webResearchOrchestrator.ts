@@ -25,8 +25,31 @@ import { GatheringPipeline } from './pipeline/gatheringPipeline';
 import { WebInsightSynthesizer } from './processors/webInsightSynthesizer';
 import { WebResearchStore } from './storage/webResearchStore';
 import { SemanticMemory } from './memory/semanticMemory';
+import { checkUrlSafety } from './security/urlGuard';
 import { DinaLLMManager } from '../../llm/manager';
-import { GatherResult, WebInsight, RetrievedMemory } from './types';
+import { GatherResult, WebInsight, RetrievedMemory, SearchResult } from './types';
+
+/** A discovered candidate annotated with whether it would pass the SSRF guard. */
+export interface DiscoveredCandidate extends SearchResult {
+  safe: boolean;
+  safetyReason?: string;
+}
+
+export interface DiscoverResult {
+  query: string;
+  provider: string;
+  configured: boolean;
+  candidates: DiscoveredCandidate[];
+}
+
+export interface WebResearchStatus {
+  enabled: boolean;
+  provider: string;
+  providerConfigured: boolean;
+  memoryEnabled: boolean;
+  retentionSweepEnabled: boolean;
+  retentionDays: number;
+}
 
 export type IntelligenceLevel = 'surface' | 'deep' | 'predictive';
 
@@ -136,6 +159,39 @@ export class WebResearchOrchestrator {
   async recall(query: string, opts?: { topK?: number; minScore?: number }): Promise<RetrievedMemory[]> {
     this.assertEnabled();
     return this.memory.retrieve(query, { topK: opts?.topK, minScore: opts?.minScore });
+  }
+
+  /**
+   * Discovery inspection — run the search provider and return candidate URLs,
+   * each annotated with whether it would pass the SSRF guard, WITHOUT fetching.
+   * Lets operators see (and audit) what DINA would gather before it does.
+   */
+  async discover(query: string, opts?: { limit?: number }): Promise<DiscoverResult> {
+    this.assertEnabled();
+    const raw = await this.pipeline.search(query, opts?.limit);
+    const candidates: DiscoveredCandidate[] = [];
+    for (const r of raw) {
+      const safety = await checkUrlSafety(r.url, this.cfg);
+      candidates.push({ ...r, safe: safety.safe, safetyReason: safety.reason });
+    }
+    return {
+      query: (query || '').trim(),
+      provider: this.providerName,
+      configured: this.pipeline.providerConfigured,
+      candidates,
+    };
+  }
+
+  /** Operational status of the web-research subsystem. */
+  getStatus(): WebResearchStatus {
+    return {
+      enabled: this.cfg.enabled,
+      provider: this.providerName,
+      providerConfigured: this.pipeline.providerConfigured,
+      memoryEnabled: this.cfg.memoryEnabled,
+      retentionSweepEnabled: this.cfg.retentionSweepEnabled,
+      retentionDays: this.cfg.contentRetentionDays,
+    };
   }
 
   /** Embed freshly-gathered (non-duplicate) documents into semantic memory. */

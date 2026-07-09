@@ -50,6 +50,27 @@ export class GatheringPipeline {
     return this.provider.name;
   }
 
+  /** True if the configured search provider has what it needs to run. */
+  get providerConfigured(): boolean {
+    return this.provider.isConfigured();
+  }
+
+  /**
+   * Run the search provider only (discovery), returning raw candidates without
+   * fetching them. Resolves to [] when disabled. Never throws.
+   */
+  async search(query: string, limit?: number): Promise<SearchResult[]> {
+    if (!this.cfg.enabled) return [];
+    const q = (query || '').trim();
+    if (!q) return [];
+    try {
+      return await this.provider.search(q, limit ?? this.cfg.maxSearchResults);
+    } catch (err) {
+      console.warn(`⚠️ [gatheringPipeline] search failed: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
   async gather(options: GatherOptions): Promise<GatherResult> {
     const startedAt = new Date().toISOString();
     const t0 = Date.now();

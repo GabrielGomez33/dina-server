@@ -276,6 +276,9 @@ async  initialize(): Promise<void> {
       case 'digim_research':
         return await this.handleResearchRequest(requestData, message.security.user_id);
 
+      case 'digim_search':
+        return await this.handleSearchRequest(requestData);
+
       case 'digim_recall':
         return await this.handleRecallRequest(requestData, message.security.user_id);
 
@@ -356,6 +359,9 @@ async  initialize(): Promise<void> {
       security,
       last_updated: new Date()
     };
+
+    // Surface web-research subsystem status (enabled? provider wired up?).
+    (status as any).web_research = this.webResearch.getStatus();
 
     console.log(`✅ System status generated: ${status.overall_health}`);
     return status;
@@ -469,6 +475,44 @@ async  initialize(): Promise<void> {
       diagnostics: result.gather.diagnostics,
       intelligence_id: result.intelligenceId,
       processing_time_ms: Math.round(result.processingTimeMs),
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_search — discovery inspection: run the search provider and show the
+   * candidate URLs (each SSRF-annotated) WITHOUT fetching. Lets you see what
+   * DINA would gather, and confirm the provider is wired up, before researching.
+   */
+  private async handleSearchRequest(requestData: any): Promise<any> {
+    const query: string = (requestData?.query || requestData?.q || '').trim();
+    console.log(`🔎 Handling search/discovery request: "${query.substring(0, 60)}..."`);
+
+    if (!this.webResearch.enabled) {
+      return {
+        status: 'disabled',
+        message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.',
+      };
+    }
+    if (!query) {
+      throw new Error('digim_search requires a "query"');
+    }
+
+    const result = await this.webResearch.discover(query, { limit: requestData?.limit });
+    return {
+      status: 'success',
+      query: result.query,
+      provider: result.provider,
+      provider_configured: result.configured,
+      candidate_count: result.candidates.length,
+      candidates: result.candidates.map((c) => ({
+        title: c.title,
+        url: c.url,
+        snippet: c.snippet,
+        provider: c.provider,
+        safe: c.safe,
+        safety_reason: c.safetyReason,
+      })),
       generated_at: new Date(),
     };
   }
