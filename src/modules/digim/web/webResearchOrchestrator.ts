@@ -61,6 +61,10 @@ export interface ResearchResult {
   intelligenceId?: string;
   cached: boolean;
   processingTimeMs: number;
+  /** How many prior-memory docs were injected into synthesis (0 = pure fresh web). */
+  memoryUsed: number;
+  /** Where the answer came from: 'web' | 'memory' | 'web+memory' | 'none' | 'cache'. */
+  basis: 'web' | 'memory' | 'web+memory' | 'none' | 'cache';
 }
 
 export class WebResearchOrchestrator {
@@ -274,6 +278,8 @@ export class WebResearchOrchestrator {
           intelligenceId: cachedRow.id,
           cached: true,
           processingTimeMs: performance.now() - start,
+          memoryUsed: 0,
+          basis: 'cache',
         };
       }
     }
@@ -324,6 +330,14 @@ export class WebResearchOrchestrator {
       }
     }
 
+    const gatheredCount = gather.documents.length;
+    const memoryUsed = priorMemory.length;
+    const basis: ResearchResult['basis'] =
+      gatheredCount > 0 && memoryUsed > 0 ? 'web+memory'
+      : gatheredCount > 0 ? 'web'
+      : memoryUsed > 0 ? 'memory'
+      : 'none';
+
     return {
       query: cleanQuery,
       level,
@@ -332,6 +346,8 @@ export class WebResearchOrchestrator {
       intelligenceId,
       cached: false,
       processingTimeMs: performance.now() - start,
+      memoryUsed,
+      basis,
     };
   }
 
