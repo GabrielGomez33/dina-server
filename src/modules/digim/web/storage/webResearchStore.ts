@@ -270,6 +270,55 @@ export class WebResearchStore {
     }
   }
 
+  /** IDs of content older than `retentionDays` (eligible for pruning). */
+  async getExpiredContentIds(retentionDays: number, limit: number): Promise<string[]> {
+    try {
+      const rows = await DB.query(
+        `SELECT id FROM digim_content
+         WHERE gathered_at < (NOW() - INTERVAL ? DAY)
+         ORDER BY gathered_at ASC LIMIT ?`,
+        [Math.max(1, retentionDays), Math.max(1, Math.min(limit, 5000))],
+        true
+      );
+      return Array.isArray(rows) ? rows.map((r) => r.id) : [];
+    } catch (err) {
+      console.warn(`⚠️ [webResearchStore] getExpiredContentIds failed: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  /** Delete content rows by id. Returns the number of rows removed. */
+  async deleteContentByIds(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    try {
+      const placeholders = ids.map(() => '?').join(',');
+      const result: any = await DB.query(
+        `DELETE FROM digim_content WHERE id IN (${placeholders})`,
+        ids,
+        true
+      );
+      return typeof result?.affectedRows === 'number' ? result.affectedRows : ids.length;
+    } catch (err) {
+      console.warn(`⚠️ [webResearchStore] deleteContentByIds failed: ${(err as Error).message}`);
+      return 0;
+    }
+  }
+
+  /** Delete intelligence rows past their expiry. Returns rows removed. */
+  async pruneExpiredIntelligence(): Promise<number> {
+    try {
+      const result: any = await DB.query(
+        `DELETE FROM digim_intelligence WHERE expires_at IS NOT NULL AND expires_at < NOW()`,
+        [],
+        true
+      );
+      return typeof result?.affectedRows === 'number' ? result.affectedRows : 0;
+    } catch (err) {
+      console.warn(`⚠️ [webResearchStore] pruneExpiredIntelligence failed: ${(err as Error).message}`);
+      return 0;
+    }
+  }
+
   /** Load stored documents by id (for re-synthesis / inspection). */
   async getContentByIds(ids: string[]): Promise<any[]> {
     if (ids.length === 0) return [];

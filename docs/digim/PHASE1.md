@@ -142,6 +142,49 @@ After the live run surfaced extractor cruft, we hardened Phase 0/1:
 All verified: tsc clean; web 97/97 (incl. extractor polish), memory 33/33,
 migration 18/18.
 
+## Retention / prune job
+
+Enforces `contentRetentionDays` (nothing did before). A bounded, self-limiting
+sweep removes aged content **and its vectors**, plus expired cached intelligence.
+
+- Runs on a schedule (`retentionSweepIntervalHours`, default 24h; timer is
+  `unref`'d so it never holds the process open, and cleared on shutdown) and
+  **on demand** via `POST /digim/memory/prune` (trusted).
+- Per run bounded by `retentionSweepBatch` (default 500); overlap-guarded.
+- Order: collect expired ids → `redisManager.deleteEmbedding` each vector →
+  delete content rows → delete expired `digim_intelligence`.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `DIGIM_WEB_CONTENT_RETENTION_DAYS` | `30` | Age after which content is pruned |
+| `DIGIM_WEB_RETENTION_SWEEP` | `true` | Enable the periodic sweep |
+| `DIGIM_WEB_RETENTION_SWEEP_HOURS` | `24` | Sweep interval |
+| `DIGIM_WEB_RETENTION_BATCH` | `500` | Max content rows pruned per pass |
+
+## Phase 1 hardening review
+
+Confirmed properties (best-effort everywhere — a failure never breaks a request):
+
+- Embedding failures don't block gather; row marked `failed` and skipped.
+- Redis down → embed throws, caught, marked failed; recall/search returns `[]`.
+- KNN: RediSearch fast-path wrapped in try/catch → brute-force fallback (the path
+  that runs on your box, live-verified).
+- Dimension mismatch → `storeEmbedding` rejects → marked failed.
+- Redis data loss recovery: MySQL is source of truth; reset rows to `pending`
+  (`UPDATE digim_content SET embedding_status='pending'`) then
+  `POST /digim/memory/backfill` re-embeds.
+- Retention sweep: bounded, overlap-guarded, unref'd timer, cleared on shutdown,
+  no-op when nothing is expired.
+- Intelligence cache keyed by query **and** level.
+- Prompt-injection: untrusted content fenced + sanitized; model instructed never
+  to obey instructions inside a source.
+
+Test coverage (hermetic, 158 assertions): url guard/SSRF, extractor (incl.
+readability-path final-stage nav filtering), quality scorer, providers, config
+clamping, URL canonicalization/dedup, embedding-vector parsing, prompt-injection
+detection/fencing, hybrid ranking, migration logic/idempotency/rollback.
+Live-verified on real data: research → embed → recall → storage.
+
 ## Next: Phase 2 — Tool ecosystem
 
 Headless-Chromium (Playwright) BrowserTool, RSS/feed tool, and clean public-API

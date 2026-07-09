@@ -26,6 +26,7 @@ import {
   __rebuildDigimWebConfigForTests,
   DigimWebConfig,
 } from '../../src/modules/digim/web/config/webConfig';
+import { canonicalizeUrl } from '../../src/modules/digim/web/pipeline/gatheringPipeline';
 
 // ----------------------------------------------------------------------------
 // Tiny assertion framework
@@ -225,6 +226,21 @@ async function main(): Promise<void> {
     ok(out.text.includes('solid electrolyte'), 'real content retained (solid electrolyte)');
   });
 
+  await section('ContentExtractor — final-stage line filter (covers Readability output)', () => {
+    // The plain-text path goes straight to finalize(), the same post-processing
+    // Readability output flows through — so this proves the nav lines are
+    // dropped regardless of the upstream extractor.
+    const extractor = new ContentExtractor();
+    const readabilityLikeText =
+      'This article is about rechargeable batteries. For non-rechargeable cells, see primary battery.\n' +
+      '"Li-ion" redirects here. For other uses, see lithium.\n' +
+      'Lithium-ion batteries store energy chemically and are widely used in electric vehicles and portable electronics across the world today.';
+    const out = extractor.extract(readabilityLikeText, 'text/plain', 'https://example.com/x');
+    ok(!/this article is about/i.test(out.text), 'hatnote line dropped in final stage');
+    ok(!/redirects here/i.test(out.text), '"redirects here" line dropped in final stage');
+    ok(out.text.includes('store energy chemically'), 'real content sentence retained');
+  });
+
   await section('QualityScorer — bounded, sensible facets', () => {
     const scorer = new QualityScorer();
     const q = scorer.score({
@@ -287,6 +303,15 @@ async function main(): Promise<void> {
     ok(c.fetchTimeoutMs === 15000, 'invalid timeout → default');
     ok(c.enabled === true, 'enabled parsed');
     ok(c.allowedPorts.includes(80) && c.allowedPorts.includes(443), 'default ports');
+  });
+
+  await section('canonicalizeUrl — dedup key normalization', () => {
+    eq(canonicalizeUrl('https://ex.com/a?utm_source=x&utm_medium=y&id=5'), 'https://ex.com/a?id=5', 'strips utm params, keeps real ones');
+    eq(canonicalizeUrl('https://ex.com/a?fbclid=abc'), 'https://ex.com/a', 'strips fbclid');
+    eq(canonicalizeUrl('https://ex.com/a#section'), 'https://ex.com/a', 'strips hash');
+    eq(canonicalizeUrl('https://ex.com/a/'), 'https://ex.com/a', 'strips trailing slash');
+    eq(canonicalizeUrl('https://ex.com/a'), canonicalizeUrl('https://ex.com/a/?utm_campaign=z#top'), 'same page → same key');
+    eq(canonicalizeUrl('not a url'), '', 'invalid → empty key');
   });
 
   // --------------------------------------------------------------------------
