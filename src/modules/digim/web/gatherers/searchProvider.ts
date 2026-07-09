@@ -96,7 +96,8 @@ class SearxngSearchProvider implements SearchProvider {
     if (!this.isConfigured()) return [];
     const n = clampLimit(limit, this.cfg);
     const base = this.cfg.searxngBaseUrl.replace(/\/+$/, '');
-    const url = `${base}/search?q=${encodeURIComponent(query)}&format=json&safesearch=1`;
+    const lang = encodeURIComponent(this.cfg.searchLanguage || 'all');
+    const url = `${base}/search?q=${encodeURIComponent(query)}&format=json&safesearch=1&language=${lang}`;
 
     const data = await providerFetch(
       url,
