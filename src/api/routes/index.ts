@@ -1596,6 +1596,31 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
+  // DIGIM Retention Sweep — prune aged content + vectors + expired intelligence
+  apiRouter.post('/digim/memory/prune', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const digiMMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'digim', method: 'digim_memory_prune', priority: 3 },
+        security: {
+          user_id: req.dina!.dina_key,
+          session_id: req.dina!.session_id,
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true
+        },
+        payload: {}
+      });
+      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      res.json({ ...digiMResponse.payload.data, admin_user: req.dina?.dina_key });
+    } catch (error) {
+      console.error('❌ Error in DIGIM memory prune:', error);
+      res.status(500).json({
+        error: 'DIGIM memory prune failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
   // Admin authentication stats
   apiRouter.get('/admin/auth/stats', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
     try {

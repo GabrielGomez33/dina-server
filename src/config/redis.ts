@@ -760,6 +760,16 @@ export class EnhancedDinaRedisManager extends EventEmitter {
     }
   }
 
+  /** Remove a stored embedding (Redis hash + in-memory persistence map). */
+  async deleteEmbedding(id: string): Promise<void> {
+    try {
+      await this.vectorClient.del(`embedding:${id}`);
+    } catch (error) {
+      console.warn(`⚠️ Failed to delete embedding ${id}: ${(error as Error)?.message ?? error}`);
+    }
+    this.persistedEmbeddings.delete(id);
+  }
+
   // ================================
   // VECTOR SIMILARITY SEARCH (KNN)
   // ================================

@@ -86,6 +86,20 @@ export class SemanticMemory {
     }
   }
 
+  /** Remove vectors for the given content ids from the index. Best-effort. */
+  async forget(ids: string[]): Promise<number> {
+    let removed = 0;
+    for (const id of ids) {
+      try {
+        await redisManager.deleteEmbedding(id);
+        removed++;
+      } catch {
+        /* best-effort */
+      }
+    }
+    return removed;
+  }
+
   /** Embed many items with bounded concurrency. Returns counts; never throws. */
   async embedMany(items: EmbedItem[], concurrency = 3): Promise<{ embedded: number; failed: number }> {
     if (!this.cfg.memoryEnabled || items.length === 0) return { embedded: 0, failed: 0 };
