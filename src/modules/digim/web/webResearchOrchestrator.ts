@@ -223,12 +223,20 @@ export class WebResearchOrchestrator {
     }
 
     // (recall) Pull PRIOR knowledge from semantic memory before gathering, so
-    // synthesis can connect new findings to what DINA already knows.
+    // synthesis can connect new findings to what DINA already knows. Uses a
+    // STRICTER threshold than the recall endpoint so only strongly-relevant
+    // memory is injected + cited (a loose bar cited unrelated old docs as
+    // sources — e.g. a battery article for an NBA query).
     let priorMemory: RetrievedMemory[] = [];
-    try {
-      priorMemory = await this.memory.retrieve(cleanQuery);
-    } catch (err) {
-      console.warn(`⚠️ [webResearchOrchestrator] memory recall failed: ${(err as Error).message}`);
+    if (this.cfg.memorySynthesisTopK > 0) {
+      try {
+        priorMemory = await this.memory.retrieve(cleanQuery, {
+          minScore: this.cfg.memorySynthesisMinScore,
+          topK: this.cfg.memorySynthesisTopK,
+        });
+      } catch (err) {
+        console.warn(`⚠️ [webResearchOrchestrator] memory recall failed: ${(err as Error).message}`);
+      }
     }
 
     // (gather → embed → synthesize)

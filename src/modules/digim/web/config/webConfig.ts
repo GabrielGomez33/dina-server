@@ -97,6 +97,14 @@ export interface DigimWebConfig {
   memoryTopK: number;
   /** Minimum cosine similarity for a memory to be considered relevant (0-1). */
   memoryMinScore: number;
+  /**
+   * STRICTER minimum score for prior memory that is injected into synthesis and
+   * cited as a source. Higher than memoryMinScore so weakly-related recall
+   * (e.g. an old unrelated article) is never cited for a fresh query.
+   */
+  memorySynthesisMinScore: number;
+  /** Max prior-memory docs injected into a synthesis prompt. */
+  memorySynthesisTopK: number;
   /** When true, gathered documents are embedded into semantic memory. */
   memoryEnabled: boolean;
 
@@ -215,6 +223,8 @@ function buildConfig(): DigimWebConfig {
     embedMaxChars: clampInt(envInt('DIGIM_WEB_EMBED_MAX_CHARS', 6000), 200, 20000),
     memoryTopK: clampInt(envInt('DIGIM_WEB_MEMORY_TOPK', 8), 1, 50),
     memoryMinScore: clamp01f(envFloat('DIGIM_WEB_MEMORY_MIN_SCORE', 0.2)),
+    memorySynthesisMinScore: clamp01f(envFloat('DIGIM_WEB_MEMORY_SYNTHESIS_MIN_SCORE', 0.45)),
+    memorySynthesisTopK: clampInt(envInt('DIGIM_WEB_MEMORY_SYNTHESIS_TOPK', 4), 0, 20),
     memoryEnabled: envBool('DIGIM_WEB_MEMORY_ENABLED', true),
 
     intelligenceCacheTtlHours: clampInt(envInt('DIGIM_WEB_INTEL_CACHE_TTL_HOURS', 6), 0, 720),
