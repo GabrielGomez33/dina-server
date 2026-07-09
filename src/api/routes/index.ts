@@ -1472,6 +1472,44 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
+  // DIGIM Search — discovery inspection: show candidate URLs (SSRF-annotated)
+  // the provider returns, WITHOUT fetching. Confirms the provider is wired up.
+  apiRouter.post('/digim/search', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { query, limit } = req.body || {};
+      if (!query || String(query).trim().length === 0) {
+        res.status(400).json({
+          error: 'Bad Request',
+          message: 'A "query" string is required',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+      const digiMMessage = createDinaMessage({
+        source: { module: 'api', version: '1.0.0' },
+        target: { module: 'digim', method: 'digim_search', priority: 6 },
+        security: {
+          user_id: req.dina!.dina_key,
+          session_id: req.dina!.session_id,
+          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+          sanitized: true
+        },
+        payload: { query: String(query), limit: typeof limit === 'number' ? limit : undefined }
+      });
+      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      res.json({
+        ...digiMResponse.payload.data,
+        auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining }
+      });
+    } catch (error) {
+      console.error('❌ Error in DIGIM search:', error);
+      res.status(500).json({
+        error: 'DIGIM search failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
   // DIGIM Gather — surf + collect + store documents only (no synthesis)
   apiRouter.post('/digim/gather', async (req: AuthenticatedRequest, res: Response) => {
     try {
