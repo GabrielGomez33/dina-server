@@ -125,6 +125,50 @@ export interface DigimWebConfig {
   retentionSweepIntervalHours: number;
   /** Max content rows pruned per sweep pass (bounds each run). */
   retentionSweepBatch: number;
+
+  // ---- Headless browser (Phase 2.2 — BrowserTool) ----
+  /**
+   * Master switch for headless-browser acquisition. When false (default) the
+   * BrowserTool is never constructed/loaded and acquisition is byte-for-byte
+   * the existing HTTP path — zero new dependency, zero new risk.
+   */
+  browserEnabled: boolean;
+  /**
+   * Escalation policy once enabled:
+   *   'off'     — HTTP only (browser present but unused).
+   *   'on-miss' — HTTP first; escalate to the browser only on a JS shell / 403.
+   *   'always'  — browser first (debugging / special jobs), HTTP fallback.
+   */
+  browserMode: 'off' | 'on-miss' | 'always';
+  /**
+   * WebSocket endpoint of a containerized browser service (Playwright server or
+   * browserless), e.g. ws://localhost:3000. The heavy, risky Chromium lives in
+   * a hardened, network-segregated container; DINA connects as a thin client.
+   * Empty → BrowserTool is unavailable (graceful HTTP-only).
+   */
+  browserWsEndpoint: string;
+  /** Navigation timeout (ms) for a single page load. */
+  browserNavTimeoutMs: number;
+  /** Playwright waitUntil condition. 'domcontentloaded' is safest (won't hang). */
+  browserWaitUntil: 'load' | 'domcontentloaded' | 'networkidle' | 'commit';
+  /** Visible-text floor below which an HTTP page is considered a thin SPA shell. */
+  browserThinTextChars: number;
+  /** Max sub-requests a single page may make before further ones are aborted. */
+  browserMaxRequestsPerPage: number;
+  /** Resource types aborted at the browser layer (bandwidth + attack surface). */
+  browserBlockedResourceTypes: string[];
+  /** Max concurrent browser pages — SEPARATE from (and lower than) HTTP concurrency. */
+  browserConcurrency: number;
+  /** Escalate to the browser when HTTP returns 403/429 (bot/JS wall). */
+  browserOn403: boolean;
+  /**
+   * Circuit breaker: after this many consecutive browser failures, stop
+   * escalating (fall back to HTTP-only) until the cooldown elapses. Protects the
+   * box from a wedged/slow browser service.
+   */
+  browserBreakerThreshold: number;
+  /** Circuit-breaker cooldown (ms) before probing the browser again. */
+  browserBreakerCooldownMs: number;
 }
 
 // ----------------------------------------------------------------------------
@@ -185,6 +229,21 @@ function parseProvider(name: string, fallback: SearchProviderName): SearchProvid
   return fallback;
 }
 
+function parseBrowserMode(name: string, fallback: 'off' | 'on-miss' | 'always'): 'off' | 'on-miss' | 'always' {
+  const v = (process.env[name] || '').trim().toLowerCase();
+  if (v === 'off' || v === 'on-miss' || v === 'always') return v;
+  return fallback;
+}
+
+function parseWaitUntil(
+  name: string,
+  fallback: 'load' | 'domcontentloaded' | 'networkidle' | 'commit'
+): 'load' | 'domcontentloaded' | 'networkidle' | 'commit' {
+  const v = (process.env[name] || '').trim().toLowerCase();
+  if (v === 'load' || v === 'domcontentloaded' || v === 'networkidle' || v === 'commit') return v;
+  return fallback;
+}
+
 // ----------------------------------------------------------------------------
 // CONFIG SINGLETON (frozen) — built once at first access.
 // ----------------------------------------------------------------------------
@@ -239,6 +298,19 @@ function buildConfig(): DigimWebConfig {
     retentionSweepEnabled: envBool('DIGIM_WEB_RETENTION_SWEEP', true),
     retentionSweepIntervalHours: clampInt(envInt('DIGIM_WEB_RETENTION_SWEEP_HOURS', 24), 1, 720),
     retentionSweepBatch: clampInt(envInt('DIGIM_WEB_RETENTION_BATCH', 500), 1, 5000),
+
+    browserEnabled: envBool('DIGIM_WEB_BROWSER_ENABLED', false),
+    browserMode: parseBrowserMode('DIGIM_WEB_BROWSER_MODE', 'on-miss'),
+    browserWsEndpoint: envStr('DIGIM_WEB_BROWSER_WS_ENDPOINT', ''),
+    browserNavTimeoutMs: clampInt(envInt('DIGIM_WEB_BROWSER_NAV_TIMEOUT_MS', 20000), 1000, 120000),
+    browserWaitUntil: parseWaitUntil('DIGIM_WEB_BROWSER_WAIT_UNTIL', 'domcontentloaded'),
+    browserThinTextChars: clampInt(envInt('DIGIM_WEB_BROWSER_THIN_TEXT_CHARS', 500), 0, 100000),
+    browserMaxRequestsPerPage: clampInt(envInt('DIGIM_WEB_BROWSER_MAX_REQUESTS', 80), 1, 2000),
+    browserBlockedResourceTypes: envCsv('DIGIM_WEB_BROWSER_BLOCK_RESOURCES', ['image', 'media', 'font', 'stylesheet']),
+    browserConcurrency: clampInt(envInt('DIGIM_WEB_BROWSER_CONCURRENCY', 2), 1, 16),
+    browserOn403: envBool('DIGIM_WEB_BROWSER_ON_403', true),
+    browserBreakerThreshold: clampInt(envInt('DIGIM_WEB_BROWSER_BREAKER_THRESHOLD', 3), 1, 100),
+    browserBreakerCooldownMs: clampInt(envInt('DIGIM_WEB_BROWSER_BREAKER_COOLDOWN_MS', 60000), 1000, 3600000),
   });
 }
 
@@ -282,6 +354,9 @@ function logConfigOnce(cfg: DigimWebConfig): void {
   console.log(`   • fetch: concurrency=${cfg.fetchConcurrency} timeout=${cfg.fetchTimeoutMs}ms maxBytes=${cfg.maxContentBytes} redirects=${cfg.maxRedirects}`);
   console.log(`   • ssrfGuard=${cfg.ssrfGuardEnabled} blockPrivate=${cfg.blockPrivateRanges} allowHosts=[${cfg.allowedHosts.join(', ')}] ports=[${cfg.allowedPorts.join(', ')}]`);
   console.log(`   • synthesis: model=${cfg.synthesisModel} maxTokens=${cfg.synthesisMaxTokens} docs=${cfg.synthesisMaxDocuments}`);
+  if (cfg.browserEnabled) {
+    console.log(`   • browser: mode=${cfg.browserMode} endpoint=${cfg.browserWsEndpoint || '(none)'} concurrency=${cfg.browserConcurrency} navTimeout=${cfg.browserNavTimeoutMs}ms`);
+  }
   if (!cfg.enabled) {
     console.log('   • ℹ️ DIGIM web-research is DISABLED (set DIGIM_WEB_ENABLED=true to activate).');
   } else if (cfg.searchProvider === 'none') {

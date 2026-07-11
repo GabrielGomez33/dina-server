@@ -1,5 +1,37 @@
 # Phase 2.2 — Design: ResearchTool abstraction + BrowserTool
 
+**Status: IMPLEMENTED (code merged; live browser verification pending on prod).**
+
+> **Implementation deltas from the original proposal** (all discussed and approved):
+> - **Containerized browser over the wire.** The browser is NOT launched in the
+>   DINA process. Chromium runs in a separate, hardened, network-SEGREGATED
+>   container (Playwright server / browserless); `BrowserTool` connects as a thin
+>   client via `DIGIM_WEB_BROWSER_WS_ENDPOINT`. The DINA host never installs or
+>   executes the browser binary. See `ops/PLAYWRIGHT_RUNBOOK.md`.
+> - **Network egress filter is the outer "can't leave" guarantee.** The container
+>   denies RFC1918/loopback/link-local/metadata egress but allows the public
+>   internet — an *egress filter, not a block* (the browser's job is to reach
+>   public URLs). This is also the true DNS-rebinding fix, since it drops packets
+>   regardless of what DNS resolved. Our app-layer `page.route` SSRF check is the
+>   inner layer; the network policy is the outer.
+> - **Browser concurrency semaphore** (`DIGIM_WEB_BROWSER_CONCURRENCY`, default 2)
+>   — separate from and lower than HTTP concurrency, so a burst of escalations
+>   can't spawn N heavy pages and starve Ollama.
+> - **Circuit breaker** (`DIGIM_WEB_BROWSER_BREAKER_*`) — after K consecutive
+>   browser failures the registry stops escalating for a cooldown (HTTP-only),
+>   so a wedged browser service can't drag research down. Plus BrowserTool's own
+>   connection cooldown for a down/restarting service.
+> - **Bot-detection ceiling (known limit, not a bug).** Cloudflare/DataDome/etc.
+>   detect headless Chromium and serve CAPTCHAs/blocks. 2.2 reaches the JS-rendered
+>   *open* web (news, blogs, docs, most public sites), NOT fortresses behind
+>   enterprise bot-walls. We do not chase that arms race.
+> - **robots.txt** is not honored (public-data posture); a future `DIGIM_WEB_RESPECT_ROBOTS`
+>   flag can add it. Conscious choice, documented.
+
+---
+
+## Original proposal (below) — preserved for the record.
+
 **Status: PROPOSED (awaiting green light before implementation).**
 
 Goal: give DINA a second way to acquire a page — a headless browser that runs

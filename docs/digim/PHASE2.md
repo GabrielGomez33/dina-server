@@ -46,16 +46,26 @@ curl -sk .../digim/research -d '{"query":"solid state battery 2026","intelligenc
 
 ## Roadmap (next increments)
 
-- **2.2 — Tool abstraction + BrowserTool:** a `ResearchTool` interface + registry
-  (introduced when the 2nd tool arrives, to avoid premature abstraction), plus a
-  headless-Chromium/Playwright tool for JS-rendered public pages, with per-job
-  tool selection.
-- **2.3 — FeedTool + public APIs:** RSS/Atom/sitemap ingestion and clean
-  key-optional public APIs (Wikipedia/Wikidata, Reddit `.json`, YouTube
-  captions, Mastodon, HN).
-- **2.4 — Intelligence graph (Palantir tactics):** entity resolution, relationship
-  graph, provenance, corroboration.
-- **Tier-3 (opt-in):** authenticated/social sources — gated, per-job, logged.
+- **2.2 — Tool abstraction + BrowserTool: ✅ DONE** (`docs/digim/PHASE2_2.md`).
+  The `FetchTool` acquisition role + registry (fetch-first / render-on-miss),
+  plus a headless-Chromium tool that runs in a hardened, network-segregated
+  **container** and is driven over the wire — app-layer SSRF + container egress
+  filter, concurrency semaphore, and circuit breaker. Per-job `browser_mode`.
+- **2.3 — SourceTool role + FeedTool + public APIs:** introduce the *second* tool
+  role (query → documents) now that a second instance exists: RSS/Atom/sitemap
+  ingestion and clean key-optional public APIs (Wikipedia/Wikidata, Reddit
+  `.json`, YouTube captions, Mastodon, HN). These are the low-risk, high-signal
+  counterpart to the browser — structured data, no JS execution. They register
+  alongside the search provider and feed candidates/documents into the same
+  proven pipeline.
+- **2.4 — Intelligence graph (Palantir tactics):** a **research planner** that
+  decomposes a broad question into sub-queries and fuses them, feeding an
+  **entity + relationship graph** with provenance and corroboration — "see the
+  relationships between information." Built on the richer harvest that 2.2 (JS web)
+  and 2.3 (structured sources) provide.
+- **Tier-3 (opt-in):** authenticated/social sources — gated, per-job, logged. For
+  genuinely hostile targets, escalate the browser container to a microVM sandbox
+  (gVisor/Firecracker/Kata).
 
 Verified: tsc clean; web 107/107, memory 33/33, migration 18/18. Additive and
 config-gated — with `DIGIM_WEB_SEARCH_PROVIDER=none` (default) nothing changes.

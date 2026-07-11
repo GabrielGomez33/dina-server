@@ -49,9 +49,15 @@ export interface WebResearchStatus {
   memoryEnabled: boolean;
   retentionSweepEnabled: boolean;
   retentionDays: number;
+  /** Headless-browser (Phase 2.2) operational state. */
+  browserEnabled: boolean;
+  browserMode: string;
+  browserAvailable: boolean;
+  browserStatus: string;
 }
 
 export type IntelligenceLevel = 'surface' | 'deep' | 'predictive';
+export type BrowserModeOption = 'off' | 'on-miss' | 'always';
 
 export interface ResearchResult {
   query: string;
@@ -135,6 +141,7 @@ export class WebResearchOrchestrator {
       this.sweepTimer = null;
     }
     try {
+      await this.pipeline.shutdown();
       await this.synthesizer.shutdown();
       await this.llmManager.shutdown();
     } catch {
@@ -144,13 +151,14 @@ export class WebResearchOrchestrator {
   }
 
   /** Gather only — surf the web and store documents, no synthesis. */
-  async gather(query: string, opts?: { maxDocuments?: number; seedUrls?: string[]; userId?: string }): Promise<GatherResult> {
+  async gather(query: string, opts?: { maxDocuments?: number; seedUrls?: string[]; userId?: string; browserMode?: BrowserModeOption }): Promise<GatherResult> {
     this.assertEnabled();
     const result = await this.pipeline.gather({
       query,
       maxDocuments: opts?.maxDocuments,
       seedUrls: opts?.seedUrls,
       userId: opts?.userId,
+      browserMode: opts?.browserMode,
     });
     await this.embedGathered(result);
     return result;
@@ -195,6 +203,10 @@ export class WebResearchOrchestrator {
       memoryEnabled: this.cfg.memoryEnabled,
       retentionSweepEnabled: this.cfg.retentionSweepEnabled,
       retentionDays: this.cfg.contentRetentionDays,
+      browserEnabled: this.cfg.browserEnabled,
+      browserMode: this.cfg.browserMode,
+      browserAvailable: this.pipeline.browserAvailable,
+      browserStatus: this.pipeline.browserStatusReason,
     };
   }
 
@@ -255,6 +267,7 @@ export class WebResearchOrchestrator {
       seedUrls?: string[];
       userId?: string;
       forceRefresh?: boolean;
+      browserMode?: BrowserModeOption;
     }
   ): Promise<ResearchResult> {
     this.assertEnabled();
@@ -307,6 +320,7 @@ export class WebResearchOrchestrator {
       maxDocuments: opts?.maxDocuments,
       seedUrls: opts?.seedUrls,
       userId: opts?.userId,
+      browserMode: opts?.browserMode,
     });
     await this.embedGathered(gather);
 
@@ -401,6 +415,8 @@ function emptyGather(query: string, provider: string): GatherResult {
       extracted: 0,
       stored: 0,
       duplicates: 0,
+      browserUsed: 0,
+      escalated: 0,
       skipped: [{ url: '(all)', reason: 'served from cache' }],
       errors: [],
     },
