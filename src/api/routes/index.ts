@@ -1424,7 +1424,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // returns a clear "disabled" status rather than doing anything.
   apiRouter.post('/digim/research', async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { query, seed_urls, intelligence_level, max_documents, force_refresh } = req.body || {};
+      const { query, seed_urls, intelligence_level, max_documents, force_refresh, browser_mode } = req.body || {};
 
       if ((!query || String(query).trim().length === 0) && !Array.isArray(seed_urls)) {
         res.status(400).json({
@@ -1449,7 +1449,8 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
           seed_urls: Array.isArray(seed_urls) ? seed_urls : [],
           intelligence_level: intelligence_level || 'surface',
           max_documents: typeof max_documents === 'number' ? max_documents : undefined,
-          force_refresh: force_refresh === true
+          force_refresh: force_refresh === true,
+          browser_mode: typeof browser_mode === 'string' ? browser_mode : undefined
         }
       });
 
@@ -1513,7 +1514,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // DIGIM Gather — surf + collect + store documents only (no synthesis)
   apiRouter.post('/digim/gather', async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { query, seed_urls, max_documents } = req.body || {};
+      const { query, seed_urls, max_documents, browser_mode } = req.body || {};
 
       if ((!query || String(query).trim().length === 0) && !Array.isArray(seed_urls)) {
         res.status(400).json({
@@ -1536,7 +1537,8 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         payload: {
           query: query ? String(query) : '',
           seed_urls: Array.isArray(seed_urls) ? seed_urls : [],
-          max_documents: typeof max_documents === 'number' ? max_documents : undefined
+          max_documents: typeof max_documents === 'number' ? max_documents : undefined,
+          browser_mode: typeof browser_mode === 'string' ? browser_mode : undefined
         }
       });
 

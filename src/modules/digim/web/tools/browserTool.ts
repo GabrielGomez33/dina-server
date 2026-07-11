@@ -127,6 +127,16 @@ export class BrowserTool implements FetchTool {
     return 'available';
   }
 
+  /**
+   * Build a failed FetchResult AND log why — a browser fetch failing silently
+   * (then falling back to HTTP) is an observability hole. Failures should be rare
+   * and visible.
+   */
+  private fail(url: string, reason: string): FetchResult {
+    console.warn(`⚠️ [browserTool] fetch failed for ${url}: ${reason}`);
+    return failedFetch(url, reason, this.name);
+  }
+
   async fetch(url: string): Promise<FetchResult> {
     if (!this.isAvailable()) {
       return failedFetch(url, `browser unavailable: ${this.unavailableReason()}`, this.name);
@@ -156,19 +166,19 @@ export class BrowserTool implements FetchTool {
       const finalUrl = page.url();
       const postNav = await checkUrlSafety(finalUrl, this.cfg);
       if (!postNav.safe) {
-        return failedFetch(url, `blocked post-navigation: ${postNav.reason || 'unsafe final URL'}`, this.name);
+        return this.fail(url, `blocked post-navigation: ${postNav.reason || 'unsafe final URL'}`);
       }
 
       // (5) Rendered HTML with a byte cap (matches the HTTP path's behavior).
       let html = await page.content();
       const bytes = Buffer.byteLength(html, 'utf8');
       if (bytes > this.cfg.maxContentBytes) {
-        return failedFetch(url, `content exceeded ${this.cfg.maxContentBytes} bytes`, this.name);
+        return this.fail(url, `content exceeded ${this.cfg.maxContentBytes} bytes`);
       }
 
       const status = resp && typeof resp.status === 'function' ? resp.status() : 200;
       if (status >= 400) {
-        return failedFetch(url, `HTTP ${status}`, this.name);
+        return this.fail(url, `HTTP ${status}`);
       }
 
       return {
@@ -190,7 +200,7 @@ export class BrowserTool implements FetchTool {
       if (/connect|disconnect|closed|websocket|econnrefused|target closed|browser has been closed/i.test(msg)) {
         this.markDown();
       }
-      return failedFetch(url, `browser fetch failed: ${msg}`, this.name);
+      return this.fail(url, `browser fetch failed: ${msg}`);
     } finally {
       if (context) {
         try { await context.close(); } catch { /* best-effort */ }
