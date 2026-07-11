@@ -53,24 +53,37 @@ cd ~/dina-server && npm install          # pulls the playwright-core optionalDep
 npm ls playwright-core                    # e.g. playwright-core@1.61.1 → use v1.61.1 below
 ```
 
-`ops/browser/docker-compose.yml` (create the directory on the box; substitute the
-version you just read for `<VER>`):
+The base `mcr.microsoft.com/playwright` image ships the browser binaries but NOT
+the `playwright` CLI on PATH — so we bake the CLI in with a tiny Dockerfile at
+BUILD time (writable). At runtime nothing installs, so `read_only: true` holds.
+
+`Dockerfile` (substitute the version you read for `<VER>`):
+
+```dockerfile
+FROM mcr.microsoft.com/playwright:v<VER>-noble
+# Browsers are already in the image; only add the server CLI (skip re-download).
+RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g playwright@<VER>
+```
+
+`docker-compose.yml`:
 
 ```yaml
 services:
   browser:
-    # MUST equal the installed `playwright` client version (npm ls playwright).
-    image: mcr.microsoft.com/playwright:v<VER>-noble
-    # The image already bundles playwright at v<VER>, so npx uses it (no re-fetch,
-    # no version skew).
-    command: >
-      npx playwright run-server --port 3000 --host 0.0.0.0
+    build:
+      context: .
+      network: host                 # build uses the host resolver (fixes buildkit EAI_AGAIN/DNS)
+    command: playwright run-server --port 3000 --host 0.0.0.0
     init: true                      # reap zombie Chromium children
     restart: unless-stopped
     shm_size: "1gb"                 # avoid the classic /dev/shm crash
     read_only: true                 # rootfs read-only
     tmpfs:
       - /tmp
+    environment:
+      # With a read-only rootfs, npx's cache and Chromium's per-context profile
+      # dirs must land on the writable tmpfs — point HOME there.
+      - HOME=/tmp
     cap_drop:
       - ALL
     security_opt:
@@ -91,11 +104,10 @@ networks:
     internal: false
 ```
 
-Bring it up:
+Bring it up (build the image, then start):
 
 ```bash
-cd ops/browser
-docker compose up -d
+docker compose up -d --build
 docker compose logs --no-log-prefix browser | tail -20   # expect "Listening on ws://0.0.0.0:3000"
 ```
 
@@ -103,33 +115,52 @@ docker compose logs --no-log-prefix browser | tail -20   # expect "Listening on 
 
 ## 2. Egress firewall (the "can't leave" guarantee)
 
-The container must be able to reach the **public** internet but **not** your host
-or LAN. Apply an egress filter on the Docker bridge for `browsernet`. Find the
-bridge interface, then deny private destinations from that subnet:
+The container must reach the **public** internet but **not** your host or LAN.
+This needs rules in **TWO** chains — a subtlety that a live test exposed:
+
+- **`DOCKER-USER` (part of `FORWARD`)** sees traffic ROUTED THROUGH the host to
+  elsewhere — the public internet, other LAN hosts, cloud metadata. Deny the
+  private ranges here.
+- **`INPUT`** sees traffic destined for the **host itself** (the bridge gateway,
+  e.g. `172.19.0.1`). Container→host packets never hit `FORWARD`, so
+  `DOCKER-USER` alone does NOT block them. You must also drop new container→host
+  connections in `INPUT`, while keeping established return traffic (so the
+  host→container:3000 WebSocket still works).
 
 ```bash
-# Identify the browsernet subnet (e.g. 172.20.0.0/16):
-docker network inspect browser_browsernet -f '{{(index .IPAM.Config 0).Subnet}}'
+# Identify the browsernet subnet (e.g. 172.19.0.0/16):
+docker network inspect dina-browser_browsernet -f '{{(index .IPAM.Config 0).Subnet}}'
+SUBNET=172.19.0.0/16   # <-- use the value from above
 
-# Deny the container subnet from reaching private ranges + cloud metadata,
-# while still allowing the public internet (default ACCEPT for the rest).
-SUBNET=172.20.0.0/16   # <-- use the value from above
+# (a) FORWARD path: deny routed traffic to private ranges + cloud metadata,
+#     leave the public internet ACCEPTed.
 for CIDR in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 127.0.0.0/8; do
   sudo iptables -I DOCKER-USER -s "$SUBNET" -d "$CIDR" -j DROP
 done
-# Block the IPv6 metadata + private ranges too if IPv6 is enabled:
 sudo ip6tables -I DOCKER-USER -s fc00::/7 -j DROP 2>/dev/null || true
+
+# (b) INPUT path: block NEW container->host connections, allow established
+#     returns. (-I inserts on top, so add DROP first, then ACCEPT lands above it.)
+sudo iptables -I INPUT -s "$SUBNET" -j DROP
+sudo iptables -I INPUT -s "$SUBNET" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 ```
 
-> Persist these with `iptables-persistent` (or your firewall manager) so they
-> survive reboot. Verify: from inside the container, a request to the host's LAN
-> IP or `169.254.169.254` must fail, while `https://example.com` must succeed.
+Verify with an A/B (from inside the container, using its bundled Node) — the host
+must be UNREACHABLE and the public web REACHABLE:
 
 ```bash
-# Verify egress filter (should TIME OUT / fail):
-docker compose exec browser sh -lc 'wget -T 3 -qO- http://169.254.169.254/ ; echo "exit=$?"'
-# Verify public egress (should succeed):
-docker compose exec browser sh -lc 'wget -T 5 -qO- https://example.com | head -c 40; echo'
+GW=172.19.0.1   # the bridge gateway = your host from the container's view
+# Host must be BLOCKED:
+sudo docker compose exec -T browser node -e "require('net').connect({host:'$GW',port:22,timeout:4000}).on('connect',function(){console.log('REACHED host — BAD');this.destroy()}).on('timeout',function(){console.log('BLOCKED host ✓');this.destroy()}).on('error',e=>console.log('blocked',e.code,'✓'))"
+# Public must WORK (also proves DNS):
+sudo docker compose exec -T browser node -e "require('net').connect({host:'example.com',port:443,timeout:6000}).on('connect',function(){console.log('PUBLIC ✓');this.destroy()}).on('error',e=>console.log('public FAIL',e.code))"
+```
+
+**Persist across reboot** (rules are lost otherwise):
+
+```bash
+sudo apt-get install -y iptables-persistent
+sudo netfilter-persistent save     # saves current v4+v6 rules to /etc/iptables/
 ```
 
 ---
