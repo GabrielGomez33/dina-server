@@ -70,7 +70,9 @@ RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g playwright@<VER>
 ```yaml
 services:
   browser:
-    build: .                        # build the Dockerfile above
+    build:
+      context: .
+      network: host                 # build uses the host resolver (fixes buildkit EAI_AGAIN/DNS)
     command: playwright run-server --port 3000 --host 0.0.0.0
     init: true                      # reap zombie Chromium children
     restart: unless-stopped
