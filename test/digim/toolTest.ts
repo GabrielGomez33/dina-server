@@ -24,7 +24,7 @@ let passed = 0;
 let failed = 0;
 const failures: string[] = [];
 function ok(cond: boolean, name: string): void {
-  if (cond) passed++;
+  if (cond) { passed++; console.log(`  ✓ ${name}`); }
   else { failed++; failures.push(name); console.error(`  ❌ ${name}`); }
 }
 function section(t: string): void { console.log(`\n▶ ${t}`); }
