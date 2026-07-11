@@ -26,6 +26,7 @@
     "test:digim": "ts-node test/digim/webEdgeCases.ts",
     "test:migration": "ts-node test/digim/migrationTest.ts",
     "test:memory": "ts-node test/digim/memoryTest.ts",
+    "test:tools": "ts-node test/digim/toolTest.ts",
     "type-check": "tsc --noEmit"
   },
   "keywords": [
@@ -69,5 +70,8 @@
     "nodemon": "^3.0.2",
     "ts-node": "^10.9.1",
     "typescript": "^5.3.3"
+  },
+  "optionalDependencies": {
+    "playwright-core": "^1.55.0"
   }
 }

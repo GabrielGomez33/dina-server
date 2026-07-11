@@ -34,6 +34,10 @@ export interface FetchResult {
   error?: string;
   /** Number of redirect hops followed. */
   redirects: number;
+  /** Which acquisition tool produced this result ("http" | "browser"). */
+  tool?: string;
+  /** True when the registry escalated from the cheap HTTP tool to the browser. */
+  escalated?: boolean;
 }
 
 /** Content extracted and cleaned from a fetched page. */
@@ -80,6 +84,9 @@ export interface GatheredDocument {
   duplicate: boolean;
 }
 
+/** Per-job browser escalation mode. See FetchToolRegistry. */
+export type BrowserMode = 'off' | 'on-miss' | 'always';
+
 /** Options controlling a single gather run. */
 export interface GatherOptions {
   /** Free-text research query used both for search and relevance scoring. */
@@ -90,6 +97,12 @@ export interface GatherOptions {
   seedUrls?: string[];
   /** userId for audit/attribution. */
   userId?: string;
+  /**
+   * Per-job override of the headless-browser escalation mode. Ignored (forced
+   * 'off') when the browser is globally disabled or unavailable. Defaults to the
+   * config's browserMode.
+   */
+  browserMode?: BrowserMode;
 }
 
 /** Result of a gather run — the raw material for synthesis. */
@@ -110,6 +123,10 @@ export interface GatherDiagnostics {
   extracted: number;
   stored: number;
   duplicates: number;
+  /** How many pages were acquired via the headless browser (subset of fetched). */
+  browserUsed: number;
+  /** How many pages escalated from HTTP to the browser (on-miss). */
+  escalated: number;
   skipped: Array<{ url: string; reason: string }>;
   errors: Array<{ url: string; error: string }>;
 }
