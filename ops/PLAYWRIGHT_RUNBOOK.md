@@ -49,8 +49,10 @@ services:
   browser:
     # MUST equal the installed `playwright` client version (npm ls playwright).
     image: mcr.microsoft.com/playwright:v<VER>-noble
+    # The image already bundles playwright at v<VER>, so npx uses it (no re-fetch,
+    # no version skew).
     command: >
-      npx -y playwright@<VER> run-server --port 3000 --host 0.0.0.0
+      npx playwright run-server --port 3000 --host 0.0.0.0
     init: true                      # reap zombie Chromium children
     restart: unless-stopped
     shm_size: "1gb"                 # avoid the classic /dev/shm crash
