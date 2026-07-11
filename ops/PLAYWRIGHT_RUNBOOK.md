@@ -53,18 +53,25 @@ cd ~/dina-server && npm install          # pulls the playwright-core optionalDep
 npm ls playwright-core                    # e.g. playwright-core@1.61.1 → use v1.61.1 below
 ```
 
-`ops/browser/docker-compose.yml` (create the directory on the box; substitute the
-version you just read for `<VER>`):
+The base `mcr.microsoft.com/playwright` image ships the browser binaries but NOT
+the `playwright` CLI on PATH — so we bake the CLI in with a tiny Dockerfile at
+BUILD time (writable). At runtime nothing installs, so `read_only: true` holds.
+
+`Dockerfile` (substitute the version you read for `<VER>`):
+
+```dockerfile
+FROM mcr.microsoft.com/playwright:v<VER>-noble
+# Browsers are already in the image; only add the server CLI (skip re-download).
+RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g playwright@<VER>
+```
+
+`docker-compose.yml`:
 
 ```yaml
 services:
   browser:
-    # MUST equal the installed `playwright` client version (npm ls playwright).
-    image: mcr.microsoft.com/playwright:v<VER>-noble
-    # The image already bundles playwright at v<VER>, so npx uses it (no re-fetch,
-    # no version skew).
-    command: >
-      npx playwright run-server --port 3000 --host 0.0.0.0
+    build: .                        # build the Dockerfile above
+    command: playwright run-server --port 3000 --host 0.0.0.0
     init: true                      # reap zombie Chromium children
     restart: unless-stopped
     shm_size: "1gb"                 # avoid the classic /dev/shm crash
@@ -95,11 +102,10 @@ networks:
     internal: false
 ```
 
-Bring it up:
+Bring it up (build the image, then start):
 
 ```bash
-cd ops/browser
-docker compose up -d
+docker compose up -d --build
 docker compose logs --no-log-prefix browser | tail -20   # expect "Listening on ws://0.0.0.0:3000"
 ```
 
