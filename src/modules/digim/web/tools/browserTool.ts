@@ -45,17 +45,32 @@ import { FetchTool, failedFetch } from './fetchTool';
 import { FetchResult } from '../types';
 
 // ----------------------------------------------------------------------------
-// Guarded, one-time load of the optional `playwright` dependency.
+// Guarded, one-time load of the optional Playwright CLIENT.
+//
+// We connect to a REMOTE browser (in a container) — we never launch one locally
+// — so the right dependency is `playwright-core`: the same chromium.connect()
+// API with NO browser-download postinstall. We try it first, then fall back to
+// the full `playwright` package if that's what happens to be installed. Either
+// provides chromium.connect().
 // ----------------------------------------------------------------------------
 let _pw: { mod: any | null; error: string | null } | undefined;
 function loadPlaywright(): { mod: any | null; error: string | null } {
   if (_pw) return _pw;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    _pw = { mod: require('playwright'), error: null };
-  } catch (err) {
-    _pw = { mod: null, error: (err as Error).message };
+  const errors: string[] = [];
+  for (const pkg of ['playwright-core', 'playwright']) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require(pkg);
+      if (mod && mod.chromium && typeof mod.chromium.connect === 'function') {
+        _pw = { mod, error: null };
+        return _pw;
+      }
+      errors.push(`${pkg}: no chromium.connect`);
+    } catch (err) {
+      errors.push(`${pkg}: ${(err as Error).message.split('\n')[0]}`);
+    }
   }
+  _pw = { mod: null, error: errors.join(' | ') };
   return _pw;
 }
 
