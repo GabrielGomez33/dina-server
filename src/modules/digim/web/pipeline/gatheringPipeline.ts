@@ -18,7 +18,9 @@
 
 import { getDigimWebConfig, DigimWebConfig } from '../config/webConfig';
 import { createSearchProvider, SearchProvider } from '../gatherers/searchProvider';
-import { WebFetcher } from '../gatherers/webFetcher';
+import { HttpFetchTool } from '../tools/httpFetchTool';
+import { BrowserTool } from '../tools/browserTool';
+import { FetchToolRegistry } from '../tools/fetchRegistry';
 import { ContentExtractor } from '../gatherers/contentExtractor';
 import { QualityScorer } from '../scoring/qualityScorer';
 import { WebResearchStore, toGatheredDocument, StoreContentInput } from '../storage/webResearchStore';
@@ -33,14 +35,19 @@ import {
 
 export class GatheringPipeline {
   private provider: SearchProvider;
-  private fetcher: WebFetcher;
+  private registry: FetchToolRegistry;
+  private browserTool: BrowserTool;
   private extractor: ContentExtractor;
   private scorer: QualityScorer;
   private store: WebResearchStore;
 
   constructor(private cfg: DigimWebConfig = getDigimWebConfig()) {
     this.provider = createSearchProvider(cfg);
-    this.fetcher = new WebFetcher(cfg);
+    // Acquisition is now tool-pluggable: cheap HTTP by default, headless browser
+    // as a bounded, security-hardened escalation (Phase 2.2). The registry owns
+    // selection; every downstream stage is unchanged (tool-agnostic FetchResult).
+    this.browserTool = new BrowserTool(cfg);
+    this.registry = new FetchToolRegistry(new HttpFetchTool(cfg), this.browserTool, cfg);
     this.extractor = new ContentExtractor();
     this.scorer = new QualityScorer();
     this.store = new WebResearchStore(cfg);
@@ -53,6 +60,21 @@ export class GatheringPipeline {
   /** True if the configured search provider has what it needs to run. */
   get providerConfigured(): boolean {
     return this.provider.isConfigured();
+  }
+
+  /** Whether the headless-browser acquisition tool is currently usable. */
+  get browserAvailable(): boolean {
+    return this.registry.browserAvailable;
+  }
+
+  /** Human-readable reason the browser is unavailable (diagnostics/status). */
+  get browserStatusReason(): string {
+    return this.browserTool.unavailableReason();
+  }
+
+  /** Release acquisition resources (closes the browser connection). */
+  async shutdown(): Promise<void> {
+    await this.registry.shutdown();
   }
 
   /**
@@ -84,6 +106,8 @@ export class GatheringPipeline {
       extracted: 0,
       stored: 0,
       duplicates: 0,
+      browserUsed: 0,
+      escalated: 0,
       skipped: [],
       errors: [],
     };
@@ -144,12 +168,14 @@ export class GatheringPipeline {
         return;
       }
 
-      const fetched = await this.fetcher.fetchUrl(candidate.url);
+      const fetched = await this.registry.acquire(candidate.url, { mode: options.browserMode });
       if (!fetched.ok) {
         diagnostics.errors.push({ url: candidate.url, error: fetched.error || 'fetch failed' });
         return;
       }
       diagnostics.fetched++;
+      if (fetched.tool === 'browser') diagnostics.browserUsed++;
+      if (fetched.escalated) diagnostics.escalated++;
 
       const extracted = this.extractor.extract(fetched.body, fetched.contentType, fetched.finalUrl);
       if (extracted.wordCount < this.cfg.minWordCount) {

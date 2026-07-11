@@ -405,6 +405,7 @@ async  initialize(): Promise<void> {
         maxDocuments: requestData?.max_documents,
         seedUrls,
         userId,
+        browserMode: normalizeBrowserMode(requestData?.browser_mode),
       });
       return {
         status: 'completed',
@@ -462,6 +463,7 @@ async  initialize(): Promise<void> {
       seedUrls,
       userId,
       forceRefresh: requestData?.force_refresh === true,
+      browserMode: normalizeBrowserMode(requestData?.browser_mode),
     });
 
     return {
@@ -1288,6 +1290,18 @@ function normalizeIntelligenceLevel(value: any): IntelligenceLevel {
   if (v === 'deep' || v === 'predictive' || v === 'surface') return v;
   if (v === 'basic' || v === '' || v === 'structured') return 'surface';
   return 'surface';
+}
+
+/**
+ * Normalize a caller-supplied browser mode. Returns undefined for an unset/
+ * invalid value so the orchestrator falls back to the config default. Note the
+ * browser can never be forced on this way if globally disabled — the registry
+ * enforces that.
+ */
+function normalizeBrowserMode(value: any): 'off' | 'on-miss' | 'always' | undefined {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (v === 'off' || v === 'on-miss' || v === 'always') return v;
+  return undefined;
 }
 
 // ================================
