@@ -9,6 +9,17 @@ client over a WebSocket. This runbook stands that container up safely.
 > this is needed — acquisition is the existing HTTP path. Turn it on only when
 > you want JS-rendered coverage.
 
+## Two "playwrights" — don't confuse them
+
+| | What | Where | How installed |
+|---|---|---|---|
+| **Browser binaries** (Chromium) | the actual browser that renders pages | **the container** (`mcr.microsoft.com/playwright` image) | comes baked into the image — you never install it on the host |
+| **Client library** (`playwright-core`) | gives DINA the `chromium.connect()` call to talk to the container | **the DINA host** (`node_modules`) | `npm install` (it's an optionalDependency) |
+
+The host needs ONLY the small `playwright-core` client — **no browser download on
+the host.** (We use `playwright-core`, not full `playwright`, precisely because it
+has no browser-download postinstall — the browsers live in the container.)
+
 ---
 
 ## Why a container (the security model)
@@ -34,11 +45,12 @@ a full block — the browser's job is to reach public URLs.
 
 ## 1. Compose file
 
-**First, read the installed client version** — the container image MUST match it
+**First, install + read the client version** — the container image MUST match it
 exactly, or Playwright throws obscure CDP protocol errors:
 
 ```bash
-cd ~/dina-server && npm ls playwright   # e.g. playwright@1.61.1  → use v1.61.1 below
+cd ~/dina-server && npm install          # pulls the playwright-core optionalDependency
+npm ls playwright-core                    # e.g. playwright-core@1.61.1 → use v1.61.1 below
 ```
 
 `ops/browser/docker-compose.yml` (create the directory on the box; substitute the
@@ -136,12 +148,13 @@ DIGIM_WEB_BROWSER_MODE=on-miss          # browser only when HTTP returns a JS sh
 # DIGIM_WEB_BROWSER_THIN_TEXT_CHARS=500  # shell-detection threshold
 ```
 
-Install the Playwright **client** on the DINA host (small — no browser download
-needed, the browser lives in the container):
+Install the client (`playwright-core`) on the DINA host — small, no browser
+download (the browser lives in the container):
 
 ```bash
 cd ~/dina-server   # or /var/www/dina-server
-npm install         # picks up the optionalDependency "playwright"
+npm install                 # picks up the optionalDependency "playwright-core"
+npm ls playwright-core      # confirm it's present (should print a version)
 npm run rebuild && npm run reload
 ```
 
