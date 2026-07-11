@@ -71,6 +71,10 @@ services:
     read_only: true                 # rootfs read-only
     tmpfs:
       - /tmp
+    environment:
+      # With a read-only rootfs, npx's cache and Chromium's per-context profile
+      # dirs must land on the writable tmpfs — point HOME there.
+      - HOME=/tmp
     cap_drop:
       - ALL
     security_opt:
