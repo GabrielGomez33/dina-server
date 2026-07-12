@@ -56,11 +56,34 @@ Sub-queries are LLM-generated *search strings*, not code. Facet content is fence
 & sanitized at each facet's synthesis (existing injection defense); the decompose
 prompt also carries `INJECTION_SYSTEM_RULE`. Config-gated, additive.
 
-## Next: 2.4b — Relationship Graph
+## 2.4b — Relationship Graph
 
-MySQL-backed entity + relationship extraction (provenance + corroboration) over
-the planner's rich harvest — the "see the relationships" layer. Design in
-`docs/digim/PHASE2_4_DESIGN.md`.
+**One canonical model, three views, events first-class.** Store the graph once
+(nodes + edges + weights + time + provenance); render it as a **network**
+(force-directed web), a **temporal** cascade (x = time — shows ripples), or a
+**semantic** cloud (project embeddings). A pure `suggestView()` picks the best
+one per subgraph. Storage and rendering are separate concerns.
+
+### 2.4b-1 — Data model (DONE)
+
+| Piece | File | Role |
+|---|---|---|
+| **Schema** | `migrations/002_digim_relationship_graph.ts` | `digim_entities` (nodes; `occurred_at` makes events first-class, `mention_count` = weight, `embedding_ref` for the semantic view), `digim_relationships` (edges; `corroboration_count`, `confidence`), `digim_relationship_sources` (provenance). |
+| **Entity resolution** | `web/graph/entityResolution.ts` | Pure alias-merge: canonical key + predicate/type normalization. |
+| **Adaptive view** | `web/graph/graphView.ts` | Pure `suggestView()` — network / temporal / semantic. |
+| **Store** | `web/graph/graphStore.ts` | Race-safe entity/edge upserts; subgraph query; provenance-driven corroboration. |
+
+Verified: **graph 28/28** (`npm run test:graph`) — alias merge on the live
+aliases, predicate/type normalization, adaptive view (incl. temporal-over-
+semantic precedence + empty/edge cases), DB-row mapping. tsc clean; no regression.
+Config-gated (`DIGIM_WEB_GRAPH_ENABLED=false`). Live DB round-trip verified after
+migration (sandbox has no MySQL).
+
+### 2.4b-2 — Extraction + query (NEXT)
+
+LLM triple extraction from gathered content (reusing injection fencing) → upsert
+into the store; `digim_graph` returns a topic's subgraph + suggested view; wire
+extraction into research/investigate. Then the renderers.
 
 ## Verification
 

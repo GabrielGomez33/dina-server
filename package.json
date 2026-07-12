@@ -29,6 +29,7 @@
     "test:tools": "ts-node test/digim/toolTest.ts",
     "test:sources": "ts-node test/digim/sourceTest.ts",
     "test:planner": "ts-node test/digim/plannerTest.ts",
+    "test:graph": "ts-node test/digim/graphTest.ts",
     "type-check": "tsc --noEmit"
   },
   "keywords": [
