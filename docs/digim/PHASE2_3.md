@@ -68,3 +68,17 @@ Reddit `.json` (rate-limit/UA care), Mastodon (per-instance), YouTube captions
   config-gated source enablement.
 - No regression: tools 32/32, web 107/107, memory 33/33, migration 18/18.
 - Additive + default-off. Live source calls verified on the box.
+
+## Live verification (production, 2026-07-11)
+
+Enabled `DIGIM_WEB_SOURCES=wikipedia,hn` and ran discovery + a fresh gather.
+
+| Check | Result |
+|---|---|
+| **Status** | `sources: ["wikipedia","hn"]` reported alongside `provider: searxng`. |
+| **Sources feed discovery** | `digim_search` candidate count rose 10 → 16; filtering to source hosts surfaced `en.wikipedia.org/wiki/Strait_of_Hormuz_blockade` — a candidate SearXNG's top results did NOT return. (HN correctly returned nothing for a geopolitics query; the empty source was handled gracefully.) |
+| **Fresh gather** | `digim_research` (force_refresh) → `basis: web+memory`, `candidatesFound: 11, fetched: 10, stored: 7`, drawing on search + Wikipedia + prior memory together. |
+| **Client refactor regression** | All `/digim/*` routes (now dispatching through `DigimClient`) returned valid responses — the DUMP-client refactor broke nothing. |
+| **Bonus — 2.2 browser in natural mode** | The same gather showed `browserUsed: 2` with NO `browser_mode` set: `on-miss` escalation fired on its own for 2 JS-shell/403 pages. The browser tier works transparently inside normal research, not just when forced. |
+
+Phase 2.3a is complete and proven on production.

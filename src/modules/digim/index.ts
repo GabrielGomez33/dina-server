@@ -276,6 +276,9 @@ async  initialize(): Promise<void> {
       case 'digim_research':
         return await this.handleResearchRequest(requestData, message.security.user_id);
 
+      case 'digim_investigate':
+        return await this.handleInvestigateRequest(requestData, message.security.user_id);
+
       case 'digim_search':
         return await this.handleSearchRequest(requestData);
 
@@ -481,6 +484,49 @@ async  initialize(): Promise<void> {
       sources_consulted: result.insight.sources.length,
       diagnostics: result.gather.diagnostics,
       intelligence_id: result.intelligenceId,
+      processing_time_ms: Math.round(result.processingTimeMs),
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_investigate — multi-facet investigation (Phase 2.4a): decompose a broad
+   * question into sub-queries, research each through the pipeline, and fuse into
+   * one comprehensive, provenance-tracked briefing.
+   */
+  private async handleInvestigateRequest(requestData: any, userId?: string): Promise<any> {
+    const query: string = (requestData?.query || requestData?.q || '').trim();
+    console.log(`🧭 Handling investigate request: "${query.substring(0, 60)}..."`);
+
+    if (!this.webResearch.enabled) {
+      return {
+        status: 'disabled',
+        message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.',
+      };
+    }
+    if (!query) {
+      throw new Error('digim_investigate requires a "query"');
+    }
+
+    const level = normalizeIntelligenceLevel(requestData?.intelligence_level);
+    const result = await this.webResearch.investigate(query, { level });
+
+    return {
+      status: 'success',
+      query: result.query,
+      intelligence_level: result.level,
+      facets_planned: result.facetsPlanned,
+      plan: result.plan,
+      facets: result.facets.map((f) => ({
+        facet: f.facet,
+        query: f.query,
+        basis: f.basis,
+        documents_gathered: f.documentsGathered,
+        summary: f.insight.summary,
+        key_insights: f.insight.keyInsights,
+      })),
+      insight: result.synthesis,
+      sources_consulted: result.sourcesConsulted,
       processing_time_ms: Math.round(result.processingTimeMs),
       generated_at: new Date(),
     };
