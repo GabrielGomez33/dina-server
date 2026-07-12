@@ -200,6 +200,8 @@ export interface DigimWebConfig {
   graphMaxTriples: number;
   /** How many top documents feed one extraction pass. */
   graphExtractMaxDocs: number;
+  /** Token budget for the extraction LLM call (larger than synthesis — many triples). */
+  graphExtractMaxTokens: number;
 }
 
 /** Mirrors WebResearchOrchestrator's IntelligenceLevel, kept local to config. */
@@ -370,6 +372,7 @@ function buildConfig(): DigimWebConfig {
     graphMaxNodes: clampInt(envInt('DIGIM_WEB_GRAPH_MAX_NODES', 120), 1, 500),
     graphMaxTriples: clampInt(envInt('DIGIM_WEB_GRAPH_MAX_TRIPLES', 40), 1, 200),
     graphExtractMaxDocs: clampInt(envInt('DIGIM_WEB_GRAPH_EXTRACT_MAX_DOCS', 6), 1, 20),
+    graphExtractMaxTokens: clampInt(envInt('DIGIM_WEB_GRAPH_EXTRACT_MAX_TOKENS', 3000), 512, 8192),
   });
 }
 

@@ -92,6 +92,12 @@ async function main(): Promise<void> {
   ok(parseTriples('{"triples":[{"subject":"Iran","predicate":"is","object":"iran","source":1}]}', urls, 40).length === 0, 'self-loop dropped');
   ok(parseTriples('{"triples":[{"subject":"a","predicate":"p","object":"b"},{"subject":"c","predicate":"p","object":"d"}]}', urls, 1).length === 1, 'clamped to max');
   ok(parseTriples('not json', urls, 40).length === 0, 'garbage → []');
+  // Truncation resilience: an array cut off at the token limit (no closing ]/})
+  // must still yield the COMPLETE objects, not zero.
+  const truncated = '{"triples":[{"subject":"US","predicate":"launched","object":"Operation Epic Fury","source":1},{"subject":"Iran","predicate":"retaliated against","object":"US","source":2},{"subject":"Brent Crude","predicate":"surged';
+  const salvaged = parseTriples(truncated, urls, 40);
+  ok(salvaged.length === 2, 'truncated array → 2 complete triples salvaged (partial dropped)');
+  ok(salvaged[1].subject === 'Iran' && salvaged[1].sourceUrl === 'https://b.com', 'salvaged triple keeps fields + source mapping');
 
   // --------------------------------------------------------------------------
   section('GraphExtractor.extract — orchestration (mock LLM)');
