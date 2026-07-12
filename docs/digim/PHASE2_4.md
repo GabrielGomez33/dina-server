@@ -65,5 +65,26 @@ the planner's rich harvest — the "see the relationships" layer. Design in
 ## Verification
 
 - tsc clean; planner **28/28**; no regression (tools 32, sources 20, web 107,
-  memory 33, migration 18). Live Iran–USA investigation to be run on the box as
-  the capstone.
+  memory 33, migration 18).
+
+### Live capstone (production, 2026-07-11)
+
+`digim_investigate` on *"the 2026 Iran–USA war: causes, timeline, effects on oil
+and gas prices, and regional ripple effects"*:
+
+- **Self-planned 5 facets:** causes, timeline, oil/gas effects, regional ripples,
+  and — chosen by the planner itself — *"Caveats (potential manipulations)"*.
+- **Each facet ran the full pipeline:** `basis: web+memory`, 8 documents each;
+  **22 unique sources** fused (deduped union).
+- **Fused briefing connected the facets:** outbreak (Operation Epic Fury, Feb 28),
+  retaliation, oil shock (Brent > $120/bbl), regional fallout (GCC economic model)
+  — grounded, post-training-cutoff.
+- **Entities surfaced:** Trump, Khamenei, US, Iran, Strait of Hormuz, GCC, Iranian
+  forces — the raw material for the 2.4b relationship graph.
+
+Observed limitation → motivates 2.4b: entity aliases were not merged ("Strait of
+Hormuz" vs "The Strait of Hormuz"; "Ali Khamenei" vs "Supreme Leader Ali
+Khamenei"). The planner's exact-match dedupe is intentional; **canonical entity
+resolution is a 2.4b responsibility.**
+
+Phase 2.4a is complete and proven on production.
