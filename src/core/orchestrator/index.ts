@@ -16,6 +16,8 @@ import { ModelType, performanceOptimizer } from '../../modules/llm/intelligence'
 import { digiMOrchestrator} from '../../modules/digim';
 import { isDigiMMessage } from '../../modules/digim/types';
 import { mirrorModule } from '../../modules/mirror';
+import { getVisionOrchestrator } from '../../modules/vision';
+import { VisionError } from '../../modules/vision/types';
 import { v4 as uuidv4 } from 'uuid';
 import { performance } from 'perf_hooks';
 
@@ -229,6 +231,19 @@ export class DinaCore {
         const mirrorStatus = mirrorModule.isInitialized;
         console.log(`   ${mirrorStatus ? '✅' : '⚠️'} Mirror ${mirrorStatus ? 'ready' : 'degraded'}`);
 
+        // ── Phase 5: Vision Module (additive, self-gating) ─────────
+        // Mirrors the DIGIM web-research pattern: when DINA_VISION_ENABLED is
+        // not set this is a cheap no-op — it loads no model, creates no tables,
+        // and touches no I/O, so it cannot disrupt startup. Failures here are
+        // downgraded and never propagate.
+        try {
+          const vision = getVisionOrchestrator();
+          await vision.initialize();
+          console.log(`   ${vision.enabled ? (vision.isInitialized ? '✅' : '⚠️') : 'ℹ️'} Vision ${vision.enabled ? (vision.isInitialized ? 'ready' : 'degraded') : 'disabled'}`);
+        } catch (visionErr) {
+          console.warn(`⚠️ Vision init degraded (continuing): ${(visionErr as Error).message}`);
+        }
+
         // ── Queue Processors ───────────────────────────────────────
         this.initialized = true;
         this.startQueueProcessors();
@@ -429,8 +444,13 @@ private startQueueProcessors(): void {
          	 responsePayload = await this.processMirrorRequest(sanitizedMessage);
         	 break;
 
+          case 'vision':
+            console.log('👁️ Processing VISION request');
+            responsePayload = await this.processVisionRequest(sanitizedMessage);
+            break;
+
           default:
-            const availableModules = ['core', 'llm', 'database', 'system', 'digim', 'mirror'];
+            const availableModules = ['core', 'llm', 'database', 'system', 'digim', 'mirror', 'vision'];
             throw new Error(
               `Unknown target module: "${targetModule}". ` +
               `Available modules: ${availableModules.join(', ')}`
@@ -795,6 +815,121 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
       }
     }
 
+  /**
+   * VISION module request handler. Routes DUMP `vision_*` methods to the vision
+   * subsystem. Kept deliberately thin: all validation, security, and analysis
+   * live inside the vision module (separation of concerns). VisionError carries
+   * a caller-facing code/message/httpStatus which we surface intact so the API
+   * layer can translate it to the right HTTP status.
+   *
+   * Supported methods:
+   *   vision_analyze_image | vision_describe | vision_ocr | vision_ask
+   *   vision_analyze_video
+   *   vision_status | vision_health | vision_prune
+   */
+  private async processVisionRequest(message: DinaUniversalMessage): Promise<any> {
+    const method = message.target.method;
+    const data = message.payload?.data || {};
+    const userId = message.security?.user_id;
+    const vision = getVisionOrchestrator();
+
+    console.log(`👁️ Processing Vision method: ${method}`);
+
+    try {
+      switch (method) {
+        case 'vision_status':
+          return vision.getStatus();
+
+        case 'vision_health':
+          return await vision.healthCheck();
+
+        case 'vision_prune':
+          return await vision.prune();
+
+        case 'vision_analyze_image':
+        case 'vision_describe':
+        case 'vision_ocr':
+        case 'vision_ask': {
+          // IMPORTANT: image bytes are read from the NESTED `media` object.
+          // DinaProtocol.sanitizeMessage() strips /on\w+\s*=/gi from every
+          // TOP-LEVEL string in payload.data — which would silently corrupt a
+          // base64 string that happens to contain such a substring. Nested
+          // objects are left untouched by the sanitizer, so carrying pixels in
+          // `media` keeps them byte-exact. (See extractImageInput.)
+          const media = (data.media && typeof data.media === 'object') ? data.media : data;
+          const image = this.extractImageInput(media);
+          const task =
+            method === 'vision_describe' ? 'describe' :
+            method === 'vision_ocr' ? 'ocr' :
+            method === 'vision_ask' ? 'vqa' :
+            (data.task || 'full');
+          return await vision.analyzeImage(image, {
+            task,
+            question: data.question,
+            forceRefresh: data.force_refresh === true || data.forceRefresh === true,
+            model: data.model,
+            userId,
+          });
+        }
+
+        case 'vision_analyze_video': {
+          // Same nesting rationale: frames/raw-video bytes live under `media`.
+          const media = (data.media && typeof data.media === 'object') ? data.media : data;
+          const videoInput = {
+            frames: Array.isArray(media.frames) ? media.frames : undefined,
+            base64: typeof media.base64 === 'string' ? media.base64 : undefined,
+            mimeType: media.mimeType || media.mime_type,
+            filename: media.filename,
+            durationSec: typeof media.durationSec === 'number' ? media.durationSec :
+                         typeof media.duration_sec === 'number' ? media.duration_sec : undefined,
+          };
+          return await vision.analyzeVideo(videoInput, {
+            task: data.task || 'full',
+            model: data.model,
+            userId,
+          });
+        }
+
+        default:
+          throw new Error(`Unknown vision method: ${method}`);
+      }
+    } catch (err) {
+      if (err instanceof VisionError) {
+        // Re-shape into a structured payload the API layer can map to HTTP.
+        return {
+          status: 'error',
+          error: true,
+          code: err.code,
+          message: err.message,
+          http_status: err.httpStatus,
+          details: err.details,
+        };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Pull a RawImageInput out of a DUMP payload, tolerating the common field
+   * spellings a caller (or the mirror-server) might use.
+   */
+  private extractImageInput(data: any): { base64?: string; url?: string; mimeType?: string; filename?: string } {
+    if (!data || typeof data !== 'object') {
+      throw new VisionError('INVALID_INPUT', 'Vision request payload must be an object', 400);
+    }
+    const base64 = data.base64 || data.image || data.image_base64 || data.imageBase64;
+    const url = data.url || data.image_url || data.imageUrl;
+    if (!base64 && !url) {
+      throw new VisionError('NO_IMAGE_SOURCE', 'Provide an image as base64 (data URI ok) or url', 400);
+    }
+    return {
+      base64: typeof base64 === 'string' ? base64 : undefined,
+      url: typeof url === 'string' ? url : undefined,
+      mimeType: data.mimeType || data.mime_type,
+      filename: data.filename,
+    };
+  }
+
   private async processMirrorChat(
     message: DinaUniversalMessage,
     sessionInfo: { userId: string; sessionId: string },
@@ -1020,6 +1155,13 @@ GUIDELINES:
 
 	  await mirrorModule.shutdown();
 	  console.log('✅ Mirror shutdown complete');
+
+      try {
+        await getVisionOrchestrator().shutdown();
+        console.log('✅ Vision shutdown complete');
+      } catch (visionErr) {
+        console.warn(`⚠️ Vision shutdown error (ignored): ${(visionErr as Error).message}`);
+      }
 
       await redisManager.shutdown();
       await database.close();

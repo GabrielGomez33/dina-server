@@ -149,6 +149,22 @@ const DEFAULT_FOOTPRINTS_MB: Record<string, number> = {
   // Large (do NOT fit a 24 GB card alongside anything)
   'codellama:34b': 21000,
   'llama2:70b': 42000,
+  // Vision-language models (DINA Vision / DIVIS). Weights + vision encoder.
+  moondream: 1900,
+  'llava:7b': 5500,
+  llava: 5500,
+  'llava:13b': 9000,
+  'llava-llama3': 6500,
+  'llava-llama3:8b': 6500,
+  'bakllava:7b': 5500,
+  'llama3.2-vision': 9500,
+  'llama3.2-vision:11b': 9500,
+  'minicpm-v': 6000,
+  'minicpm-v:8b': 6000,
+  'qwen2.5vl:7b': 7000,
+  'qwen2-vl:7b': 7000,
+  'llava:34b': 21000,
+  'llama3.2-vision:90b': 55000,
 };
 
 function parseFootprintOverrides(): Record<string, number> {

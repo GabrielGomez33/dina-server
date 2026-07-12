@@ -57,6 +57,18 @@ interface OllamaGenerateOptions {
   numCtx?: number;
   /** Override keep_alive (defaults to llmConfig.keepAlive). */
   keepAlive?: string;
+  /**
+   * MULTIMODAL (vision) support. Base64-encoded image payloads (no data-URI
+   * prefix) passed straight through to Ollama's `images` field so a vision
+   * model (llava, llama3.2-vision, qwen2.5vl, moondream, …) can "see" them.
+   *
+   * ADDITIVE + BACKWARD-COMPATIBLE: the `images` key is only attached to the
+   * request body when this array is present and non-empty, so every existing
+   * text-only caller produces a byte-identical request to before this field
+   * existed. This is the single, safe extension that lets the Vision module
+   * reuse the hardened NDJSON transport instead of duplicating it.
+   */
+  images?: string[];
 }
 
 export class OllamaClient {
@@ -133,6 +145,13 @@ export class OllamaClient {
       // group context, and conversation history that the model MUST see.
       if (hasSystem) {
         requestBody.system = opts!.system;
+      }
+
+      // MULTIMODAL: attach base64 images ONLY when provided. Absent/empty →
+      // the body is byte-identical to the text-only path (backward compatible).
+      if (opts?.images && opts.images.length > 0) {
+        requestBody.images = opts.images;
+        console.log(`🖼️ Attaching ${opts.images.length} image(s) to Ollama request for vision model ${model}`);
       }
 
       const response = await fetch(`${this.baseUrl}/api/generate`, {

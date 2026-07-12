@@ -62,7 +62,13 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     // DIGIM research/query drive web fetches + LLM synthesis; a cold model load
     // (150s+) would otherwise 408 at the default 60s. Give them the LLM budget.
     const isDigimLLM = req.path.startsWith('/digim/research') || req.path.startsWith('/digim/query');
-    const timeoutMs = (isTruthStreamLLM || isPersonalAnalysisLLM || isDigimLLM) ? 300000 : 60000;
+    // Vision inference (a cold vision-model load + per-frame video work) is slow
+    // too; give the analyze endpoints the same extended budget. Status/health stay fast.
+    const isVisionLLM = req.path.startsWith('/vision/analyze')
+      || req.path.startsWith('/vision/describe')
+      || req.path.startsWith('/vision/ocr')
+      || req.path.startsWith('/vision/ask');
+    const timeoutMs = (isTruthStreamLLM || isPersonalAnalysisLLM || isDigimLLM || isVisionLLM) ? 300000 : 60000;
 
     const timeout = setTimeout(() => {
       if (!res.headersSent && !timeoutHandled) {
@@ -94,6 +100,17 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
 
   // Apply CORS first for browser testing
   apiRouter.use(corsMiddleware);
+
+  // VISION: base64 images/video frames are larger than text payloads. This
+  // path-scoped JSON parser runs BEFORE the global 10mb parser so /vision
+  // requests get a higher (configurable) body limit; express.json is a no-op
+  // once a body is parsed, so the global parser below simply skips /vision.
+  // Every other route keeps the original 10mb limit unchanged (no disruption).
+  const visionBodyLimitMb = (() => {
+    const n = parseInt(process.env.DINA_VISION_MAX_BODY_MB || '32', 10);
+    return Number.isFinite(n) && n > 0 && n <= 256 ? n : 32;
+  })();
+  apiRouter.use('/vision', express.json({ limit: `${visionBodyLimitMb}mb` }));
 
   // Apply common middleware to all API routes
   apiRouter.use(express.json({ limit: '10mb' })); // Increased for Mirror submissions
@@ -1865,6 +1882,177 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   });
 
   // ================================
+  // VISION MODULE API ENDPOINTS (DIVIS - DUMP Protocol)
+  // ================================
+  // Teach DINA to "see": ingest images/video frames and extract structured
+  // information via a local multimodal model. Gated by DINA_VISION_ENABLED on
+  // the server; when disabled the module returns a clear "disabled" status
+  // instead of doing anything. All heavy lifting (validation, security, model
+  // inference) lives in the vision module — these routes only translate HTTP
+  // <-> DUMP and map the module's typed error codes to HTTP statuses.
+
+  console.log('👁️ Setting up Vision Module API routes...');
+
+  // Shared helper: route a vision DUMP message and unwrap the double-wrapped
+  // response, mapping a VisionError payload (carrying http_status) to HTTP.
+  const runVisionRequest = async (
+    req: AuthenticatedRequest,
+    res: Response,
+    method: string,
+    payload: any,
+    priority = 6
+  ): Promise<void> => {
+    const visionMessage = createDinaMessage({
+      source: { module: 'api', version: '1.0.0' },
+      target: { module: 'vision', method, priority },
+      security: {
+        user_id: req.dina!.dina_key,
+        session_id: req.dina!.session_id,
+        clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+        sanitized: true,
+      },
+      payload,
+    });
+
+    const response = await dina.handleIncomingMessage(visionMessage);
+    // orchestrator wraps the handler return at response.payload.data
+    const data = response.payload?.data;
+
+    // A typed VisionError surfaces as { error: true, code, http_status, ... }.
+    if (data && data.error === true && typeof data.http_status === 'number') {
+      res.status(data.http_status).json({
+        error: data.code || 'VISION_ERROR',
+        message: data.message || 'Vision request failed',
+        details: data.details,
+        auth_info: { trust_level: req.dina?.trust_level },
+      });
+      return;
+    }
+
+    if (response.status === 'error') {
+      res.status(500).json({
+        error: response.error?.code || 'VISION_ERROR',
+        message: response.error?.message || 'Vision request failed',
+      });
+      return;
+    }
+
+    res.json({
+      ...data,
+      auth_info: {
+        trust_level: req.dina?.trust_level,
+        rate_limit_remaining: req.dina?.rate_limit_remaining,
+      },
+    });
+  };
+
+  // Vision status (fast; no model call)
+  apiRouter.get('/vision/status', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      await runVisionRequest(req, res, 'vision_status', { detailed: true }, 7);
+    } catch (error) {
+      console.error('❌ Error getting Vision status:', error);
+      res.status(500).json({ error: 'Failed to get Vision status', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // Analyze a still image. body: { base64 | url, task?, question?, model?, force_refresh? }
+  apiRouter.post('/vision/analyze-image', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { base64, url, image, task, question, model, force_refresh } = req.body || {};
+      if (!base64 && !url && !image) {
+        res.status(400).json({ error: 'Bad Request', message: 'Provide an image as "base64" (data URI ok) or "url"' });
+        return;
+      }
+      // Pixels go under `media` (a nested object) so the DUMP sanitizer — which
+      // only touches top-level strings — cannot corrupt the base64. See the
+      // orchestrator's processVisionRequest for the full rationale.
+      await runVisionRequest(req, res, 'vision_analyze_image', {
+        media: { base64, url, image }, task, question, model, force_refresh: force_refresh === true,
+      }, 6);
+    } catch (error) {
+      console.error('❌ Error in Vision analyze-image:', error);
+      res.status(500).json({ error: 'Vision analyze failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // Describe an image (natural-language caption). body: { base64 | url, model? }
+  apiRouter.post('/vision/describe', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { base64, url, image, model } = req.body || {};
+      if (!base64 && !url && !image) {
+        res.status(400).json({ error: 'Bad Request', message: 'Provide an image as "base64" or "url"' });
+        return;
+      }
+      await runVisionRequest(req, res, 'vision_describe', { media: { base64, url, image }, model }, 6);
+    } catch (error) {
+      console.error('❌ Error in Vision describe:', error);
+      res.status(500).json({ error: 'Vision describe failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // OCR — read text from an image. body: { base64 | url, model? }
+  apiRouter.post('/vision/ocr', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { base64, url, image, model } = req.body || {};
+      if (!base64 && !url && !image) {
+        res.status(400).json({ error: 'Bad Request', message: 'Provide an image as "base64" or "url"' });
+        return;
+      }
+      await runVisionRequest(req, res, 'vision_ocr', { media: { base64, url, image }, model }, 6);
+    } catch (error) {
+      console.error('❌ Error in Vision OCR:', error);
+      res.status(500).json({ error: 'Vision OCR failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // Visual question answering. body: { base64 | url, question, model? }
+  apiRouter.post('/vision/ask', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { base64, url, image, question, model } = req.body || {};
+      if (!base64 && !url && !image) {
+        res.status(400).json({ error: 'Bad Request', message: 'Provide an image as "base64" or "url"' });
+        return;
+      }
+      if (!question || String(question).trim().length === 0) {
+        res.status(400).json({ error: 'Bad Request', message: 'A "question" is required for /vision/ask' });
+        return;
+      }
+      await runVisionRequest(req, res, 'vision_ask', { media: { base64, url, image }, question, model }, 6);
+    } catch (error) {
+      console.error('❌ Error in Vision ask:', error);
+      res.status(500).json({ error: 'Vision ask failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // Analyze a video. body: { frames: [{base64, timestampSec}], task?, model?, durationSec? }
+  apiRouter.post('/vision/analyze-video', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { frames, base64, task, model, mimeType, durationSec } = req.body || {};
+      if (!Array.isArray(frames) && !base64) {
+        res.status(400).json({ error: 'Bad Request', message: 'Provide "frames" (array of frame images) or raw video "base64"' });
+        return;
+      }
+      // frames/raw-video bytes go under `media` (nested) to bypass the top-level
+      // string sanitizer, same as the image routes.
+      await runVisionRequest(req, res, 'vision_analyze_video', { media: { frames, base64, mimeType, durationSec }, task, model }, 6);
+    } catch (error) {
+      console.error('❌ Error in Vision analyze-video:', error);
+      res.status(500).json({ error: 'Vision analyze-video failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // Vision retention sweep (trusted users only)
+  apiRouter.post('/vision/prune', requireTrustLevel('trusted'), async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      await runVisionRequest(req, res, 'vision_prune', {}, 3);
+    } catch (error) {
+      console.error('❌ Error in Vision prune:', error);
+      res.status(500).json({ error: 'Vision prune failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // ================================
   // TRUTHSTREAM ROUTES (Mirror Module - DUMP Protocol)
   // ================================
   registerTruthStreamRoutes(apiRouter, dina, createDinaMessage, mapTrustLevelToSecurityLevel);
@@ -1881,7 +2069,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // Mount the router
   app.use(apiPath, apiRouter);
 
-console.log(`   📡 API mounted at ${apiPath} (Mirror, DIGIM, LLM, Admin, TruthStream, PersonalAnalysis)`);
+console.log(`   📡 API mounted at ${apiPath} (Mirror, DIGIM, Vision, LLM, Admin, TruthStream, PersonalAnalysis)`);
 
   // Optional: Add a routes listing endpoint
   apiRouter.get('/routes', (req: AuthenticatedRequest, res: Response) => {
@@ -1910,13 +2098,20 @@ console.log(`   📡 API mounted at ${apiPath} (Mirror, DIGIM, LLM, Admin, Truth
         'GET  /mirror/truthstream/health - TruthStream health check',
         'GET /digim/status - DIGIM system status',
         'POST /digim/query - Natural language queries',
-        'GET /digim/sources - List data sources'
+        'GET /digim/sources - List data sources',
+        'GET /vision/status - Vision (DIVIS) subsystem status',
+        'POST /vision/analyze-image - Structured image analysis (caption/objects/tags/ocr/colours)',
+        'POST /vision/describe - Natural-language image description',
+        'POST /vision/ocr - Read text from an image',
+        'POST /vision/ask - Visual question answering',
+        'POST /vision/analyze-video - Analyze video frames + temporal synthesis'
       ],
       trusted: [
         'GET /mirror/context - Get detailed user context',
         'GET /mirror/history - Get submission history',
         'POST /mirror/export - Export user data',
         'GET /mirror/analytics - Get analytics overview',
+        'POST /vision/prune - Vision retention sweep',
         'GET /admin/* - Administrative endpoints',
         'POST /debug/* - Debug endpoints'
       ]
