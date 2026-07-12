@@ -99,8 +99,16 @@ ${fencedSources}`;
  */
 export function parseTriples(raw: string, sourceUrls: string[], max: number): ExtractedTriple[] {
   const obj = tryParseJson(raw);
-  if (obj == null) return [];
-  const arr: any[] = Array.isArray(obj) ? obj : Array.isArray(obj.triples) ? obj.triples : [];
+  let arr: any[] = [];
+  if (obj != null) {
+    arr = Array.isArray(obj) ? obj : Array.isArray(obj.triples) ? obj.triples : [];
+  }
+  // Truncation-resilient fallback: a response cut off at the token limit yields an
+  // unterminated array that JSON.parse rejects — salvage the COMPLETE triple
+  // objects (a partial trailing object simply has no closing brace and is skipped).
+  if (arr.length === 0) {
+    arr = salvageTripleObjects(raw);
+  }
 
   const out: ExtractedTriple[] = [];
   for (const t of arr) {
@@ -134,6 +142,26 @@ export function parseTriples(raw: string, sourceUrls: string[], max: number): Ex
 // ----------------------------------------------------------------------------
 // INTERNAL
 // ----------------------------------------------------------------------------
+
+/**
+ * Recover complete flat triple objects from a (possibly truncated) response.
+ * Triple objects contain no nested braces, so `{...}` with no inner `{`/`}`
+ * matches each complete one; a cut-off trailing object lacks its `}` and is
+ * skipped — so a token-limit truncation degrades to "fewer triples", never zero.
+ */
+function salvageTripleObjects(raw: string): any[] {
+  const out: any[] = [];
+  const matches = (raw || '').match(/\{[^{}]*\}/g) || [];
+  for (const m of matches) {
+    if (!/"subject"\s*:/.test(m)) continue;
+    try {
+      out.push(JSON.parse(m));
+    } catch {
+      /* skip a malformed fragment */
+    }
+  }
+  return out;
+}
 
 function str(v: any): string {
   return typeof v === 'string' ? v.trim() : (v == null ? '' : String(v).trim());
