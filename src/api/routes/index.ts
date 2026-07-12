@@ -1956,6 +1956,55 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
+  // UNIFIED analyze — the caller specifies WHAT (kind) and the task in one place.
+  // body: {
+  //   kind?: 'image'|'video'|'auto'   (default 'auto' → inferred from payload)
+  //   task?: 'describe'|'caption'|'objects'|'ocr'|'tags'|'vqa'|'full'  (default 'full')
+  //   question?, model?, max_frames?, force_refresh?, durationSec?,
+  //   // image sources:  base64 | url | image
+  //   // video source:   frames:[{base64,timestampSec}] | base64
+  // }
+  // A video is just a series of images, so the same task set applies either way.
+  apiRouter.post('/vision/analyze', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const b = req.body || {};
+      const hasImage = !!(b.base64 || b.url || b.image);
+      const hasFrames = Array.isArray(b.frames) && b.frames.length > 0;
+      if (!hasImage && !hasFrames) {
+        res.status(400).json({
+          error: 'Bad Request',
+          message: 'Provide an image ("base64" | "url") or video ("frames" | "base64" with kind:"video")',
+        });
+        return;
+      }
+      if (b.task === 'vqa' && (!b.question || String(b.question).trim().length === 0)) {
+        res.status(400).json({ error: 'Bad Request', message: 'Task "vqa" requires a "question"' });
+        return;
+      }
+      // Everything the two pipelines might need goes under `media` (nested, so the
+      // DUMP sanitizer can't touch the bytes); the routing knobs stay top-level.
+      await runVisionRequest(req, res, 'vision_analyze', {
+        kind: b.kind,
+        task: b.task,
+        question: b.question,
+        model: b.model,
+        max_frames: b.max_frames,
+        force_refresh: b.force_refresh === true,
+        media: {
+          base64: b.base64,
+          url: b.url,
+          image: b.image,
+          frames: hasFrames ? b.frames : undefined,
+          mimeType: b.mimeType,
+          durationSec: b.durationSec,
+        },
+      }, 6);
+    } catch (error) {
+      console.error('❌ Error in Vision analyze:', error);
+      res.status(500).json({ error: 'Vision analyze failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
   // Analyze a still image. body: { base64 | url, task?, question?, model?, force_refresh? }
   apiRouter.post('/vision/analyze-image', async (req: AuthenticatedRequest, res: Response) => {
     try {
@@ -2025,17 +2074,25 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
-  // Analyze a video. body: { frames: [{base64, timestampSec}], task?, model?, durationSec? }
+  // Analyze a video (a series of frames). The SAME task set as images applies
+  // (describe / ocr / vqa / full / …), run per-frame and aggregated across time.
+  // body: { frames:[{base64,timestampSec}] | base64, task?, question?, model?, max_frames?, durationSec? }
   apiRouter.post('/vision/analyze-video', async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { frames, base64, task, model, mimeType, durationSec } = req.body || {};
+      const { frames, base64, task, question, model, mimeType, durationSec, max_frames } = req.body || {};
       if (!Array.isArray(frames) && !base64) {
         res.status(400).json({ error: 'Bad Request', message: 'Provide "frames" (array of frame images) or raw video "base64"' });
         return;
       }
+      if (task === 'vqa' && (!question || String(question).trim().length === 0)) {
+        res.status(400).json({ error: 'Bad Request', message: 'Video task "vqa" requires a "question"' });
+        return;
+      }
       // frames/raw-video bytes go under `media` (nested) to bypass the top-level
       // string sanitizer, same as the image routes.
-      await runVisionRequest(req, res, 'vision_analyze_video', { media: { frames, base64, mimeType, durationSec }, task, model }, 6);
+      await runVisionRequest(req, res, 'vision_analyze_video', {
+        media: { frames, base64, mimeType, durationSec }, task, question, model, max_frames,
+      }, 6);
     } catch (error) {
       console.error('❌ Error in Vision analyze-video:', error);
       res.status(500).json({ error: 'Vision analyze-video failed', message: error instanceof Error ? error.message : 'Unknown error' });
@@ -2100,11 +2157,12 @@ console.log(`   📡 API mounted at ${apiPath} (Mirror, DIGIM, Vision, LLM, Admi
         'POST /digim/query - Natural language queries',
         'GET /digim/sources - List data sources',
         'GET /vision/status - Vision (DIVIS) subsystem status',
+        'POST /vision/analyze - Unified: kind (image|video|auto) + task in one call',
         'POST /vision/analyze-image - Structured image analysis (caption/objects/tags/ocr/colours)',
         'POST /vision/describe - Natural-language image description',
         'POST /vision/ocr - Read text from an image',
         'POST /vision/ask - Visual question answering',
-        'POST /vision/analyze-video - Analyze video frames + temporal synthesis'
+        'POST /vision/analyze-video - Analyze a video (per-frame task + temporal aggregation)'
       ],
       trusted: [
         'GET /mirror/context - Get detailed user context',

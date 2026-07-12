@@ -2,23 +2,38 @@
 // ============================================================================
 // VIDEO ANALYZER
 // ============================================================================
-// A video is analysed as a bounded sequence of frames plus a temporal
-// synthesis. The flow:
-//   1. Analyse each sampled frame as an image (bounded concurrency).
-//   2. Aggregate per-frame observations (union of objects/tags).
-//   3. Ask a TEXT model to synthesise the ordered frame descriptions into one
-//      narrative + a timeline — this is where "motion over time" is reasoned
-//      about, since a single VLM call only sees stills.
+// A video is just a series of images, so analysing one = analysing each sampled
+// frame with the SAME task the caller asked for, then AGGREGATING the per-frame
+// results across time. The task drives both halves:
 //
-// Every frame analysis is isolated: one frame failing (e.g. a transient model
-// error) degrades that frame to a marker instead of failing the whole video.
+//   task            per-frame call     aggregation
+//   ─────────────   ───────────────    ─────────────────────────────────────────
+//   describe/full/  'full'             temporal narrative (text model) + object/
+//   caption/objects/                   tag union + timeline
+//   tags
+//   ocr             'ocr'              de-duplicated transcript + text timeline
+//   vqa             'vqa' (+question)  one reconciled answer (text model)
+//
+// Robustness: every per-frame call is ISOLATED — one frame failing (transient
+// model error) degrades to a marker instead of sinking the whole video. The
+// cross-frame synthesis is best-effort with a deterministic fallback, so a
+// synthesis failure never fails the request.
 // ============================================================================
 
 import { VisionModelClient } from '../ollama/visionModel';
 import { ImageAnalyzer } from './imageAnalyzer';
-import { buildVideoSynthesisPrompt } from './promptTemplates';
+import { buildVideoSynthesisPrompt, buildVideoAnswerPrompt } from './promptTemplates';
+import { unionStrings, aggregateOcr, meanConfidence } from './videoAggregation';
 import { NormalizedFrame } from '../ingestion/videoIngestor';
-import { FrameAnalysis, VideoAnalysis, VisionError } from '../types';
+import { FrameAnalysis, VideoAnalysis, VisionTask, VisionError } from '../types';
+
+export interface VideoAnalyzeOptions {
+  task: VisionTask;
+  question?: string;
+  frameConcurrency: number;
+  synthesisModel: string;
+  model?: string;
+}
 
 /** Run tasks with a fixed concurrency cap, preserving input order in the output. */
 async function mapWithConcurrency<T, R>(
@@ -45,16 +60,19 @@ export class VideoAnalyzer {
     private readonly imageAnalyzer: ImageAnalyzer
   ) {}
 
-  async analyze(
-    frames: NormalizedFrame[],
-    opts: { frameConcurrency: number; synthesisModel: string; model?: string } = {
-      frameConcurrency: 2,
-      synthesisModel: 'mistral:7b',
-    }
-  ): Promise<VideoAnalysis> {
+  async analyze(frames: NormalizedFrame[], opts: VideoAnalyzeOptions): Promise<VideoAnalysis> {
     if (!frames || frames.length === 0) {
       throw new VisionError('NO_FRAMES', 'Video analysis requires at least one frame', 400);
     }
+    const task = opts.task;
+    if (task === 'vqa' && (!opts.question || opts.question.trim().length === 0)) {
+      throw new VisionError('MISSING_QUESTION', 'Video task "vqa" requires a non-empty question', 400);
+    }
+
+    // Each frame is analysed with the per-frame task best suited to the request.
+    // For the description-family tasks we use 'full' so we also collect
+    // objects/tags/colours for aggregation; ocr/vqa use their own task.
+    const perFrameTask: VisionTask = task === 'ocr' ? 'ocr' : task === 'vqa' ? 'vqa' : 'full';
 
     // ---- 1. Per-frame analysis (bounded concurrency, isolated failures) ----
     const frameAnalyses: FrameAnalysis[] = await mapWithConcurrency(
@@ -62,15 +80,17 @@ export class VideoAnalyzer {
       opts.frameConcurrency,
       async (frame): Promise<FrameAnalysis> => {
         try {
-          const analysis = await this.imageAnalyzer.analyze(frame.image, 'full', { model: opts.model });
+          const analysis = await this.imageAnalyzer.analyze(frame.image, perFrameTask, {
+            question: opts.question,
+            model: opts.model,
+          });
           return { index: frame.index, timestampSec: frame.timestampSec, analysis };
         } catch (err: any) {
-          // Isolate: a single frame failing must not sink the whole video.
           return {
             index: frame.index,
             timestampSec: frame.timestampSec,
             analysis: {
-              task: 'full',
+              task: perFrameTask,
               caption: `[frame analysis failed: ${err?.message || 'unknown error'}]`,
               objects: [],
               tags: [],
@@ -85,38 +105,97 @@ export class VideoAnalyzer {
       }
     );
 
-    // ---- 2. Aggregate observations across frames ----
-    const objects = unionStrings(frameAnalyses.flatMap((f) => f.analysis.objects));
-    const tags = unionStrings(frameAnalyses.flatMap((f) => f.analysis.tags));
-    const avgConfidence =
-      frameAnalyses.reduce((s, f) => s + (f.analysis.confidence || 0), 0) / frameAnalyses.length;
+    const confidence = meanConfidence(frameAnalyses.map((f) => f.analysis.confidence));
 
-    // ---- 3. Temporal synthesis via a text model ----
-    const descriptions = frameAnalyses.map((f) => f.analysis.caption || '(no description)');
+    // ---- 2. Task-specific aggregation ----
+    if (task === 'ocr') {
+      return this.aggregateOcrTask(task, frameAnalyses, confidence);
+    }
+    if (task === 'vqa') {
+      return this.aggregateVqaTask(task, opts.question!, frameAnalyses, opts.synthesisModel, confidence);
+    }
+    return this.aggregateDescribeTask(task, frameAnalyses, opts.synthesisModel, confidence);
+  }
+
+  // ---- OCR: de-duplicated transcript + text timeline ----
+  private aggregateOcrTask(task: VisionTask, frames: FrameAnalysis[], confidence: number): VideoAnalysis {
+    const { text, timeline } = aggregateOcr(
+      frames.map((f) => ({ timestampSec: f.timestampSec, text: f.analysis.text || '' }))
+    );
+    const summary = text
+      ? `Text read from ${timeline.length} of ${frames.length} sampled frame(s).`
+      : 'No legible text detected in the sampled frames.';
+    return {
+      task,
+      frameCount: frames.length,
+      frames,
+      summary,
+      timeline,
+      objects: [],
+      tags: [],
+      text,
+      confidence,
+    };
+  }
+
+  // ---- VQA: reconcile per-frame answers into one ----
+  private async aggregateVqaTask(
+    task: VisionTask,
+    question: string,
+    frames: FrameAnalysis[],
+    synthesisModel: string,
+    confidence: number
+  ): Promise<VideoAnalysis> {
+    const perFrameAnswers = frames.map((f) => (f.analysis.answer || f.analysis.caption || '').trim());
+    let answer: string;
+    try {
+      const prompt = buildVideoAnswerPrompt(question, perFrameAnswers.map((a) => a || '(no answer)'));
+      const res = await this.model.generateText(prompt, synthesisModel);
+      answer = res.text.trim();
+    } catch {
+      // Fallback: surface the distinct frame answers.
+      answer = unionStrings(perFrameAnswers.filter(Boolean)).join(' ');
+    }
+    const timeline = frames.map((f) => ({
+      timestampSec: f.timestampSec,
+      description: (f.analysis.answer || f.analysis.caption || '').trim(),
+    }));
+    return {
+      task,
+      frameCount: frames.length,
+      frames,
+      summary: answer,
+      timeline,
+      objects: [],
+      tags: [],
+      answer,
+      confidence,
+    };
+  }
+
+  // ---- describe / caption / full / objects / tags: temporal narrative ----
+  private async aggregateDescribeTask(
+    task: VisionTask,
+    frames: FrameAnalysis[],
+    synthesisModel: string,
+    confidence: number
+  ): Promise<VideoAnalysis> {
+    const objects = unionStrings(frames.flatMap((f) => f.analysis.objects));
+    const tags = unionStrings(frames.flatMap((f) => f.analysis.tags));
+    const descriptions = frames.map((f) => f.analysis.caption || '(no description)');
+
     let summary = '';
     let timeline: Array<{ timestampSec: number | null; description: string }> = [];
     try {
-      const synthesis = await this.synthesize(descriptions, opts.synthesisModel);
+      const synthesis = await this.synthesize(descriptions, synthesisModel);
       summary = synthesis.summary;
-      timeline = this.buildTimeline(frameAnalyses, synthesis.timelineLines);
+      timeline = this.buildTimeline(frames, synthesis.timelineLines);
     } catch {
-      // Synthesis is best-effort — fall back to a concatenated summary.
       summary = descriptions.filter(Boolean).join(' ');
-      timeline = frameAnalyses.map((f) => ({
-        timestampSec: f.timestampSec,
-        description: f.analysis.caption,
-      }));
+      timeline = frames.map((f) => ({ timestampSec: f.timestampSec, description: f.analysis.caption }));
     }
 
-    return {
-      frameCount: frameAnalyses.length,
-      frames: frameAnalyses,
-      summary,
-      timeline,
-      objects,
-      tags,
-      confidence: Number(avgConfidence.toFixed(2)),
-    };
+    return { task, frameCount: frames.length, frames, summary, timeline, objects, tags, confidence };
   }
 
   /** Call the text model to synthesise per-frame descriptions into a narrative. */
@@ -146,7 +225,6 @@ export class VideoAnalyzer {
     lines: string[]
   ): Array<{ timestampSec: number | null; description: string }> {
     if (lines.length > 0) {
-      // Map synthesised lines onto frame timestamps positionally.
       return lines.map((description, i) => ({
         timestampSec: frames[i]?.timestampSec ?? null,
         description,
@@ -154,17 +232,4 @@ export class VideoAnalyzer {
     }
     return frames.map((f) => ({ timestampSec: f.timestampSec, description: f.analysis.caption }));
   }
-}
-
-function unionStrings(values: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const v of values) {
-    const key = v.trim().toLowerCase();
-    if (key && !seen.has(key)) {
-      seen.add(key);
-      out.push(v.trim());
-    }
-  }
-  return out.slice(0, 40);
 }

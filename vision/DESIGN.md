@@ -39,7 +39,8 @@ src/modules/vision/
 ├── ingestion/
 │   ├── imageProbe.ts          Pure-TS magic-byte format + dimension detection.
 │   ├── imageIngestor.ts       RawImageInput (base64|bytes|url) → NormalizedImage.
-│   └── videoIngestor.ts       Frame sampling (pure) + optional ffmpeg extraction.
+│   ├── videoIngestor.ts       Frame sampling + per-call frame cap + optional ffmpeg.
+│   └── mediaKind.ts           Pure image-vs-video detection for the unified entry.
 ├── security/
 │   └── imageGuard.ts          The fail-closed choke point (size/format/bomb).
 ├── ollama/
@@ -47,8 +48,9 @@ src/modules/vision/
 ├── analysis/
 │   ├── promptTemplates.ts     Task prompts (caption/describe/objects/ocr/tags/vqa/full).
 │   ├── structuredParser.ts    Robust JSON extraction + ImageAnalysis coercion.
-│   ├── imageAnalyzer.ts       One image → one ImageAnalysis.
-│   └── videoAnalyzer.ts       Frames → per-frame analyses → temporal synthesis.
+│   ├── videoAggregation.ts    Pure cross-frame aggregation (union / OCR dedupe / mean).
+│   ├── imageAnalyzer.ts       One image → one ImageAnalysis (any task).
+│   └── videoAnalyzer.ts       Frames → per-frame task → task-specific aggregation.
 ├── storage/
 │   └── visionStore.ts         Own DB tables + Redis cache + dedup (best-effort).
 ├── visionOrchestrator.ts      Public facade: analyzeImage/analyzeVideo/describe/ocr/ask.
@@ -78,21 +80,33 @@ DUMP vision_analyze_image
       6. cache store          → ImageAnalysisResult
 ```
 
-### Video
+### Video (a series of images — same task set)
 
 ```
-DUMP vision_analyze_video
-  → VisionOrchestrator.analyzeVideo()
+DUMP vision_analyze_video  (or vision_analyze with kind:video/auto)
+  → VisionOrchestrator.analyzeVideo({ task, question?, maxFrames? })
     1. ingestVideo()          frames[] (preferred) OR raw video + ffmpeg
-                              → sampleFrameIndices() bounds to maxVideoFrames
+                              → clampFrames(maxFrames, cfg.maxVideoFrames)
+                              → sampleFrameIndices() spreads picks over the timeline
                               → each frame through imageGuard
-    2. VideoAnalyzer
+    2. VideoAnalyzer.analyze(frames, { task })   per-frame task = the request's task
        a. per-frame analysis  bounded concurrency; a failing frame is ISOLATED
                               (degraded to a marker, never sinks the job)
-       b. aggregate           union of objects/tags, mean confidence
-       c. temporal synthesis  text model over ordered frame captions
-                              → summary + timeline
-    3. store (best-effort)    → VideoAnalysisResult
+       b. aggregate BY TASK   describe/full/… → object/tag union + temporal
+                                                narrative (text model) + timeline
+                              ocr             → de-duplicated transcript + text timeline
+                              vqa             → one reconciled answer (text model)
+    3. store (best-effort)    → VideoAnalysisResult { task, summary, timeline,
+                                                       objects, tags, text?, answer? }
+```
+
+### Unified entry (`vision_analyze`)
+
+```
+DUMP vision_analyze  { kind: image|video|auto, task, ... }
+  → detectMediaKind(media, kind)     explicit wins; 'auto' infers video from
+                                     frames / video-mime / duration, else image
+  → dispatch to the image or video pipeline above
 ```
 
 ---

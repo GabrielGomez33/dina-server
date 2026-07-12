@@ -17,7 +17,8 @@ import { digiMOrchestrator} from '../../modules/digim';
 import { isDigiMMessage } from '../../modules/digim/types';
 import { mirrorModule } from '../../modules/mirror';
 import { getVisionOrchestrator } from '../../modules/vision';
-import { VisionError } from '../../modules/vision/types';
+import { VisionError, isMediaKind } from '../../modules/vision/types';
+import { detectMediaKind } from '../../modules/vision/ingestion/mediaKind';
 import { v4 as uuidv4 } from 'uuid';
 import { performance } from 'perf_hooks';
 
@@ -823,9 +824,13 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
    * layer can translate it to the right HTTP status.
    *
    * Supported methods:
+   *   vision_analyze                          (unified — kind: image|video|auto)
    *   vision_analyze_image | vision_describe | vision_ocr | vision_ask
    *   vision_analyze_video
    *   vision_status | vision_health | vision_prune
+   *
+   * A video is treated as a series of images: the SAME task set (describe / ocr /
+   * vqa / full / …) applies, analysed per-frame and aggregated across time.
    */
   private async processVisionRequest(message: DinaUniversalMessage): Promise<any> {
     const method = message.target.method;
@@ -846,49 +851,33 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
         case 'vision_prune':
           return await vision.prune();
 
+        // Unified entry point: the caller says WHAT (kind) and the task; we
+        // dispatch to the image or video pipeline. kind defaults to 'auto',
+        // which infers video when the payload carries frames / a video mime /
+        // a duration, else image.
+        case 'vision_analyze': {
+          const media = this.extractMedia(data);
+          const kind = detectMediaKind(media, isMediaKind(data.kind) ? data.kind : 'auto');
+          return kind === 'video'
+            ? await this.runVisionVideo(data, media, userId)
+            : await this.runVisionImage(data, media, data.task || 'full', userId);
+        }
+
         case 'vision_analyze_image':
         case 'vision_describe':
         case 'vision_ocr':
         case 'vision_ask': {
-          // IMPORTANT: image bytes are read from the NESTED `media` object.
-          // DinaProtocol.sanitizeMessage() strips /on\w+\s*=/gi from every
-          // TOP-LEVEL string in payload.data — which would silently corrupt a
-          // base64 string that happens to contain such a substring. Nested
-          // objects are left untouched by the sanitizer, so carrying pixels in
-          // `media` keeps them byte-exact. (See extractImageInput.)
-          const media = (data.media && typeof data.media === 'object') ? data.media : data;
-          const image = this.extractImageInput(media);
+          const media = this.extractMedia(data);
           const task =
             method === 'vision_describe' ? 'describe' :
             method === 'vision_ocr' ? 'ocr' :
             method === 'vision_ask' ? 'vqa' :
             (data.task || 'full');
-          return await vision.analyzeImage(image, {
-            task,
-            question: data.question,
-            forceRefresh: data.force_refresh === true || data.forceRefresh === true,
-            model: data.model,
-            userId,
-          });
+          return await this.runVisionImage(data, media, task, userId);
         }
 
-        case 'vision_analyze_video': {
-          // Same nesting rationale: frames/raw-video bytes live under `media`.
-          const media = (data.media && typeof data.media === 'object') ? data.media : data;
-          const videoInput = {
-            frames: Array.isArray(media.frames) ? media.frames : undefined,
-            base64: typeof media.base64 === 'string' ? media.base64 : undefined,
-            mimeType: media.mimeType || media.mime_type,
-            filename: media.filename,
-            durationSec: typeof media.durationSec === 'number' ? media.durationSec :
-                         typeof media.duration_sec === 'number' ? media.duration_sec : undefined,
-          };
-          return await vision.analyzeVideo(videoInput, {
-            task: data.task || 'full',
-            model: data.model,
-            userId,
-          });
-        }
+        case 'vision_analyze_video':
+          return await this.runVisionVideo(data, this.extractMedia(data), userId);
 
         default:
           throw new Error(`Unknown vision method: ${method}`);
@@ -910,8 +899,53 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
   }
 
   /**
-   * Pull a RawImageInput out of a DUMP payload, tolerating the common field
-   * spellings a caller (or the mirror-server) might use.
+   * Pull the media sub-object out of a DUMP payload. Pixels are carried in a
+   * NESTED `media` object on purpose: DinaProtocol.sanitizeMessage() strips
+   * /on\w+\s*=/gi from every TOP-LEVEL string in payload.data, which would
+   * silently corrupt a base64 string containing such a substring. Nested objects
+   * are left untouched, so `media` keeps the bytes byte-exact. Falls back to the
+   * flat payload for direct DUMP callers that didn't nest.
+   */
+  private extractMedia(data: any): any {
+    return data && data.media && typeof data.media === 'object' ? data.media : data;
+  }
+
+  /** Shared image-analysis dispatch used by the explicit + unified methods. */
+  private async runVisionImage(data: any, media: any, task: any, userId?: string): Promise<any> {
+    const image = this.extractImageInput(media);
+    return await getVisionOrchestrator().analyzeImage(image, {
+      task,
+      question: data.question,
+      forceRefresh: data.force_refresh === true || data.forceRefresh === true,
+      model: data.model,
+      userId,
+    });
+  }
+
+  /** Shared video-analysis dispatch used by the explicit + unified methods. */
+  private async runVisionVideo(data: any, media: any, userId?: string): Promise<any> {
+    const videoInput = {
+      frames: Array.isArray(media.frames) ? media.frames : undefined,
+      base64: typeof media.base64 === 'string' ? media.base64 : undefined,
+      mimeType: media.mimeType || media.mime_type,
+      filename: media.filename,
+      durationSec: typeof media.durationSec === 'number' ? media.durationSec :
+                   typeof media.duration_sec === 'number' ? media.duration_sec : undefined,
+    };
+    const maxFrames = typeof data.max_frames === 'number' ? data.max_frames :
+                      typeof data.maxFrames === 'number' ? data.maxFrames : undefined;
+    return await getVisionOrchestrator().analyzeVideo(videoInput, {
+      task: data.task || 'full',
+      question: data.question,
+      model: data.model,
+      maxFrames,
+      userId,
+    });
+  }
+
+  /**
+   * Pull a RawImageInput out of a media payload, tolerating the common field
+   * spellings a caller might use.
    */
   private extractImageInput(data: any): { base64?: string; url?: string; mimeType?: string; filename?: string } {
     if (!data || typeof data !== 'object') {

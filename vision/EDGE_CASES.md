@@ -72,7 +72,21 @@ Two parts:
 | 36 | Body larger than global 10 MB JSON limit | `/vision/*` gets its own `DINA_VISION_MAX_BODY_MB` (32) parser; other routes unchanged | code (`api/routes/index.ts`) |
 | 37 | DUMP sanitizer corrupting base64 | `DinaProtocol.sanitizeMessage` strips `/on\w+\s*=/gi` from **top-level** strings; pixels are carried in a **nested** `media` object the sanitizer never touches | code (`api/routes/index.ts` + `orchestrator.processVisionRequest`) |
 
-**Hermetic result:** `npm run test:vision` → **81 passed, 0 failed**.
+### Tasks & video (a series of images)
+
+| # | Edge case | Handling | Proven by |
+|---|---|---|---|
+| 38 | Unknown `task` value | `INVALID_TASK` (400) listing allowed tasks — never silently defaulted | `task/kind guards`, `resolveTask` (code) |
+| 39 | `task: vqa` without a question (image or video) | `MISSING_QUESTION` (400) at route + orchestrator + analyzer | code (3 layers) |
+| 40 | Ambiguous media (image vs video) | `detectMediaKind`: explicit `kind` wins; `auto` infers from frames / video-mime / duration | `detectMediaKind — explicit wins, else infer` |
+| 41 | Caller asks for more/fewer frames | `clampFrames` bounds `max_frames` to `[1, cfg.maxVideoFrames]` | `clampFrames — per-call budget bounded` |
+| 42 | Repeated caption/subtitle across many frames (OCR) | `aggregateOcr` de-duplicates lines case-insensitively; timeline keeps only frames with text | `aggregateOcr — de-dupe across frames` |
+| 43 | Same object/tag seen in many frames | `unionStrings` de-dupes case-insensitively, order-preserving, capped | `unionStrings — dedupe, order, cap` |
+| 44 | One frame's model call fails mid-video | Isolated to a degraded marker; other frames + aggregation proceed | code (`videoAnalyzer` try/catch) |
+| 45 | Cross-frame synthesis (narrative/answer) fails | Best-effort; deterministic fallback (join / union) — request never fails | code (`videoAnalyzer` try/catch) |
+| 46 | Video `vqa` across frames | Per-frame answers reconciled into one via the text model | code (`aggregateVqaTask`) |
+
+**Hermetic result:** `npm run test:vision` → **121 passed, 0 failed**.
 
 ---
 

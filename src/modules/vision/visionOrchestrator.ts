@@ -32,6 +32,8 @@ import {
   VisionStatus,
   VisionTask,
   VisionError,
+  VISION_TASKS,
+  isVisionTask,
 } from './types';
 
 export class VisionOrchestrator {
@@ -89,8 +91,22 @@ export class VisionOrchestrator {
     }
   }
 
-  private resolveTask(task?: VisionTask): VisionTask {
-    return task || 'full';
+  /**
+   * Resolve + VALIDATE the requested task. An unknown task is rejected with a
+   * helpful error listing the allowed values rather than silently defaulting —
+   * fail loud on bad input, don't guess.
+   */
+  private resolveTask(task?: VisionTask | string): VisionTask {
+    if (task === undefined || task === null || task === '') return 'full';
+    if (!isVisionTask(task)) {
+      throw new VisionError(
+        'INVALID_TASK',
+        `Unknown task "${task}". Allowed: ${VISION_TASKS.join(', ')}`,
+        400,
+        { allowed: VISION_TASKS }
+      );
+    }
+    return task;
   }
 
   // ------------------------------------------------------------------
@@ -163,11 +179,18 @@ export class VisionOrchestrator {
     const task = this.resolveTask(opts.task);
     const model = (opts.model && opts.model.trim()) || this.cfg.visionModel;
 
-    // 1. Ingest → bounded, validated, timeline-ordered frames.
-    const frames = await ingestVideo(input, this.cfg);
+    // 'vqa' over a video needs a question, same as an image.
+    if (task === 'vqa' && (!opts.question || opts.question.trim().length === 0)) {
+      throw new VisionError('MISSING_QUESTION', 'Task "vqa" requires a non-empty question', 400);
+    }
 
-    // 2. Analyse frames + synthesise a temporal narrative.
+    // 1. Ingest → bounded, validated, timeline-ordered frames (per-call frame cap).
+    const frames = await ingestVideo(input, this.cfg, { maxFrames: opts.maxFrames });
+
+    // 2. Analyse each frame with the requested task + aggregate across time.
     const analysis = await this.videoAnalyzer.analyze(frames, {
+      task,
+      question: opts.question,
       frameConcurrency: this.cfg.frameConcurrency,
       synthesisModel: this.cfg.synthesisModel,
       model,

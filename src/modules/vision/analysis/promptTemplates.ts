@@ -63,3 +63,19 @@ export function buildVideoSynthesisPrompt(frameDescriptions: string[]): string {
     numbered
   );
 }
+
+/**
+ * Prompt used to synthesise per-frame answers to a question into ONE answer for
+ * the whole video. Each frame was asked the same question independently; this
+ * reconciles them across time.
+ */
+export function buildVideoAnswerPrompt(question: string, perFrameAnswers: string[]): string {
+  const numbered = perFrameAnswers.map((a, i) => `Frame ${i + 1}: ${a}`).join('\n');
+  return (
+    `A question was asked about a video. Below are the answers derived from each ` +
+    `sampled frame independently, earliest first. Reconcile them into ONE concise, ` +
+    `factual answer for the whole video. If frames disagree, note what changes over ` +
+    `time. Base the answer ONLY on the frame answers; do not invent details.\n\n` +
+    `Question: ${question.trim()}\n\n${numbered}`
+  );
+}

@@ -69,7 +69,8 @@ export function sampleFrameIndices(total: number, max: number): number[] {
  */
 export async function ingestVideo(
   input: RawVideoInput,
-  cfg: VisionRuntimeConfig = getVisionConfig()
+  cfg: VisionRuntimeConfig = getVisionConfig(),
+  opts: { maxFrames?: number } = {}
 ): Promise<NormalizedFrame[]> {
   if (!cfg.videoEnabled) {
     throw new VisionError('VIDEO_DISABLED', 'Video analysis is disabled (set DINA_VISION_VIDEO_ENABLED=true)', 403);
@@ -78,9 +79,13 @@ export async function ingestVideo(
     throw new VisionError('INVALID_INPUT', 'Video input must be an object', 400);
   }
 
+  // Per-call frame budget, always clamped to the config ceiling so a caller can
+  // ask for FEWER frames (faster) but never more than the operator allows.
+  const effectiveMax = clampFrames(opts.maxFrames, cfg.maxVideoFrames);
+
   // Path 1: caller supplied frames.
   if (Array.isArray(input.frames) && input.frames.length > 0) {
-    return normalizeSuppliedFrames(input.frames, input.durationSec, cfg);
+    return normalizeSuppliedFrames(input.frames, input.durationSec, cfg, effectiveMax);
   }
 
   // Path 2: raw video → ffmpeg extraction (only if configured).
@@ -92,19 +97,26 @@ export async function ingestVideo(
         400
       );
     }
-    return extractFramesWithFfmpeg(input, cfg);
+    return extractFramesWithFfmpeg(input, cfg, effectiveMax);
   }
 
   throw new VisionError('NO_VIDEO_SOURCE', 'Provide either "frames" (preferred) or raw video "base64"/"bytes".', 400);
+}
+
+/** Clamp a requested frame budget to [1, ceiling]; fall back to ceiling when unset/invalid. */
+export function clampFrames(requested: number | undefined, ceiling: number): number {
+  if (requested === undefined || !Number.isFinite(requested)) return ceiling;
+  return Math.min(Math.max(1, Math.floor(requested)), ceiling);
 }
 
 /** Validate + sample caller-supplied frames. */
 async function normalizeSuppliedFrames(
   frames: VideoFrameInput[],
   durationSec: number | undefined,
-  cfg: VisionRuntimeConfig
+  cfg: VisionRuntimeConfig,
+  maxFrames: number
 ): Promise<NormalizedFrame[]> {
-  const picks = sampleFrameIndices(frames.length, cfg.maxVideoFrames);
+  const picks = sampleFrameIndices(frames.length, maxFrames);
   const out: NormalizedFrame[] = [];
   let totalBytes = 0;
 
@@ -144,7 +156,11 @@ function inferTimestamp(index: number, total: number, durationSec?: number): num
  * frame limit), reads the JPEGs back, then cleans up. Fully bounded and always
  * removes its temp dir.
  */
-async function extractFramesWithFfmpeg(input: RawVideoInput, cfg: VisionRuntimeConfig): Promise<NormalizedFrame[]> {
+async function extractFramesWithFfmpeg(
+  input: RawVideoInput,
+  cfg: VisionRuntimeConfig,
+  maxFrames: number
+): Promise<NormalizedFrame[]> {
   const videoBuf = input.base64 != null ? Buffer.from(stripDataUri(input.base64), 'base64') : toBuffer(input.bytes!);
   if (videoBuf.length === 0) {
     throw new VisionError('EMPTY_VIDEO', 'Video payload is empty', 400);
@@ -166,7 +182,7 @@ async function extractFramesWithFfmpeg(input: RawVideoInput, cfg: VisionRuntimeC
       '-loglevel', 'error',
       '-i', inPath,
       '-vf', `fps=${cfg.frameSampleFps}`,
-      '-frames:v', String(cfg.maxVideoFrames),
+      '-frames:v', String(maxFrames),
       '-f', 'image2',
       pattern,
     ];

@@ -13,8 +13,10 @@ DINA modules. It only *reuses proven infrastructure* (the DUMP protocol, the API
 request/response flow, the SSRF guard), never another module's domain logic.
 
 **First-class capabilities:** scene description, text reading (OCR), and visual
-question answering (VQA). It runs a **local** vision model on the GPU — no image
-bytes leave the box.
+question answering (VQA) — over **both images and video**. A video is just a
+series of images, so the *same task set* applies: DINA analyses sampled frames
+and aggregates across time. It runs a **local** vision model on the GPU — no
+media bytes leave the box.
 
 The **runtime code** lives where it must to compile and run inside the existing
 build (`tsconfig` compiles `src/`):
@@ -103,24 +105,31 @@ own model client, routed through the DUMP protocol). It is:
 
 ### Capabilities
 
-**This milestone — full image analysis** (the three first-class tasks + a
-combined structured pass):
+Images and video share one capability surface. The **unified endpoint** lets the
+caller say *what* (kind) and *which task* in one call; the explicit endpoints are
+convenience shortcuts.
 
 | DUMP method | HTTP route | What it does |
 |---|---|---|
+| `vision_analyze` | `POST /vision/analyze` | **Unified** — `kind: image\|video\|auto` + any `task` in one call |
 | `vision_analyze_image` | `POST /vision/analyze-image` | Full structured pass: caption + objects + tags + OCR text + colours |
 | `vision_describe` | `POST /vision/describe` | Rich natural-language **scene description** |
 | `vision_ocr` | `POST /vision/ocr` | **Read text** visible in the image (OCR) |
 | `vision_ask` | `POST /vision/ask` | **Visual question answering** (VQA) |
+| `vision_analyze_video` | `POST /vision/analyze-video` | Analyze a video: per-frame task + **temporal aggregation** |
 | `vision_status` | `GET /vision/status` | Subsystem status & advisories |
 | `vision_prune` | `POST /vision/prune` | Retention sweep (trusted only) |
 
-**Scaffolded but dormant — video (next phase, out of this milestone's scope):**
-the `vision_analyze_video` path (frame sampling → per-frame analysis → temporal
-synthesis) is built and unit-tested but is intentionally **not part of the image
-milestone**. It exists as isolated, gated code so a later phase can turn it on
-without a rewrite; it can also be removed cleanly if you'd rather keep the module
-image-only for now.
+**Tasks** (apply to images *and* per-frame to video): `describe`, `caption`,
+`objects`, `ocr`, `tags`, `vqa` (needs a `question`), `full` (default —
+everything at once).
+
+**Video = a series of images.** DINA samples a bounded set of frames, runs the
+requested task on each, then aggregates across time — a temporal narrative +
+timeline for `describe`/`full`, a de-duplicated transcript for `ocr`, and one
+reconciled answer for `vqa`. `max_frames` trades depth for latency (clamped to
+the operator ceiling). Frames are supplied by the client (browser
+`<video>`→`<canvas>`) or extracted server-side if `DINA_VISION_FFMPEG_PATH` is set.
 
 ---
 
@@ -175,6 +184,39 @@ curl -X POST https://localhost:8445/dina/api/v1/vision/analyze-image \
 }
 ```
 
+### Example — video, unified endpoint
+
+```bash
+curl -X POST https://localhost:8445/dina/api/v1/vision/analyze \
+  -H 'Content-Type: application/json' -H 'x-user-key: <key>' \
+  -d '{
+        "kind": "video", "task": "describe", "max_frames": 8,
+        "frames": [
+          { "base64": "data:image/jpeg;base64,/9j/...", "timestampSec": 0 },
+          { "base64": "data:image/jpeg;base64,/9j/...", "timestampSec": 2 }
+        ]
+      }'
+```
+
+```jsonc
+{
+  "mediaId": "…", "frameCount": 2, "task": "describe", "model": "qwen2.5vl:7b",
+  "analysis": {
+    "task": "describe",
+    "summary": "A person walks up to a door, pauses, then opens it and steps inside.",
+    "timeline": [
+      { "timestampSec": 0, "description": "A person approaches a wooden door." },
+      { "timestampSec": 2, "description": "The door is open; the person steps through." }
+    ],
+    "objects": ["person", "door"], "tags": ["indoor", "entrance"],
+    "confidence": 0.8
+  }
+}
+```
+
+For `task: "ocr"` the video result adds a de-duplicated `text` transcript; for
+`task: "vqa"` (with a `question`) it adds a single reconciled `answer`.
+
 ---
 
 ## 4. Proofs (this is verifiable, not asserted)
@@ -185,8 +227,8 @@ All of the following were run in this environment against the pinned toolchain:
 |---|---|---|
 | **No build disruption** — the whole project still type-checks after every change | `npm run type-check` | **exit 0, clean** |
 | **Full compile+emit** — the whole project (incl. vision) emits to JS | `npm run build` | **exit 0** |
-| **Pure-logic correctness** — 81 hermetic assertions over probing, the security guard, frame sampling, and parsing | `npm run test:vision` | **81 passed, 0 failed** |
-| **Minimal blast radius** — only 5 existing files touched, all additive | `git diff --stat` | **+363 / −4** |
+| **Pure-logic correctness** — 121 hermetic assertions over probing, the security guard, frame sampling, media-kind detection, OCR aggregation, and parsing | `npm run test:vision` | **121 passed, 0 failed** |
+| **Minimal blast radius** — only additive changes to 5 existing shared files | `git diff --stat` | additive only |
 
 The live-service paths (real model inference, DB persistence, remote fetch)
 require a running Ollama + MySQL + Redis and are covered by the reproducible

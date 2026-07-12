@@ -19,17 +19,19 @@ src/modules/vision/                         # the whole subsystem
   ingestion/imageProbe.ts
   ingestion/imageIngestor.ts
   ingestion/videoIngestor.ts
+  ingestion/mediaKind.ts                     # pure image-vs-video detection
   security/imageGuard.ts
   ollama/visionModel.ts
   analysis/promptTemplates.ts
   analysis/structuredParser.ts
+  analysis/videoAggregation.ts               # pure cross-frame aggregation
   analysis/imageAnalyzer.ts
   analysis/videoAnalyzer.ts
   storage/visionStore.ts
   visionOrchestrator.ts
   index.ts
 migrations/002_vision_schema.ts             # vision_media + vision_analysis
-test/vision/visionEdgeCases.ts              # 81 hermetic assertions
+test/vision/visionEdgeCases.ts              # 121 hermetic assertions
 vision/                                      # this deliverable/docs package
 ```
 
@@ -146,13 +148,34 @@ POST .../vision/ocr             Body: { "base64": "<img>" }        → analysis.
 POST .../vision/ask             Body: { "base64": "<img>", "question": "…" }   → analysis.answer
 ```
 
+**Analyze a video** (a series of frames — same task set, aggregated over time)
+```
+POST .../vision/analyze-video
+Body: { "frames": [ { "base64": "<jpg>", "timestampSec": 0 }, … ],
+        "task": "describe", "max_frames": 8 }
+```
+Response: `{ frameCount, task, analysis: { summary, timeline[], objects[], tags[], text?, answer? } }`
+
+**Unified** — say the kind + task in one place; kind `auto` infers image vs video
+```
+POST .../vision/analyze
+Body: { "kind": "auto", "task": "ocr", "base64": "<img>" }              // image
+Body: { "kind": "video", "task": "vqa", "question": "…", "frames": [ … ] }  // video
+```
+
 Notes for callers:
-- Send the image as `base64` (a `data:` URI is accepted) — the route nests it
+- Send bytes as `base64` (a `data:` URI is accepted). The routes nest media
   internally so the DUMP sanitizer can never corrupt the bytes.
+- A video is just a series of images — the same tasks apply per-frame: `describe`
+  /`full` → narrative + timeline, `ocr` → de-duplicated transcript, `vqa` → one
+  reconciled answer. `max_frames` trades depth for latency (clamped to the
+  operator ceiling `DINA_VISION_MAX_VIDEO_FRAMES`).
+- Extract video frames client-side (`<video>`→`<canvas>`→`toDataURL`); no ffmpeg
+  is needed on the server unless you send raw video with `DINA_VISION_FFMPEG_PATH` set.
 - Respect the documented limits (image ≤ `DINA_VISION_MAX_IMAGE_BYTES`, HTTP body
-  ≤ `DINA_VISION_MAX_BODY_MB`); downscale very large images client-side first.
-- The video route (`/vision/analyze-video`) exists but is out of the current
-  image milestone's scope — see the README's Capabilities note.
+  ≤ `DINA_VISION_MAX_BODY_MB`); downscale very large media client-side first.
+- `task: "vqa"` requires a `question`; an unknown `task` returns `INVALID_TASK`
+  (400) listing the allowed values.
 
 ### Error handling
 Every failure returns the typed shape the client can branch on:

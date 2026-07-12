@@ -26,7 +26,13 @@ import {
   decodeBase64Image,
   validateImageBuffer,
 } from '../../src/modules/vision/security/imageGuard';
-import { sampleFrameIndices } from '../../src/modules/vision/ingestion/videoIngestor';
+import { sampleFrameIndices, clampFrames } from '../../src/modules/vision/ingestion/videoIngestor';
+import { detectMediaKind } from '../../src/modules/vision/ingestion/mediaKind';
+import {
+  unionStrings,
+  aggregateOcr,
+  meanConfidence,
+} from '../../src/modules/vision/analysis/videoAggregation';
 import {
   extractJsonObject,
   parseFullAnalysis,
@@ -36,7 +42,7 @@ import {
   __rebuildVisionConfigForTests,
   VisionRuntimeConfig,
 } from '../../src/modules/vision/config/visionConfig';
-import { VisionError } from '../../src/modules/vision/types';
+import { VisionError, isVisionTask, isMediaKind } from '../../src/modules/vision/types';
 
 // ----------------------------------------------------------------------------
 // Tiny assertion framework (matches test/digim/webEdgeCases.ts conventions)
@@ -345,6 +351,68 @@ async function main(): Promise<void> {
 
     const garbage = testConfig({ DINA_VISION_MAX_IMAGE_BYTES: 'not-a-number' });
     ok(garbage.maxImageBytes > 0, 'garbage int env → falls back to a sane default');
+  });
+
+  await section('task/kind guards — isVisionTask / isMediaKind', () => {
+    for (const t of ['describe', 'caption', 'objects', 'ocr', 'tags', 'vqa', 'full']) {
+      ok(isVisionTask(t), `valid task ${t}`);
+    }
+    ok(!isVisionTask('summarize'), 'unknown task rejected');
+    ok(!isVisionTask(''), 'empty task rejected');
+    ok(!isVisionTask(42), 'non-string task rejected');
+    ok(isMediaKind('image') && isMediaKind('video') && isMediaKind('auto'), 'valid kinds accepted');
+    ok(!isMediaKind('audio'), 'unknown kind rejected');
+  });
+
+  await section('detectMediaKind — explicit wins, else infer', () => {
+    eq(detectMediaKind({ base64: 'x' }, 'video'), 'video', 'explicit video honoured even with image payload');
+    eq(detectMediaKind({ frames: [{}] }, 'image'), 'image', 'explicit image honoured even with frames');
+    eq(detectMediaKind({ base64: 'x' }, 'auto'), 'image', 'auto: base64 only → image');
+    eq(detectMediaKind({ frames: [{ base64: 'a' }] }, 'auto'), 'video', 'auto: frames → video');
+    eq(detectMediaKind({ frames: [] }, 'auto'), 'image', 'auto: empty frames → image');
+    eq(detectMediaKind({ mimeType: 'video/mp4' }, 'auto'), 'video', 'auto: video mime → video');
+    eq(detectMediaKind({ mimeType: 'image/png' }, 'auto'), 'image', 'auto: image mime → image');
+    eq(detectMediaKind({ durationSec: 12 }, 'auto'), 'video', 'auto: duration → video');
+    eq(detectMediaKind({}, 'auto'), 'image', 'auto: nothing → image (default)');
+  });
+
+  await section('clampFrames — per-call budget bounded by ceiling', () => {
+    eq(clampFrames(5, 12), 5, 'within range kept');
+    eq(clampFrames(100, 12), 12, 'above ceiling clamped down');
+    eq(clampFrames(0, 12), 1, 'zero floored to 1');
+    eq(clampFrames(-3, 12), 1, 'negative floored to 1');
+    eq(clampFrames(undefined, 12), 12, 'unset → ceiling');
+    eq(clampFrames(NaN, 12), 12, 'NaN → ceiling');
+    eq(clampFrames(3.9, 12), 3, 'fractional floored');
+  });
+
+  await section('unionStrings — dedupe, order, cap', () => {
+    eq(JSON.stringify(unionStrings(['a', 'b', 'a', 'B'])), JSON.stringify(['a', 'b']), 'case-insensitive dedupe, order-preserving');
+    eq(JSON.stringify(unionStrings([' x ', 'x'])), JSON.stringify(['x']), 'trims + dedupes');
+    eq(unionStrings(Array.from({ length: 100 }, (_, i) => `t${i}`), 5).length, 5, 'cap respected');
+    eq(JSON.stringify(unionStrings([])), JSON.stringify([]), 'empty → empty');
+  });
+
+  await section('aggregateOcr — de-dupe text across frames + timeline', () => {
+    const res = aggregateOcr([
+      { timestampSec: 0, text: 'STOP' },
+      { timestampSec: 1, text: '' },
+      { timestampSec: 2, text: 'STOP\nYIELD' },
+      { timestampSec: 3, text: 'yield' },
+    ]);
+    // "STOP" and "YIELD" each appear once despite repetition/case.
+    eq(res.text, 'STOP\nYIELD', 'combined transcript de-duplicated case-insensitively');
+    eq(res.timeline.length, 3, 'timeline has only the 3 frames with text');
+    eq(res.timeline[0].timestampSec, 0, 'timeline keeps timestamps');
+    const empty = aggregateOcr([{ timestampSec: 0, text: '' }, { timestampSec: 1, text: '   ' }]);
+    eq(empty.text, '', 'no text → empty transcript');
+    eq(empty.timeline.length, 0, 'no text → empty timeline');
+  });
+
+  await section('meanConfidence', () => {
+    eq(meanConfidence([1, 0.5, 0]), 0.5, 'mean computed');
+    eq(meanConfidence([]), 0, 'empty → 0');
+    eq(meanConfidence([0.8, NaN, 0.6]), 0.7, 'non-finite ignored');
   });
 
   // --------------------------------------------------------------------------

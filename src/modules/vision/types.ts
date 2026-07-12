@@ -27,6 +27,21 @@ export const VISION_TASKS: readonly VisionTask[] = [
   'full',
 ] as const;
 
+/** Runtime guard: is `x` one of the supported vision tasks? (pure) */
+export function isVisionTask(x: unknown): x is VisionTask {
+  return typeof x === 'string' && (VISION_TASKS as readonly string[]).includes(x);
+}
+
+/** The kind of media a caller is submitting. 'auto' = infer from the payload. */
+export type MediaKind = 'image' | 'video' | 'auto';
+
+export const MEDIA_KINDS: readonly MediaKind[] = ['image', 'video', 'auto'] as const;
+
+/** Runtime guard for MediaKind (pure). */
+export function isMediaKind(x: unknown): x is MediaKind {
+  return typeof x === 'string' && (MEDIA_KINDS as readonly string[]).includes(x);
+}
+
 /** How the caller delivered the pixels. Exactly one must be provided. */
 export interface RawImageInput {
   /** Base64-encoded image bytes. May be a bare base64 string or a data: URI. */
@@ -119,6 +134,8 @@ export interface FrameAnalysis {
 
 /** Structured result of analysing a video (sequence of frames + temporal synthesis). */
 export interface VideoAnalysis {
+  /** The task that was applied to every frame + the aggregation. */
+  task: VisionTask;
   /** Number of frames actually analysed. */
   frameCount: number;
   /** Per-frame results in timeline order. */
@@ -131,6 +148,10 @@ export interface VideoAnalysis {
   objects: string[];
   /** Union of tags across frames. */
   tags: string[];
+  /** For task 'ocr': all text read across the video, de-duplicated. */
+  text?: string;
+  /** For task 'vqa': a single answer synthesised across the frames. */
+  answer?: string;
   /** Confidence in [0,1]. */
   confidence: number;
 }
@@ -146,6 +167,12 @@ export interface AnalyzeOptions {
   model?: string;
   /** Identity for storage/audit. */
   userId?: string;
+  /**
+   * Video only: cap the number of frames analysed for THIS call. Clamped to
+   * [1, config.maxVideoFrames]; when absent the config default is used. Lets a
+   * caller trade depth for latency without a config change.
+   */
+  maxFrames?: number;
 }
 
 /** What analyzeImage returns to the orchestrator's callers. */

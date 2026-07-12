@@ -21,12 +21,14 @@ export {
 } from './security/imageGuard';
 
 export { ingestImage, toBuffer } from './ingestion/imageIngestor';
-export { ingestVideo, sampleFrameIndices } from './ingestion/videoIngestor';
+export { ingestVideo, sampleFrameIndices, clampFrames } from './ingestion/videoIngestor';
 export type { NormalizedFrame } from './ingestion/videoIngestor';
+export { detectMediaKind } from './ingestion/mediaKind';
 
 export { VisionModelClient } from './ollama/visionModel';
 export { ImageAnalyzer } from './analysis/imageAnalyzer';
 export { VideoAnalyzer } from './analysis/videoAnalyzer';
+export { unionStrings, aggregateOcr, meanConfidence } from './analysis/videoAggregation';
 export { parseFullAnalysis, parseSingleTask, extractJsonObject } from './analysis/structuredParser';
 export { buildPrompt, VISION_SYSTEM_PROMPT } from './analysis/promptTemplates';
 export { VisionStore } from './storage/visionStore';
