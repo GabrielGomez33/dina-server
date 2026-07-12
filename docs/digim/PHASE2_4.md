@@ -92,6 +92,36 @@ migration (sandbox has no MySQL).
 incl. LLM-failure → `[]`), tsc clean, no regression. Config-gated
 (`DIGIM_WEB_GRAPH_ENABLED=false`).
 
+### Live verification (production, 2026-07-12)
+
+`digim_research` (graph enabled) on the Iran–USA topic → `graph_relationships_added: 8`,
+then `digim_graph {"query":"Iran"}` returned the populated graph:
+- 6 entities, 8 relationships; `Iran` correctly resolved as the most-connected node
+  (`mention_count: 8`, merged from all mentions).
+- Readable edges, e.g. `United States —launched_strikes_on→ Iran`,
+  `Iran —struck→ Qatari-flagged vessel al-Rakiyat`.
+
+Two live-exposed bugs, both fixed & proven in isolation:
+1. **Extraction truncated at the 1200-token synthesis budget** → unterminated JSON →
+   0 triples. Fixed: dedicated `DIGIM_WEB_GRAPH_EXTRACT_MAX_TOKENS` (3000) +
+   truncation-salvage parser.
+2. **`getSubgraph` bound `LIMIT ?`** — mysql2 `pool.execute` (prepared statements)
+   rejects a parameterized LIMIT (`ER_WRONG_ARGUMENTS`); the query threw, caught,
+   returned empty despite stored data. Proven via `execute+LIMIT? FAILS /
+   query+LIMIT? OK`. Fixed: inline the clampInt-validated limit.
+
+End-to-end proven on production: research → entity/relationship extraction →
+alias resolution → provenance storage → queryable subgraph.
+
+### Known extraction-quality items (2.4b-3 polish)
+
+From the live data: near-duplicate/generic entities ("three vessels" vs "three
+commercial vessels", "a container ship") and verbose non-canonical predicates
+("launched_a_series_of_powerful_strikes_against" vs "launched_strikes_on" — same
+edge, corroboration stuck at 1). Fix via a tighter extraction prompt (canonical
+short predicates, skip generic entities, date only real events) + light predicate
+normalization.
+
 ### 2.4b-3 — Renderers (next)
 
 The interactive network / temporal / semantic views over the populated graph.
