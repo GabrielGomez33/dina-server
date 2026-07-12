@@ -553,9 +553,12 @@ async  initialize(): Promise<void> {
 
     const sub = await this.webResearch.graph(focus, { maxNodes: requestData?.max_nodes });
     const stats = await this.webResearch.getGraphStats();
+    // Resolve edge endpoints to names so the relationships are directly readable.
+    const nameById = new Map(sub.nodes.map((n) => [n.id, n.name]));
     return {
       status: 'success',
       focus: sub.focus,
+      matched_focus: sub.matchedFocus,
       suggested_view: sub.suggestedView,
       node_count: sub.nodes.length,
       edge_count: sub.edges.length,
@@ -564,7 +567,9 @@ async  initialize(): Promise<void> {
         occurred_at: n.occurredAt, weight: n.mentionCount,
       })),
       edges: sub.edges.map((e) => ({
-        subject: e.subjectId, predicate: e.predicate, object: e.objectId,
+        from: nameById.get(e.subjectId) || e.subjectId,
+        predicate: e.predicate,
+        to: nameById.get(e.objectId) || e.objectId,
         corroboration: e.corroborationCount, confidence: e.confidence,
         occurred_at: e.occurredAt, sources: e.sources || [],
       })),
