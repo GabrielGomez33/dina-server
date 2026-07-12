@@ -107,7 +107,7 @@ export class WebResearchOrchestrator {
     this.memory = new SemanticMemory(this.llmManager, cfg);
     // Relationship graph (Phase 2.4b): extractor reuses the LLM; store is DB-backed.
     this.graphStore = new GraphStore(cfg);
-    this.graphExtractor = new GraphExtractor(cfg, { generate: (p) => this.generateText(p, 'digim_graph_extract') });
+    this.graphExtractor = new GraphExtractor(cfg, { generate: (p) => this.generateText(p, 'digim_graph_extract', cfg.graphExtractMaxTokens) });
   }
 
   get enabled(): boolean {
@@ -461,11 +461,12 @@ export class WebResearchOrchestrator {
     }
   }
 
-  /** LLM text generation with a hard timeout (used by the planner's decompose). */
-  private async generateText(prompt: string, task: string): Promise<string> {
+  /** LLM text generation with a hard timeout (used by the planner + graph extractor). */
+  private async generateText(prompt: string, task: string, maxTokens?: number): Promise<string> {
+    const budget = maxTokens ?? this.cfg.synthesisMaxTokens;
     const generation = this.llmManager.generate(prompt, {
-      maxTokens: this.cfg.synthesisMaxTokens,
-      max_tokens: this.cfg.synthesisMaxTokens,
+      maxTokens: budget,
+      max_tokens: budget,
       temperature: 0.3,
       model_preference: this.cfg.synthesisModel,
       task,
