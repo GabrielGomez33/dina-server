@@ -79,11 +79,22 @@ semantic precedence + empty/edge cases), DB-row mapping. tsc clean; no regressio
 Config-gated (`DIGIM_WEB_GRAPH_ENABLED=false`). Live DB round-trip verified after
 migration (sandbox has no MySQL).
 
-### 2.4b-2 — Extraction + query (NEXT)
+### 2.4b-2 — Extraction + query (DONE)
 
-LLM triple extraction from gathered content (reusing injection fencing) → upsert
-into the store; `digim_graph` returns a topic's subgraph + suggested view; wire
-extraction into research/investigate. Then the renderers.
+| Piece | File | Role |
+|---|---|---|
+| **GraphExtractor** | `web/graph/graphExtractor.ts` | LLM triple extraction from gathered docs; content **fenced + sanitized** (same promptGuard as synthesis) + `INJECTION_SYSTEM_RULE`. Injected LLM dep; pure `parseTriples` maps source-number → URL. |
+| **Wiring** | `webResearchOrchestrator.ts` | When `graphEnabled`, `research()` extracts triples after synthesis and upserts them (best-effort, fully guarded). `investigate()` populates the graph across all facets automatically. |
+| **Query** | `digim_graph` (DUMP) + `POST /digim/graph` + `DigimClient.graph()` | Returns a focus's subgraph (nodes + edges + provenance) and the recommended view. |
+
+`digim_research` now reports `graph_relationships_added`. Verified: **graph 39/39**
+(adds source-number→URL mapping, self-loop/junk drops, extractor orchestration
+incl. LLM-failure → `[]`), tsc clean, no regression. Config-gated
+(`DIGIM_WEB_GRAPH_ENABLED=false`).
+
+### 2.4b-3 — Renderers (next)
+
+The interactive network / temporal / semantic views over the populated graph.
 
 ## Verification
 

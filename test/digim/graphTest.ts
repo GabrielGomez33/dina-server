@@ -13,6 +13,8 @@
 import { canonicalizeEntityName, normalizePredicate, normalizeEntityType } from '../../src/modules/digim/web/graph/entityResolution';
 import { suggestView } from '../../src/modules/digim/web/graph/graphView';
 import { rowToNode, rowToEdge } from '../../src/modules/digim/web/graph/graphStore';
+import { parseTriples, GraphExtractor } from '../../src/modules/digim/web/graph/graphExtractor';
+import { DigimWebConfig } from '../../src/modules/digim/web/config/webConfig';
 
 let passed = 0;
 let failed = 0;
@@ -24,7 +26,11 @@ function ok(cond: boolean, name: string): void {
 function section(t: string): void { console.log(`\n▶ ${t}`); }
 const canon = canonicalizeEntityName;
 
-function main(): void {
+function extractorCfg(): DigimWebConfig {
+  return { graphExtractMaxDocs: 6, graphMaxTriples: 40, synthesisPerDocChars: 2000 } as DigimWebConfig;
+}
+
+async function main(): Promise<void> {
   console.log('=== DIGIM Phase 2.4b — Relationship Graph Edge Cases ===');
 
   // --------------------------------------------------------------------------
@@ -75,6 +81,39 @@ function main(): void {
   ok(e.subjectId === 'a' && e.objectId === 'b' && e.predicate === 'launched' && e.corroborationCount === 3, 'edge row mapped');
   ok(Math.abs(e.confidence - 0.8) < 1e-9, 'confidence coerced from string decimal');
 
+  // --------------------------------------------------------------------------
+  section('parseTriples — maps source numbers to URLs, drops junk, clamps');
+  const urls = ['https://a.com', 'https://b.com'];
+  const good = parseTriples('{"triples":[{"subject":"US","predicate":"launched","object":"Operation Epic Fury","objectType":"event","occurredAt":"2026-02-28","source":1,"confidence":0.9}]}', urls, 40);
+  ok(good.length === 1 && good[0].sourceUrl === 'https://a.com', 'source number → URL');
+  ok(good[0].objectType === 'event' && good[0].occurredAt!.startsWith('2026-02-28'), 'event type + occurredAt parsed');
+  ok(parseTriples('{"triples":[{"subject":"X","predicate":"p","object":"Y","source":9}]}', urls, 40)[0].sourceUrl === '', 'out-of-range source → empty URL');
+  ok(parseTriples('{"triples":[{"subject":"X","predicate":"p"}]}', urls, 40).length === 0, 'missing object → dropped');
+  ok(parseTriples('{"triples":[{"subject":"Iran","predicate":"is","object":"iran","source":1}]}', urls, 40).length === 0, 'self-loop dropped');
+  ok(parseTriples('{"triples":[{"subject":"a","predicate":"p","object":"b"},{"subject":"c","predicate":"p","object":"d"}]}', urls, 1).length === 1, 'clamped to max');
+  ok(parseTriples('not json', urls, 40).length === 0, 'garbage → []');
+
+  // --------------------------------------------------------------------------
+  section('GraphExtractor.extract — orchestration (mock LLM)');
+  {
+    let genCalls = 0;
+    const ext = new GraphExtractor(extractorCfg(), {
+      generate: async () => { genCalls++; return '{"triples":[{"subject":"US","predicate":"sanctioned","object":"Iran","source":1,"confidence":0.8}]}'; },
+    });
+    const triples = await ext.extract([{ title: 'T', url: 'https://src.example/1', content: 'US sanctioned Iran.' }]);
+    ok(triples.length === 1 && triples[0].sourceUrl === 'https://src.example/1', 'extracted triple carries its source URL');
+    ok(genCalls === 1, 'one batched LLM call');
+  }
+  {
+    const ext = new GraphExtractor(extractorCfg(), { generate: async () => { throw new Error('LLM down'); } });
+    ok((await ext.extract([{ title: 'T', url: 'u', content: 'c' }])).length === 0, 'LLM failure → [] (never throws)');
+  }
+  {
+    let genCalls = 0;
+    const ext = new GraphExtractor(extractorCfg(), { generate: async () => { genCalls++; return '{}'; } });
+    ok((await ext.extract([])).length === 0 && genCalls === 0, 'empty docs → [] with no LLM call');
+  }
+
   console.log(`\n=== RESULTS: ${passed} passed, ${failed} failed ===`);
   if (failed > 0) {
     console.error('FAILED:\n - ' + failures.join('\n - '));
@@ -84,4 +123,4 @@ function main(): void {
   process.exit(0);
 }
 
-main();
+main().catch((err) => { console.error('test harness crashed:', err); process.exit(1); });
