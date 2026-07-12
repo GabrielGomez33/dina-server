@@ -169,6 +169,17 @@ export interface DigimWebConfig {
   browserBreakerThreshold: number;
   /** Circuit-breaker cooldown (ms) before probing the browser again. */
   browserBreakerCooldownMs: number;
+
+  // ---- Public source tools (Phase 2.3 — SourceTool role) ----
+  /**
+   * Enabled non-search discovery sources (subset of 'wikipedia' | 'hn' | 'feeds').
+   * Empty (default) = no extra sources; discovery is search-provider + seeds only.
+   */
+  sources: string[];
+  /** RSS/Atom feed URLs polled by the FeedTool (only used when 'feeds' is enabled). */
+  feedUrls: string[];
+  /** Max candidates each source contributes per query. */
+  sourceMaxResults: number;
 }
 
 // ----------------------------------------------------------------------------
@@ -199,6 +210,17 @@ function envCsv(name: string, fallback: string[]): string[] {
   if (v === undefined || v.trim().length === 0) return dedupe(fallback);
   const parts = v.split(',').map((s) => s.trim().toLowerCase()).filter((s) => s.length > 0);
   return parts.length > 0 ? dedupe(parts) : dedupe(fallback);
+}
+
+/**
+ * Parse a comma-separated env var WITHOUT lower-casing or de-duplicating —
+ * preserves case and order. For values like URLs where case is significant.
+ */
+function envCsvRaw(name: string, fallback: string[]): string[] {
+  const v = process.env[name];
+  if (v === undefined || v.trim().length === 0) return fallback;
+  const parts = v.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+  return parts.length > 0 ? parts : fallback;
 }
 
 /** Parse a comma-separated env var of integers (ports). Invalid entries dropped. */
@@ -311,6 +333,10 @@ function buildConfig(): DigimWebConfig {
     browserOn403: envBool('DIGIM_WEB_BROWSER_ON_403', true),
     browserBreakerThreshold: clampInt(envInt('DIGIM_WEB_BROWSER_BREAKER_THRESHOLD', 3), 1, 100),
     browserBreakerCooldownMs: clampInt(envInt('DIGIM_WEB_BROWSER_BREAKER_COOLDOWN_MS', 60000), 1000, 3600000),
+
+    sources: envCsv('DIGIM_WEB_SOURCES', []),
+    feedUrls: envCsvRaw('DIGIM_WEB_FEED_URLS', []),
+    sourceMaxResults: clampInt(envInt('DIGIM_WEB_SOURCE_MAX_RESULTS', 5), 1, 50),
   });
 }
 
@@ -356,6 +382,9 @@ function logConfigOnce(cfg: DigimWebConfig): void {
   console.log(`   • synthesis: model=${cfg.synthesisModel} maxTokens=${cfg.synthesisMaxTokens} docs=${cfg.synthesisMaxDocuments}`);
   if (cfg.browserEnabled) {
     console.log(`   • browser: mode=${cfg.browserMode} endpoint=${cfg.browserWsEndpoint || '(none)'} concurrency=${cfg.browserConcurrency} navTimeout=${cfg.browserNavTimeoutMs}ms`);
+  }
+  if (cfg.sources.length > 0) {
+    console.log(`   • sources: [${cfg.sources.join(', ')}]${cfg.sources.includes('feeds') ? ` feeds=${cfg.feedUrls.length}` : ''} maxPerSource=${cfg.sourceMaxResults}`);
   }
   if (!cfg.enabled) {
     console.log('   • ℹ️ DIGIM web-research is DISABLED (set DIGIM_WEB_ENABLED=true to activate).');

@@ -27,6 +27,7 @@
     "test:migration": "ts-node test/digim/migrationTest.ts",
     "test:memory": "ts-node test/digim/memoryTest.ts",
     "test:tools": "ts-node test/digim/toolTest.ts",
+    "test:sources": "ts-node test/digim/sourceTest.ts",
     "type-check": "tsc --noEmit"
   },
   "keywords": [
