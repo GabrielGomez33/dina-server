@@ -10,7 +10,7 @@
 //   run:  npx ts-node test/digim/graphTest.ts   (npm run test:graph)
 // ============================================================================
 
-import { canonicalizeEntityName, normalizePredicate, normalizeEntityType } from '../../src/modules/digim/web/graph/entityResolution';
+import { canonicalizeEntityName, normalizePredicate, normalizeEntityType, isLowValueEntity } from '../../src/modules/digim/web/graph/entityResolution';
 import { suggestView } from '../../src/modules/digim/web/graph/graphView';
 import { rowToNode, rowToEdge } from '../../src/modules/digim/web/graph/graphStore';
 import { parseTriples, GraphExtractor } from '../../src/modules/digim/web/graph/graphExtractor';
@@ -51,6 +51,17 @@ async function main(): Promise<void> {
   ok(normalizePredicate('launched') === 'launched', 'single word');
   ok(normalizePredicate('is the Chokepoint-For!!') === 'is_the_chokepoint_for', 'punctuation collapsed');
   ok(normalizePredicate('') === 'related_to', 'empty → related_to fallback');
+  ok(normalizePredicate('the struck') === 'struck', 'leading article dropped');
+
+  // --------------------------------------------------------------------------
+  section('isLowValueEntity — drop generic/indefinite/pronoun references (2.4b polish)');
+  ok(isLowValueEntity('a container ship') === true, '"a container ship" → low value');
+  ok(isLowValueEntity('three vessels') === true, '"three vessels" → low value');
+  ok(isLowValueEntity('3 ships') === true, '"3 ships" → low value');
+  ok(isLowValueEntity('they') === true && isLowValueEntity('it') === true, 'pronouns → low value');
+  ok(isLowValueEntity('the government') === false, '"the government" kept (canonicalizer handles "the")');
+  ok(isLowValueEntity('Iran') === false && isLowValueEntity('United States') === false, 'named entities kept');
+  ok(isLowValueEntity('Qatari-flagged vessel al-Rakiyat') === false, 'specific named vessel kept');
 
   // --------------------------------------------------------------------------
   section('normalizeEntityType — synonyms → enum');
@@ -87,10 +98,12 @@ async function main(): Promise<void> {
   const good = parseTriples('{"triples":[{"subject":"US","predicate":"launched","object":"Operation Epic Fury","objectType":"event","occurredAt":"2026-02-28","source":1,"confidence":0.9}]}', urls, 40);
   ok(good.length === 1 && good[0].sourceUrl === 'https://a.com', 'source number → URL');
   ok(good[0].objectType === 'event' && good[0].occurredAt!.startsWith('2026-02-28'), 'event type + occurredAt parsed');
-  ok(parseTriples('{"triples":[{"subject":"X","predicate":"p","object":"Y","source":9}]}', urls, 40)[0].sourceUrl === '', 'out-of-range source → empty URL');
-  ok(parseTriples('{"triples":[{"subject":"X","predicate":"p"}]}', urls, 40).length === 0, 'missing object → dropped');
+  ok(parseTriples('{"triples":[{"subject":"Alpha","predicate":"p","object":"Beta","source":9}]}', urls, 40)[0].sourceUrl === '', 'out-of-range source → empty URL');
+  ok(parseTriples('{"triples":[{"subject":"Alpha","predicate":"p"}]}', urls, 40).length === 0, 'missing object → dropped');
   ok(parseTriples('{"triples":[{"subject":"Iran","predicate":"is","object":"iran","source":1}]}', urls, 40).length === 0, 'self-loop dropped');
-  ok(parseTriples('{"triples":[{"subject":"a","predicate":"p","object":"b"},{"subject":"c","predicate":"p","object":"d"}]}', urls, 1).length === 1, 'clamped to max');
+  ok(parseTriples('{"triples":[{"subject":"Iran","predicate":"struck","object":"a container ship","source":1}]}', urls, 40).length === 0, 'triple with generic entity dropped');
+  ok(parseTriples('{"triples":[{"subject":"United States","predicate":"sanctioned","object":"Iran","source":1}]}', urls, 40).length === 1, 'named-entity triple kept');
+  ok(parseTriples('{"triples":[{"subject":"Alpha","predicate":"p","object":"Beta"},{"subject":"Gamma","predicate":"p","object":"Delta"}]}', urls, 1).length === 1, 'clamped to max');
   ok(parseTriples('not json', urls, 40).length === 0, 'garbage → []');
   // Truncation resilience: an array cut off at the token limit (no closing ]/})
   // must still yield the COMPLETE objects, not zero.

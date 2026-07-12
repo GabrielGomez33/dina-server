@@ -63,14 +63,48 @@ export function canonicalizeEntityName(name: string): string {
  * "is_the_chokepoint_for". Bounded to the column width; empty → 'related_to'.
  */
 export function normalizePredicate(predicate: string): string {
-  const s = (predicate || '')
+  let s = (predicate || '')
     .toString()
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 120);
+    .replace(/^_+|_+$/g, '');
+  // Light normalization: drop a leading article so "the_struck" == "struck".
+  s = s.replace(/^(a|an|the)_/, '');
+  s = s.slice(0, 120);
   return s || 'related_to';
+}
+
+// Quantity/indefinite/pronoun leaders that mark a NON-specific reference —
+// "a container ship", "three vessels", "they" — which pollute the graph as
+// one-off nodes that never corroborate. Dropped at extraction time.
+const QUANTITY_WORDS = new Set([
+  'a', 'an', 'some', 'several', 'many', 'multiple', 'various', 'few', 'numerous',
+  'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'dozens', 'hundreds', 'thousands',
+]);
+// NB: deliberately EXCLUDES "us" — it collides with the United States ("US"),
+// a critical entity; the pronoun "us" as an extracted graph node is negligible.
+const PRONOUNS = new Set([
+  'it', 'they', 'them', 'he', 'she', 'him', 'her', 'we', 'you',
+  'this', 'that', 'these', 'those', 'who', 'which', 'someone', 'something',
+]);
+
+/**
+ * True when a name is too generic/non-specific to be a useful graph node — an
+ * indefinite instance ("a ship"), a bare quantity ("three vessels"), a pronoun,
+ * or an empty/one-char token. Proper named things ("Qatari-flagged vessel
+ * al-Rakiyat", "Iran") are kept.
+ */
+export function isLowValueEntity(name: string): boolean {
+  const s = (name || '').toString().trim().toLowerCase();
+  if (s.length < 2) return true;
+  const first = s.split(/\s+/)[0].replace(/[^a-z0-9]/g, '');
+  if (PRONOUNS.has(s) || PRONOUNS.has(first)) return true;
+  // Leading indefinite article / quantity → a non-specific instance.
+  if (QUANTITY_WORDS.has(first)) return true;
+  if (/^\d/.test(s)) return true; // starts with a digit ("3 vessels")
+  return false;
 }
 
 const VALID_TYPES = new Set([
