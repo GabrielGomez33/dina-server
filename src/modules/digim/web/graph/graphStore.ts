@@ -216,13 +216,16 @@ export class GraphStore {
         if (seedIds.length === 0) return empty; // graph truly empty
       }
 
-      // 1-hop edges touching the seed set.
+      // 1-hop edges touching the seed set. NOTE: LIMIT is inlined, not bound —
+      // mysql2 prepared statements (pool.execute) reject a parameterized LIMIT.
+      // maxNodes is clampInt-validated, so the inlined integer is injection-safe.
+      const edgeLimit = maxNodes * 4;
       const edgeRows = await DB.query(
         `SELECT * FROM digim_relationships
           WHERE subject_id IN (${placeholders(seedIds)}) OR object_id IN (${placeholders(seedIds)})
           ORDER BY corroboration_count DESC, confidence DESC
-          LIMIT ?`,
-        [...seedIds, ...seedIds, maxNodes * 4],
+          LIMIT ${edgeLimit}`,
+        [...seedIds, ...seedIds],
         true
       );
       const edges: GraphEdge[] = (Array.isArray(edgeRows) ? edgeRows : []).map(rowToEdge);
