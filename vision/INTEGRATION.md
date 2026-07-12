@@ -1,8 +1,12 @@
-# DINA Vision (DIVIS) — Integration Map, Rollback & mirror-server Contract
+# DINA Vision (DIVIS) — Integration Map, Rollback & Client Contract
 
 This is the precise record of *what changed where*, why it is safe, how to roll
-it back, and the contract a `mirror-server` client uses to call the new
-capability.
+it back, and the contract any downstream client uses to call the new capability.
+
+Vision is a **standalone module**. It does not depend on, feed, or know about any
+other DINA module. Where this doc references DIGIM or the DUMP protocol, it is
+strictly *reuse of proven infrastructure* (message envelope, API request/response
+flow, SSRF guard) — never a coupling to another module's domain logic.
 
 ---
 
@@ -112,48 +116,43 @@ Two levels:
 
 ---
 
-## 5. mirror-server contract (downstream client)
+## 5. Downstream client contract
 
-> **Note:** this session had repository access to `dina-server` only, so the
-> mirror-server code changes are *specified* here rather than applied. They are a
-> thin client — mirror-server already talks to dina-server over HTTP with the
-> same auth headers used by its other calls.
+Any client (a web frontend, a CLI, another service) calls the vision module the
+same way — an authenticated HTTP POST. The module is self-contained; a caller
+sends image bytes and gets a structured result back. Nothing about the caller is
+baked into the module.
 
-To let a Mirror user submit a photo/video and get visual insight, mirror-server
-calls the new endpoints exactly like it calls `/mirror/synthesize-insights`:
-
-**Describe / analyse an image**
+**Describe a scene**
 ```
-POST {DINA_BASE}/dina/api/v1/vision/analyze-image
+POST {DINA_BASE}/dina/api/v1/vision/describe
 Headers: x-user-key / x-dina-key (existing auth), Content-Type: application/json
-Body:    { "base64": "<data-uri-or-bare-base64>", "task": "full" }
+Body:    { "base64": "<data-uri-or-bare-base64>" }
+```
+Response: `{ analysis: { caption, ... }, ... }`
+
+**Full structured analysis** (caption + objects + tags + OCR text + colours)
+```
+POST .../vision/analyze-image   Body: { "base64": "<img>", "task": "full" }
 ```
 Response: `{ analysis: { caption, objects[], tags[], text, colors[], safety, confidence }, ... }`
 
-**OCR**
+**Read text (OCR)**
 ```
-POST .../vision/ocr        Body: { "base64": "<img>" }        → analysis.text
+POST .../vision/ocr             Body: { "base64": "<img>" }        → analysis.text
 ```
-**VQA**
+**Answer a question (VQA)**
 ```
-POST .../vision/ask        Body: { "base64": "<img>", "question": "…" }   → analysis.answer
+POST .../vision/ask             Body: { "base64": "<img>", "question": "…" }   → analysis.answer
 ```
-**Video**
-```
-POST .../vision/analyze-video
-Body: { "frames": [ { "base64": "<jpg>", "timestampSec": 0 }, … ], "task": "full" }
-```
-Client should extract frames in the browser (`<video>` → `<canvas>` → `toDataURL`)
-and send a bounded set — this needs no ffmpeg on either server.
 
-### Suggested mirror-server wiring (specification)
-- Add a `DinaVisionConnector` alongside the existing `DINALLMConnector`, POSTing
-  to the routes above with the service auth already in use.
-- Feed the returned `analysis` into the Mirror insight pipeline as a new modality
-  (the existing `MirrorUserSubmission.faceAnalysis` is numeric/pre-computed; a
-  vision `caption`/`objects`/`tags` payload is complementary raw perception).
-- Respect the documented limits (image ≤ `DINA_VISION_MAX_IMAGE_BYTES`, body ≤
-  `DINA_VISION_MAX_BODY_MB`); downscale large images client-side first.
+Notes for callers:
+- Send the image as `base64` (a `data:` URI is accepted) — the route nests it
+  internally so the DUMP sanitizer can never corrupt the bytes.
+- Respect the documented limits (image ≤ `DINA_VISION_MAX_IMAGE_BYTES`, HTTP body
+  ≤ `DINA_VISION_MAX_BODY_MB`); downscale very large images client-side first.
+- The video route (`/vision/analyze-video`) exists but is out of the current
+  image milestone's scope — see the README's Capabilities note.
 
 ### Error handling
 Every failure returns the typed shape the client can branch on:

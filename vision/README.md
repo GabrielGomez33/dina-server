@@ -6,7 +6,15 @@
 
 This folder is the **deliverable package** for Goal #1. It documents the design,
 the exact changes made to `dina-server`, the edge cases handled, the tests that
-prove the logic, and the contract a `mirror-server` client would use.
+prove the logic, and the contract any downstream client uses to call it.
+
+Vision is a **standalone module** — its own concern, no coupling to other
+DINA modules. It only *reuses proven infrastructure* (the DUMP protocol, the API
+request/response flow, the SSRF guard), never another module's domain logic.
+
+**First-class capabilities:** scene description, text reading (OCR), and visual
+question answering (VQA). It runs a **local** vision model on the GPU — no image
+bytes leave the box.
 
 The **runtime code** lives where it must to compile and run inside the existing
 build (`tsconfig` compiles `src/`):
@@ -20,7 +28,7 @@ build (`tsconfig` compiles `src/`):
 
 - **[DESIGN.md](./DESIGN.md)** — how computers "see", the module architecture, the data flow, the DB schema.
 - **[EDGE_CASES.md](./EDGE_CASES.md)** — every edge case, how it is handled, and the manual live-service runbook.
-- **[INTEGRATION.md](./INTEGRATION.md)** — the exact file-by-file change map, rollback, and the mirror-server contract.
+- **[INTEGRATION.md](./INTEGRATION.md)** — the exact file-by-file change map, rollback, and the downstream client contract.
 
 ---
 
@@ -95,15 +103,24 @@ own model client, routed through the DUMP protocol). It is:
 
 ### Capabilities
 
+**This milestone — full image analysis** (the three first-class tasks + a
+combined structured pass):
+
 | DUMP method | HTTP route | What it does |
 |---|---|---|
 | `vision_analyze_image` | `POST /vision/analyze-image` | Full structured pass: caption + objects + tags + OCR text + colours |
-| `vision_describe` | `POST /vision/describe` | Rich natural-language description |
-| `vision_ocr` | `POST /vision/ocr` | Read text visible in the image |
-| `vision_ask` | `POST /vision/ask` | Visual question answering (VQA) |
-| `vision_analyze_video` | `POST /vision/analyze-video` | Per-frame analysis + temporal narrative + timeline |
+| `vision_describe` | `POST /vision/describe` | Rich natural-language **scene description** |
+| `vision_ocr` | `POST /vision/ocr` | **Read text** visible in the image (OCR) |
+| `vision_ask` | `POST /vision/ask` | **Visual question answering** (VQA) |
 | `vision_status` | `GET /vision/status` | Subsystem status & advisories |
 | `vision_prune` | `POST /vision/prune` | Retention sweep (trusted only) |
+
+**Scaffolded but dormant — video (next phase, out of this milestone's scope):**
+the `vision_analyze_video` path (frame sampling → per-frame analysis → temporal
+synthesis) is built and unit-tested but is intentionally **not part of the image
+milestone**. It exists as isolated, gated code so a later phase can turn it on
+without a rewrite; it can also be removed cleanly if you'd rather keep the module
+image-only for now.
 
 ---
 
@@ -111,8 +128,9 @@ own model client, routed through the DUMP protocol). It is:
 
 1. **Install a vision model** in Ollama on the DINA host:
    ```bash
-   ollama pull llava:7b        # ~5.5 GB, fits a 24 GB card alongside the chat model
-   # or: ollama pull llama3.2-vision:11b  /  qwen2.5vl:7b  /  moondream
+   ollama pull qwen2.5vl:7b    # ~7 GB — strong at describe + OCR + VQA (the default)
+   # alternatives: ollama pull llama3.2-vision:11b   (higher accuracy, ~9.5 GB)
+   #               ollama pull minicpm-v              (lighter, OCR-focused, ~6 GB)
    ```
 2. **Provision the schema** (either boot with the flag, or run the migration):
    ```bash
@@ -121,7 +139,7 @@ own model client, routed through the DUMP protocol). It is:
 3. **Set the flag** (PM2 env block / `.env`):
    ```bash
    DINA_VISION_ENABLED=true
-   DINA_VISION_MODEL=llava:7b     # optional; this is the default
+   DINA_VISION_MODEL=qwen2.5vl:7b   # optional; this is the default
    ```
 4. **Restart** and check status:
    ```bash
@@ -143,7 +161,7 @@ curl -X POST https://localhost:8445/dina/api/v1/vision/analyze-image \
 ```jsonc
 {
   "mediaId": "…", "sha256": "…", "mimeType": "image/jpeg",
-  "width": 1920, "height": 1080, "task": "full", "model": "llava:7b",
+  "width": 1920, "height": 1080, "task": "full", "model": "qwen2.5vl:7b",
   "cached": false, "processingTimeMs": 3120,
   "analysis": {
     "caption": "A red bicycle leaning against a brick wall in daylight.",

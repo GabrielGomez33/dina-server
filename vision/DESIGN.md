@@ -181,7 +181,7 @@ All env vars, safe/bounded defaults. Full table:
 | Env var | Default | Meaning |
 |---|---|---|
 | `DINA_VISION_ENABLED` | `false` | **Master switch.** Off ⇒ subsystem inert. |
-| `DINA_VISION_MODEL` | `llava:7b` | Ollama vision model. |
+| `DINA_VISION_MODEL` | `qwen2.5vl:7b` | Ollama vision model (strong at describe + OCR + VQA). |
 | `DINA_VISION_SYNTHESIS_MODEL` | `DINA_ANALYSIS_MODEL` / `mistral:7b` | Text model for video synthesis. |
 | `DINA_VISION_MAX_TOKENS` | `1024` | Max tokens per inference. |
 | `DINA_VISION_TEMPERATURE` | `0.2` | Low ⇒ factual/deterministic. |
@@ -212,13 +212,20 @@ input falls back to the default — the config never throws.
 
 ## 7. Model choice guidance
 
+The three first-class tasks are **scene description, text reading (OCR), and
+visual question answering**. OCR is the discriminator: it rules out llava as the
+default (a strong describer but a weak reader). The default is chosen to do all
+three well on a single 24 GB card alongside the small chat model.
+
 | Model | ~VRAM | Notes |
 |---|---|---|
-| `moondream` | ~1.9 GB | Tiny, fast, good captions; weakest reasoning/OCR. |
-| `llava:7b` | ~5.5 GB | **Default.** Solid all-round; fits alongside chat model. |
-| `llava:13b` | ~9 GB | Better reasoning. |
-| `llama3.2-vision:11b` | ~9.5 GB | Strong OCR + reasoning. |
-| `qwen2.5vl:7b` | ~7 GB | Excellent OCR + document understanding. |
+| `qwen2.5vl:7b` | ~7 GB | **Default.** Strong at describe **and** OCR **and** VQA; the best all-rounder in this size. |
+| `llama3.2-vision:11b` | ~9.5 GB | "Turn up quality" alternative — excellent reasoning + OCR, more VRAM. |
+| `minicpm-v` | ~6 GB | Lighter, OCR-focused; punches above its size on text reading. |
+| `llava:7b` | ~5.5 GB | Good scene descriptions but weak OCR — not ideal now that OCR is first-class. |
+| `moondream` | ~1.9 GB | Tiny/fast, captions only; weakest reasoning/OCR. |
 
-Footprints were added to `llmConfig.ts` so the shared VRAM guard reasons about
-them. Anything that would offload to CPU is refused unless `DINA_VISION_ENFORCE_VRAM=false`.
+The model is a single env var (`DINA_VISION_MODEL`), so different models can be
+A/B'd on real images without a code change. Footprints for all of these were
+added to `llmConfig.ts` so the shared VRAM guard reasons about them; anything
+that would offload to CPU is refused unless `DINA_VISION_ENFORCE_VRAM=false`.

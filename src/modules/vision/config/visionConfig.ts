@@ -161,9 +161,13 @@ function buildConfig(): VisionRuntimeConfig {
   return Object.freeze({
     enabled: envBool('DINA_VISION_ENABLED', false),
 
-    // llava:7b (~5.5GB) is a solid, widely-available default that fits a 24GB
-    // card alongside the small chat model. Override for llama3.2-vision / qwen2.5vl.
-    visionModel: envStr('DINA_VISION_MODEL', 'llava:7b'),
+    // qwen2.5vl:7b (~7GB) is the default: it is strong at all three first-class
+    // tasks — scene description, text reading (OCR), and visual Q&A — and fits a
+    // 24GB card alongside the small chat model. OCR is a first-class requirement,
+    // which rules out llava as the default (a good describer but a weak reader).
+    // Override to llama3.2-vision:11b (higher accuracy, ~9.5GB) or minicpm-v
+    // (lighter, OCR-focused, ~6GB) with one env var.
+    visionModel: envStr('DINA_VISION_MODEL', 'qwen2.5vl:7b'),
     synthesisModel,
     maxTokens: clampInt(envInt('DINA_VISION_MAX_TOKENS', 1024), 64, 8192),
     temperature: clampFloat(envFloat('DINA_VISION_TEMPERATURE', 0.2), 0, 2),

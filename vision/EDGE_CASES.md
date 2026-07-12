@@ -154,7 +154,7 @@ curl -s .../status | jq '.modules.llm_system.gpu'   # state should be 'gpu'
 # With DINA_VISION_ENABLED unset/false:
 curl -s .../vision/status | jq '.enabled'                 # false
 curl -s -X POST .../vision/describe -d '{"base64":"…"}' | jq '{error}'   # 403 VISION_DISABLED
-# And critically: chat/embeddings/mirror/digim all behave exactly as before.
+# And critically: every other module and endpoint behaves exactly as before.
 ```
 
 Record outcomes (pass/fail + observed output) alongside this file when run in a
