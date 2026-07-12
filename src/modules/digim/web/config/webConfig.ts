@@ -190,6 +190,12 @@ export interface DigimWebConfig {
   plannerConcurrency: number;
   /** Intelligence level each facet is researched at (fuse is the deep pass). */
   plannerFacetLevel: IntelligenceLevelName;
+
+  // ---- Relationship graph (Phase 2.4b) ----
+  /** Master switch for entity/relationship extraction + the graph store. */
+  graphEnabled: boolean;
+  /** Max nodes returned from a single subgraph query (bounds render payloads). */
+  graphMaxNodes: number;
 }
 
 /** Mirrors WebResearchOrchestrator's IntelligenceLevel, kept local to config. */
@@ -355,6 +361,9 @@ function buildConfig(): DigimWebConfig {
     plannerMaxSubQueries: clampInt(envInt('DIGIM_WEB_PLANNER_MAX_SUBQUERIES', 5), 1, 12),
     plannerConcurrency: clampInt(envInt('DIGIM_WEB_PLANNER_CONCURRENCY', 2), 1, 6),
     plannerFacetLevel: parseLevel('DIGIM_WEB_PLANNER_FACET_LEVEL', 'surface'),
+
+    graphEnabled: envBool('DIGIM_WEB_GRAPH_ENABLED', false),
+    graphMaxNodes: clampInt(envInt('DIGIM_WEB_GRAPH_MAX_NODES', 120), 1, 500),
   });
 }
 
@@ -412,6 +421,9 @@ function logConfigOnce(cfg: DigimWebConfig): void {
   }
   if (cfg.plannerEnabled) {
     console.log(`   • planner: maxSubQueries=${cfg.plannerMaxSubQueries} concurrency=${cfg.plannerConcurrency} facetLevel=${cfg.plannerFacetLevel}`);
+  }
+  if (cfg.graphEnabled) {
+    console.log(`   • graph: enabled maxNodes=${cfg.graphMaxNodes}`);
   }
   if (!cfg.enabled) {
     console.log('   • ℹ️ DIGIM web-research is DISABLED (set DIGIM_WEB_ENABLED=true to activate).');
