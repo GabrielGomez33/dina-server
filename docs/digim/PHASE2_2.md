@@ -78,3 +78,34 @@ ceiling, not a defect.
 Live headless-browser drive is verified on the production box after the container
 is stood up (the sandbox can't run Chromium) — same honest split used for the DB
 migration.
+
+## Live verification (production, 2026-07-11)
+
+Stood up the hardened browser container and drove the whole chain end-to-end.
+
+| Check | Result |
+|---|---|
+| **Container** | `mcr.microsoft.com/playwright` + baked-in CLI, `read_only` rootfs, `cap_drop: ALL`, `no-new-privileges`, loopback-only port, mem/cpu capped. `Listening on ws://…:3000`. |
+| **Network "can't leave"** | A/B proof from inside the container: `BLOCKED host:22 ✓` (cannot reach the host) **and** `PUBLIC …:443 REACHED ✓` (can reach the internet + DNS). |
+| **Direct connect** | `chromium.connect(ws://localhost:3000)` → rendered `example.com` (559 bytes). |
+| **End-to-end via DINA** | `digim_research` with `browser_mode:"always"` on a live Wikipedia page → `fetched:1, browserUsed:1, errors:[]`. The containerized, network-locked browser rendered the page through the full request→registry→BrowserTool path. |
+
+### Two bugs the live bring-up exposed (both fixed)
+
+1. **Egress firewall was FORWARD-only.** `DOCKER-USER` rules didn't block the
+   container reaching the **host itself** — that traffic hits `INPUT`, not
+   `FORWARD`. Added `INPUT` drop (new container→host) + established-accept. The
+   A/B test is what caught it.
+2. **`browser_mode` was dropped at the API boundary.** The `/digim/research` and
+   `/digim/gather` routes whitelist payload fields and didn't forward
+   `browser_mode`, so per-request escalation silently fell back to the config
+   default (browser never invoked). Now forwarded. Also added logging to every
+   `BrowserTool` failure branch so a browser fetch can never fail silently again.
+
+### Ops footnote
+
+The base `mcr.microsoft.com/playwright` image ships browsers but not the CLI on
+PATH, and `read_only` blocks a runtime `npx` install — so the CLI is baked in via
+a tiny Dockerfile at build time (built with `network: host` to satisfy buildkit
+DNS). The DINA host uses `playwright-core` (connect-only client, no browser
+download). All in `ops/PLAYWRIGHT_RUNBOOK.md`.

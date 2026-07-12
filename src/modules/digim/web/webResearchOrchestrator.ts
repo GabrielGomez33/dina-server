@@ -54,6 +54,8 @@ export interface WebResearchStatus {
   browserMode: string;
   browserAvailable: boolean;
   browserStatus: string;
+  /** Enabled Phase-2.3 discovery sources (rss/wikipedia/hn). */
+  sources: string[];
 }
 
 export type IntelligenceLevel = 'surface' | 'deep' | 'predictive';
@@ -207,6 +209,7 @@ export class WebResearchOrchestrator {
       browserMode: this.cfg.browserMode,
       browserAvailable: this.pipeline.browserAvailable,
       browserStatus: this.pipeline.browserStatusReason,
+      sources: this.pipeline.sourceNames,
     };
   }
 
