@@ -53,6 +53,11 @@ export interface DigimGatherInput {
   browserMode?: DigimBrowserMode;
 }
 
+export interface DigimInvestigateInput {
+  query: string;
+  intelligenceLevel?: DigimIntelligenceLevel;
+}
+
 export interface DigimSearchInput {
   query: string;
   limit?: number;
@@ -90,6 +95,14 @@ export class DigimClient {
       seed_urls: input.seedUrls ?? [],
       max_documents: input.maxDocuments,
       browser_mode: input.browserMode,
+    }, caller);
+  }
+
+  /** Multi-facet investigation — decompose → research facets → fuse (Phase 2.4a). */
+  investigate(input: DigimInvestigateInput, caller?: Partial<DigimCaller>): Promise<any> {
+    return this.dispatch('digim_investigate', 7, {
+      query: input.query,
+      intelligence_level: input.intelligenceLevel ?? 'deep',
     }, caller);
   }
 

@@ -180,7 +180,20 @@ export interface DigimWebConfig {
   feedUrls: string[];
   /** Max candidates each source contributes per query. */
   sourceMaxResults: number;
+
+  // ---- Research planner (Phase 2.4a) ----
+  /** Master switch for the multi-facet research planner (digim_investigate). */
+  plannerEnabled: boolean;
+  /** Hard cap on decomposed sub-queries (facets) per investigation. */
+  plannerMaxSubQueries: number;
+  /** Max facets researched concurrently (protects Ollama / the box). */
+  plannerConcurrency: number;
+  /** Intelligence level each facet is researched at (fuse is the deep pass). */
+  plannerFacetLevel: IntelligenceLevelName;
 }
+
+/** Mirrors WebResearchOrchestrator's IntelligenceLevel, kept local to config. */
+export type IntelligenceLevelName = 'surface' | 'deep' | 'predictive';
 
 // ----------------------------------------------------------------------------
 // ENV PARSING HELPERS (defensive — never throw on bad input)
@@ -337,7 +350,18 @@ function buildConfig(): DigimWebConfig {
     sources: envCsv('DIGIM_WEB_SOURCES', []),
     feedUrls: envCsvRaw('DIGIM_WEB_FEED_URLS', []),
     sourceMaxResults: clampInt(envInt('DIGIM_WEB_SOURCE_MAX_RESULTS', 5), 1, 50),
+
+    plannerEnabled: envBool('DIGIM_WEB_PLANNER_ENABLED', false),
+    plannerMaxSubQueries: clampInt(envInt('DIGIM_WEB_PLANNER_MAX_SUBQUERIES', 5), 1, 12),
+    plannerConcurrency: clampInt(envInt('DIGIM_WEB_PLANNER_CONCURRENCY', 2), 1, 6),
+    plannerFacetLevel: parseLevel('DIGIM_WEB_PLANNER_FACET_LEVEL', 'surface'),
   });
+}
+
+function parseLevel(name: string, fallback: IntelligenceLevelName): IntelligenceLevelName {
+  const v = (process.env[name] || '').trim().toLowerCase();
+  if (v === 'surface' || v === 'deep' || v === 'predictive') return v;
+  return fallback;
 }
 
 function clampInt(value: number, min: number, max: number): number {
@@ -385,6 +409,9 @@ function logConfigOnce(cfg: DigimWebConfig): void {
   }
   if (cfg.sources.length > 0) {
     console.log(`   • sources: [${cfg.sources.join(', ')}]${cfg.sources.includes('feeds') ? ` feeds=${cfg.feedUrls.length}` : ''} maxPerSource=${cfg.sourceMaxResults}`);
+  }
+  if (cfg.plannerEnabled) {
+    console.log(`   • planner: maxSubQueries=${cfg.plannerMaxSubQueries} concurrency=${cfg.plannerConcurrency} facetLevel=${cfg.plannerFacetLevel}`);
   }
   if (!cfg.enabled) {
     console.log('   • ℹ️ DIGIM web-research is DISABLED (set DIGIM_WEB_ENABLED=true to activate).');

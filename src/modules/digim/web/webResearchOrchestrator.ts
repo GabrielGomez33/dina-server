@@ -27,6 +27,7 @@ import { WebResearchStore } from './storage/webResearchStore';
 import { SemanticMemory } from './memory/semanticMemory';
 import { checkUrlSafety } from './security/urlGuard';
 import { DinaLLMManager } from '../../llm/manager';
+import { ResearchPlanner, InvestigationResult, PlannerLevel } from './planner/researchPlanner';
 import { GatherResult, WebInsight, RetrievedMemory, SearchResult } from './types';
 
 /** A discovered candidate annotated with whether it would pass the SSRF guard. */
@@ -56,6 +57,8 @@ export interface WebResearchStatus {
   browserStatus: string;
   /** Enabled Phase-2.3 discovery sources (rss/wikipedia/hn). */
   sources: string[];
+  /** Whether the Phase-2.4 research planner (digim_investigate) is enabled. */
+  plannerEnabled: boolean;
 }
 
 export type IntelligenceLevel = 'surface' | 'deep' | 'predictive';
@@ -210,6 +213,7 @@ export class WebResearchOrchestrator {
       browserAvailable: this.pipeline.browserAvailable,
       browserStatus: this.pipeline.browserStatusReason,
       sources: this.pipeline.sourceNames,
+      plannerEnabled: this.cfg.plannerEnabled,
     };
   }
 
@@ -368,6 +372,44 @@ export class WebResearchOrchestrator {
     };
   }
 
+  /**
+   * Multi-facet investigation (Phase 2.4a): decompose a broad question into
+   * sub-queries, research each through the proven pipeline, and fuse into one
+   * comprehensive briefing. Composes existing capabilities — no new gathering.
+   */
+  async investigate(query: string, opts?: { level?: IntelligenceLevel }): Promise<InvestigationResult> {
+    this.assertEnabled();
+    if (!this.cfg.plannerEnabled) {
+      throw new Error('DIGIM research planner is disabled (set DIGIM_WEB_PLANNER_ENABLED=true to enable)');
+    }
+    const planner = new ResearchPlanner(this.cfg, {
+      generate: (prompt) => this.generateText(prompt, 'digim_planner_decompose'),
+      research: async (q, level) => {
+        const r = await this.research(q, { level: level as IntelligenceLevel });
+        return { insight: r.insight, documentsGathered: r.gather.documents.length, basis: r.basis };
+      },
+      synthesize: (q, sources, level) => this.synthesizer.synthesize(q, sources, level),
+    });
+    return planner.investigate(query, { level: opts?.level as PlannerLevel });
+  }
+
+  /** LLM text generation with a hard timeout (used by the planner's decompose). */
+  private async generateText(prompt: string, task: string): Promise<string> {
+    const generation = this.llmManager.generate(prompt, {
+      maxTokens: this.cfg.synthesisMaxTokens,
+      max_tokens: this.cfg.synthesisMaxTokens,
+      temperature: 0.3,
+      model_preference: this.cfg.synthesisModel,
+      task,
+    });
+    const timeout = new Promise<never>((_, reject) => {
+      const t = setTimeout(() => reject(new Error(`${task} timed out after ${this.cfg.synthesisTimeoutMs}ms`)), this.cfg.synthesisTimeoutMs);
+      if (typeof (t as any).unref === 'function') (t as any).unref();
+    });
+    const response = await Promise.race([generation, timeout]);
+    return extractLlmText(response);
+  }
+
   private assertEnabled(): void {
     if (!this.cfg.enabled) {
       throw new Error('DIGIM web-research is disabled (set DIGIM_WEB_ENABLED=true to enable)');
@@ -392,6 +434,15 @@ export class WebResearchOrchestrator {
 // ----------------------------------------------------------------------------
 // UTIL
 // ----------------------------------------------------------------------------
+
+/** Extract readable text from whatever shape the LLM manager returns. */
+function extractLlmText(response: any): string {
+  if (typeof response === 'string') return response;
+  if (response?.response) return response.response;
+  if (response?.content) return response.content;
+  if (response?.choices?.[0]?.message?.content) return response.choices[0].message.content;
+  throw new Error('LLM response had no readable text field');
+}
 
 function safeJson(value: any, fallback: any): any {
   if (value == null) return fallback;

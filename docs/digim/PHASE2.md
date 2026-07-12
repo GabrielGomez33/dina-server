@@ -58,11 +58,13 @@ curl -sk .../digim/research -d '{"query":"solid state battery 2026","intelligenc
   counterpart to the browser — structured data, no JS execution. They register
   alongside the search provider and feed candidates/documents into the same
   proven pipeline.
-- **2.4 — Intelligence graph (Palantir tactics):** a **research planner** that
-  decomposes a broad question into sub-queries and fuses them, feeding an
-  **entity + relationship graph** with provenance and corroboration — "see the
-  relationships between information." Built on the richer harvest that 2.2 (JS web)
-  and 2.3 (structured sources) provide.
+- **2.4a — Research planner: ✅ DONE** (`docs/digim/PHASE2_4.md`). Decomposes a
+  broad question into facets, researches each through the proven pipeline, and
+  fuses them into one provenance-tracked briefing (`digim_investigate`).
+- **2.4b — Relationship graph (Palantir tactics):** MySQL-backed entity +
+  relationship extraction with provenance and corroboration over the planner's
+  harvest — "see the relationships between information." Design in
+  `docs/digim/PHASE2_4_DESIGN.md`.
 - **Tier-3 (opt-in):** authenticated/social sources — gated, per-job, logged. For
   genuinely hostile targets, escalate the browser container to a microVM sandbox
   (gVisor/Firecracker/Kata).
