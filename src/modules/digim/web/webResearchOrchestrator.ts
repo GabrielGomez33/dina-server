@@ -59,6 +59,8 @@ export interface WebResearchStatus {
   sources: string[];
   /** Whether the Phase-2.4 research planner (digim_investigate) is enabled. */
   plannerEnabled: boolean;
+  /** Whether the Phase-2.4b relationship graph is enabled. */
+  graphEnabled: boolean;
 }
 
 export type IntelligenceLevel = 'surface' | 'deep' | 'predictive';
@@ -214,6 +216,7 @@ export class WebResearchOrchestrator {
       browserStatus: this.pipeline.browserStatusReason,
       sources: this.pipeline.sourceNames,
       plannerEnabled: this.cfg.plannerEnabled,
+      graphEnabled: this.cfg.graphEnabled,
     };
   }
 
