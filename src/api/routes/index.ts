@@ -1610,6 +1610,37 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
+  // DIGIM Graph — query the relationship graph: subgraph around a focus term
+  // (nodes + edges + provenance) plus the recommended view (Phase 2.4b).
+  apiRouter.post('/digim/graph', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { query, focus, max_nodes } = req.body || {};
+      const focusTerm = String(query || focus || '').trim();
+      if (!focusTerm) {
+        res.status(400).json({
+          error: 'Bad Request',
+          message: 'A "query" (focus entity/topic) is required',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+      const data = await digim.graph(
+        { query: focusTerm, maxNodes: typeof max_nodes === 'number' ? max_nodes : undefined },
+        digimCaller(req)
+      );
+      res.json({
+        ...data,
+        auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining }
+      });
+    } catch (error) {
+      console.error('❌ Error in DIGIM graph:', error);
+      res.status(500).json({
+        error: 'DIGIM graph failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
   // ================================
   // ADMIN ENDPOINTS (Trusted users only)
   // ================================

@@ -28,7 +28,10 @@ import { SemanticMemory } from './memory/semanticMemory';
 import { checkUrlSafety } from './security/urlGuard';
 import { DinaLLMManager } from '../../llm/manager';
 import { ResearchPlanner, InvestigationResult, PlannerLevel } from './planner/researchPlanner';
-import { GatherResult, WebInsight, RetrievedMemory, SearchResult } from './types';
+import { GraphStore } from './graph/graphStore';
+import { GraphExtractor } from './graph/graphExtractor';
+import { Subgraph } from './graph/graphTypes';
+import { GatherResult, GatheredDocument, WebInsight, RetrievedMemory, SearchResult } from './types';
 
 /** A discovered candidate annotated with whether it would pass the SSRF guard. */
 export interface DiscoveredCandidate extends SearchResult {
@@ -78,6 +81,8 @@ export interface ResearchResult {
   memoryUsed: number;
   /** Where the answer came from: 'web' | 'memory' | 'web+memory' | 'none' | 'cache'. */
   basis: 'web' | 'memory' | 'web+memory' | 'none' | 'cache';
+  /** Relationship triples added to the graph from this run (0 when graph disabled). */
+  graphAdded: number;
 }
 
 export class WebResearchOrchestrator {
@@ -87,6 +92,8 @@ export class WebResearchOrchestrator {
   private synthesizer: WebInsightSynthesizer;
   private store: WebResearchStore;
   private memory: SemanticMemory;
+  private graphStore: GraphStore;
+  private graphExtractor: GraphExtractor;
   private initialized = false;
   private sweepTimer: NodeJS.Timeout | null = null;
   private pruning = false;
@@ -98,6 +105,9 @@ export class WebResearchOrchestrator {
     this.synthesizer = new WebInsightSynthesizer(this.llmManager, cfg);
     this.store = new WebResearchStore(cfg);
     this.memory = new SemanticMemory(this.llmManager, cfg);
+    // Relationship graph (Phase 2.4b): extractor reuses the LLM; store is DB-backed.
+    this.graphStore = new GraphStore(cfg);
+    this.graphExtractor = new GraphExtractor(cfg, { generate: (p) => this.generateText(p, 'digim_graph_extract') });
   }
 
   get enabled(): boolean {
@@ -303,6 +313,7 @@ export class WebResearchOrchestrator {
           processingTimeMs: performance.now() - start,
           memoryUsed: 0,
           basis: 'cache',
+          graphAdded: 0,
         };
       }
     }
@@ -354,6 +365,13 @@ export class WebResearchOrchestrator {
       }
     }
 
+    // (graph) Extract relationship triples into the graph — best effort, gated,
+    // never fails the response (Phase 2.4b).
+    let graphAdded = 0;
+    if (this.cfg.graphEnabled && gather.documents.length > 0) {
+      graphAdded = await this.buildGraphFrom(gather.documents);
+    }
+
     const gatheredCount = gather.documents.length;
     const memoryUsed = priorMemory.length;
     const basis: ResearchResult['basis'] =
@@ -372,6 +390,7 @@ export class WebResearchOrchestrator {
       processingTimeMs: performance.now() - start,
       memoryUsed,
       basis,
+      graphAdded,
     };
   }
 
@@ -394,6 +413,52 @@ export class WebResearchOrchestrator {
       synthesize: (q, sources, level) => this.synthesizer.synthesize(q, sources, level),
     });
     return planner.investigate(query, { level: opts?.level as PlannerLevel });
+  }
+
+  /**
+   * Query the relationship graph: return the subgraph around a focus term plus
+   * the view the system recommends for it (Phase 2.4b).
+   */
+  async graph(focus: string, opts?: { maxNodes?: number }): Promise<Subgraph> {
+    this.assertEnabled();
+    return this.graphStore.getSubgraph(focus, opts);
+  }
+
+  /** Node/edge totals for the graph (status/telemetry). */
+  async getGraphStats(): Promise<{ entities: number; relationships: number }> {
+    return this.graphStore.getStats();
+  }
+
+  /**
+   * Extract relationship triples from gathered documents and upsert them into the
+   * graph. Best-effort and fully guarded — a graph failure never affects research.
+   */
+  private async buildGraphFrom(documents: GatheredDocument[]): Promise<number> {
+    try {
+      const triples = await this.graphExtractor.extract(
+        documents.map((d) => ({ title: d.title, url: d.url, content: d.content }))
+      );
+      let added = 0;
+      for (const t of triples) {
+        const id = await this.graphStore.upsertRelationship({
+          subject: { name: t.subject, type: t.subjectType, occurredAt: t.subjectType === 'event' ? t.occurredAt : null },
+          predicate: t.predicate,
+          object: { name: t.object, type: t.objectType, occurredAt: t.objectType === 'event' ? t.occurredAt : null },
+          confidence: t.confidence,
+          occurredAt: t.occurredAt,
+          sourceUrl: t.sourceUrl || (documents[0] ? documents[0].url : undefined),
+          sourceContentId: null,
+        });
+        if (id) added++;
+      }
+      if (added > 0) {
+        console.log(`🕸️ [webResearchOrchestrator] graph: +${added} relationship(s) from ${documents.length} doc(s)`);
+      }
+      return added;
+    } catch (err) {
+      console.warn(`⚠️ [webResearchOrchestrator] graph build failed: ${(err as Error).message}`);
+      return 0;
+    }
   }
 
   /** LLM text generation with a hard timeout (used by the planner's decompose). */

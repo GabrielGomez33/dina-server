@@ -63,6 +63,11 @@ export interface DigimSearchInput {
   limit?: number;
 }
 
+export interface DigimGraphInput {
+  query: string;
+  maxNodes?: number;
+}
+
 export interface DigimRecallInput {
   query: string;
   topK?: number;
@@ -111,6 +116,14 @@ export class DigimClient {
     return this.dispatch('digim_search', 6, {
       query: input.query,
       limit: input.limit,
+    }, caller);
+  }
+
+  /** Query the relationship graph — subgraph around a focus + suggested view. */
+  graph(input: DigimGraphInput, caller?: Partial<DigimCaller>): Promise<any> {
+    return this.dispatch('digim_graph', 6, {
+      query: input.query,
+      max_nodes: input.maxNodes,
     }, caller);
   }
 
