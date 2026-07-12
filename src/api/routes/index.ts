@@ -73,7 +73,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     const isPersonalAnalysisLLM = req.path.startsWith('/mirror/personal-analysis/generate');
     // DIGIM research/query drive web fetches + LLM synthesis; a cold model load
     // (150s+) would otherwise 408 at the default 60s. Give them the LLM budget.
-    const isDigimLLM = req.path.startsWith('/digim/research') || req.path.startsWith('/digim/query');
+    const isDigimLLM = req.path.startsWith('/digim/research') || req.path.startsWith('/digim/query') || req.path.startsWith('/digim/investigate');
     const timeoutMs = (isTruthStreamLLM || isPersonalAnalysisLLM || isDigimLLM) ? 300000 : 60000;
 
     const timeout = setTimeout(() => {
@@ -1468,6 +1468,42 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
       console.error('❌ Error in DIGIM research:', error);
       res.status(500).json({
         error: 'DIGIM research failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // DIGIM Investigate — multi-facet investigation (Phase 2.4a): decompose a broad
+  // question → research each facet → fuse into one comprehensive briefing.
+  apiRouter.post('/digim/investigate', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { query, intelligence_level } = req.body || {};
+      if (!query || String(query).trim().length === 0) {
+        res.status(400).json({
+          error: 'Bad Request',
+          message: 'A "query" string is required',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+
+      console.log(`🧭 DIGIM investigate: "${String(query).substring(0, 60)}..." from ${req.dina!.trust_level} user`);
+      const data = await digim.investigate(
+        { query: String(query), intelligenceLevel: intelligence_level },
+        digimCaller(req)
+      );
+
+      res.json({
+        ...data,
+        auth_info: {
+          trust_level: req.dina?.trust_level,
+          rate_limit_remaining: req.dina?.rate_limit_remaining
+        }
+      });
+    } catch (error) {
+      console.error('❌ Error in DIGIM investigate:', error);
+      res.status(500).json({
+        error: 'DIGIM investigate failed',
         message: error instanceof Error ? error.message : 'Unknown error'
       });
     }
