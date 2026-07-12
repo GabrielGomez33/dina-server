@@ -42,6 +42,8 @@ export interface GraphEdge {
 /** A subgraph returned by a query, plus the view the system recommends for it. */
 export interface Subgraph {
   focus: string;
+  /** True when the focus matched a node; false when we fell back to an overview. */
+  matchedFocus: boolean;
   nodes: GraphNode[];
   edges: GraphEdge[];
   suggestedView: GraphViewType;

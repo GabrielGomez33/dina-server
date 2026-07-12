@@ -188,19 +188,33 @@ export class GraphStore {
 
   async getSubgraph(focus: string, opts?: { maxNodes?: number }): Promise<Subgraph> {
     const maxNodes = clampInt(opts?.maxNodes ?? this.cfg.graphMaxNodes, 1, 500);
-    const empty: Subgraph = { focus, nodes: [], edges: [], suggestedView: 'network' };
+    const empty: Subgraph = { focus, matchedFocus: false, nodes: [], edges: [], suggestedView: 'network' };
     const key = canonicalizeEntityName(focus);
-    if (!key) return empty;
 
     try {
       // Seed entities: exact canonical match OR name contains the focus text.
-      const seeds = await DB.query(
-        `SELECT id FROM digim_entities WHERE canonical_key = ? OR name LIKE ? ORDER BY mention_count DESC LIMIT 25`,
-        [key, `%${focus.slice(0, 80)}%`],
-        true
-      );
-      const seedIds: string[] = (Array.isArray(seeds) ? seeds : []).map((r: any) => String(r.id));
-      if (seedIds.length === 0) return empty;
+      let matchedFocus = true;
+      let seedIds: string[] = [];
+      if (key) {
+        const seeds = await DB.query(
+          `SELECT id FROM digim_entities WHERE canonical_key = ? OR name LIKE ? ORDER BY mention_count DESC LIMIT 25`,
+          [key, `%${focus.slice(0, 80)}%`],
+          true
+        );
+        seedIds = (Array.isArray(seeds) ? seeds : []).map((r: any) => String(r.id));
+      }
+      // Fallback: no focus match → the most-connected entities (graph overview),
+      // so a query over a populated graph is never empty.
+      if (seedIds.length === 0) {
+        matchedFocus = false;
+        const top = await DB.query(
+          `SELECT id FROM digim_entities ORDER BY mention_count DESC LIMIT 25`,
+          [],
+          true
+        );
+        seedIds = (Array.isArray(top) ? top : []).map((r: any) => String(r.id));
+        if (seedIds.length === 0) return empty; // graph truly empty
+      }
 
       // 1-hop edges touching the seed set.
       const edgeRows = await DB.query(
@@ -227,7 +241,7 @@ export class GraphStore {
       // Attach provenance URLs to each surviving edge.
       await this.attachSources(prunedEdges);
 
-      return { focus, nodes, edges: prunedEdges, suggestedView: suggestView(nodes, prunedEdges) };
+      return { focus, matchedFocus, nodes, edges: prunedEdges, suggestedView: suggestView(nodes, prunedEdges) };
     } catch (err) {
       console.warn(`⚠️ [graphStore] getSubgraph('${focus}') failed: ${(err as Error).message}`);
       return empty;
