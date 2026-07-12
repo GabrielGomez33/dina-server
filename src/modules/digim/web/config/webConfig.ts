@@ -196,6 +196,10 @@ export interface DigimWebConfig {
   graphEnabled: boolean;
   /** Max nodes returned from a single subgraph query (bounds render payloads). */
   graphMaxNodes: number;
+  /** Max relationship triples extracted from one research batch (bounds LLM cost). */
+  graphMaxTriples: number;
+  /** How many top documents feed one extraction pass. */
+  graphExtractMaxDocs: number;
 }
 
 /** Mirrors WebResearchOrchestrator's IntelligenceLevel, kept local to config. */
@@ -364,6 +368,8 @@ function buildConfig(): DigimWebConfig {
 
     graphEnabled: envBool('DIGIM_WEB_GRAPH_ENABLED', false),
     graphMaxNodes: clampInt(envInt('DIGIM_WEB_GRAPH_MAX_NODES', 120), 1, 500),
+    graphMaxTriples: clampInt(envInt('DIGIM_WEB_GRAPH_MAX_TRIPLES', 40), 1, 200),
+    graphExtractMaxDocs: clampInt(envInt('DIGIM_WEB_GRAPH_EXTRACT_MAX_DOCS', 6), 1, 20),
   });
 }
 

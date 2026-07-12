@@ -285,6 +285,9 @@ async  initialize(): Promise<void> {
       case 'digim_recall':
         return await this.handleRecallRequest(requestData, message.security.user_id);
 
+      case 'digim_graph':
+        return await this.handleGraphRequest(requestData);
+
       case 'digim_memory_backfill':
         return await this.handleMemoryBackfillRequest(requestData);
 
@@ -480,6 +483,7 @@ async  initialize(): Promise<void> {
       basis: result.basis,
       documents_gathered: result.gather.documents.length,
       memory_used: result.memoryUsed,
+      graph_relationships_added: result.graphAdded,
       insight: result.insight,
       sources_consulted: result.insight.sources.length,
       diagnostics: result.gather.diagnostics,
@@ -528,6 +532,43 @@ async  initialize(): Promise<void> {
       insight: result.synthesis,
       sources_consulted: result.sourcesConsulted,
       processing_time_ms: Math.round(result.processingTimeMs),
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_graph — query the relationship graph: the subgraph around a focus term
+   * (nodes + edges + provenance) plus the view the system recommends for it.
+   */
+  private async handleGraphRequest(requestData: any): Promise<any> {
+    const focus: string = (requestData?.query || requestData?.focus || requestData?.q || '').trim();
+    console.log(`🕸️ Handling graph request: "${focus.substring(0, 60)}..."`);
+
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    if (!focus) {
+      throw new Error('digim_graph requires a "query" (focus entity/topic)');
+    }
+
+    const sub = await this.webResearch.graph(focus, { maxNodes: requestData?.max_nodes });
+    const stats = await this.webResearch.getGraphStats();
+    return {
+      status: 'success',
+      focus: sub.focus,
+      suggested_view: sub.suggestedView,
+      node_count: sub.nodes.length,
+      edge_count: sub.edges.length,
+      nodes: sub.nodes.map((n) => ({
+        id: n.id, name: n.name, type: n.type,
+        occurred_at: n.occurredAt, weight: n.mentionCount,
+      })),
+      edges: sub.edges.map((e) => ({
+        subject: e.subjectId, predicate: e.predicate, object: e.objectId,
+        corroboration: e.corroborationCount, confidence: e.confidence,
+        occurred_at: e.occurredAt, sources: e.sources || [],
+      })),
+      graph_totals: stats,
       generated_at: new Date(),
     };
   }
