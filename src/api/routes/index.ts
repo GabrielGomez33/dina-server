@@ -3,6 +3,7 @@
 
 import express, { Request, Response, NextFunction } from 'express';
 import { DinaCore } from '../../core/orchestrator';
+import { DigimClient } from '../../modules/digim/digimClient';
 import { authenticate, rateLimit, sanitizeInput, handleError, requireTrustLevel, requireServiceAuth, corsMiddleware, AuthenticatedRequest } from '../middleware/security';
 import { DinaUniversalMessage, createDinaMessage, MessagePriority, SecurityLevel } from '../../core/protocol';
 import { v4 as uuidv4 } from 'uuid';
@@ -48,6 +49,17 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
 
   // API-specific middleware
   const apiRouter = express.Router();
+
+  // DIGIM DUMP client — the single, correct message builder for reaching DIGIM.
+  // Routes below dispatch through this instead of hand-assembling payloads (which
+  // is how browser_mode got silently dropped once). Foreign modules use the same
+  // client, so every capability's payload is defined in exactly one place.
+  const digim = new DigimClient(dina, { sourceModule: 'api' });
+  const digimCaller = (req: AuthenticatedRequest) => ({
+    userId: req.dina!.dina_key,
+    sessionId: req.dina!.session_id,
+    clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+  });
 
   // FIXED: Enhanced timeout handling with route-specific timeouts
   // TruthStream LLM endpoints need longer timeouts for Ollama synthesis
@@ -1435,30 +1447,18 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
 
-      const digiMMessage = createDinaMessage({
-        source: { module: 'api', version: '1.0.0' },
-        target: { module: 'digim', method: 'digim_research', priority: 7 },
-        security: {
-          user_id: req.dina!.dina_key,
-          session_id: req.dina!.session_id,
-          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-          sanitized: true
-        },
-        payload: {
-          query: query ? String(query) : '',
-          seed_urls: Array.isArray(seed_urls) ? seed_urls : [],
-          intelligence_level: intelligence_level || 'surface',
-          max_documents: typeof max_documents === 'number' ? max_documents : undefined,
-          force_refresh: force_refresh === true,
-          browser_mode: typeof browser_mode === 'string' ? browser_mode : undefined
-        }
-      });
-
       console.log(`🌐 DIGIM research: "${String(query || '(seeds)').substring(0, 60)}..." from ${req.dina!.trust_level} user`);
-      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      const data = await digim.research({
+        query: query ? String(query) : '',
+        seedUrls: Array.isArray(seed_urls) ? seed_urls : [],
+        intelligenceLevel: intelligence_level,
+        maxDocuments: typeof max_documents === 'number' ? max_documents : undefined,
+        forceRefresh: force_refresh === true,
+        browserMode: typeof browser_mode === 'string' ? (browser_mode as any) : undefined,
+      }, digimCaller(req));
 
       res.json({
-        ...digiMResponse.payload.data,
+        ...data,
         auth_info: {
           trust_level: req.dina?.trust_level,
           rate_limit_remaining: req.dina?.rate_limit_remaining
@@ -1486,20 +1486,12 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         });
         return;
       }
-      const digiMMessage = createDinaMessage({
-        source: { module: 'api', version: '1.0.0' },
-        target: { module: 'digim', method: 'digim_search', priority: 6 },
-        security: {
-          user_id: req.dina!.dina_key,
-          session_id: req.dina!.session_id,
-          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-          sanitized: true
-        },
-        payload: { query: String(query), limit: typeof limit === 'number' ? limit : undefined }
-      });
-      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      const data = await digim.search(
+        { query: String(query), limit: typeof limit === 'number' ? limit : undefined },
+        digimCaller(req)
+      );
       res.json({
-        ...digiMResponse.payload.data,
+        ...data,
         auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining }
       });
     } catch (error) {
@@ -1525,27 +1517,15 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
 
-      const digiMMessage = createDinaMessage({
-        source: { module: 'api', version: '1.0.0' },
-        target: { module: 'digim', method: 'digim_gather', priority: 6 },
-        security: {
-          user_id: req.dina!.dina_key,
-          session_id: req.dina!.session_id,
-          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-          sanitized: true
-        },
-        payload: {
-          query: query ? String(query) : '',
-          seed_urls: Array.isArray(seed_urls) ? seed_urls : [],
-          max_documents: typeof max_documents === 'number' ? max_documents : undefined,
-          browser_mode: typeof browser_mode === 'string' ? browser_mode : undefined
-        }
-      });
-
-      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      const data = await digim.gather({
+        query: query ? String(query) : '',
+        seedUrls: Array.isArray(seed_urls) ? seed_urls : [],
+        maxDocuments: typeof max_documents === 'number' ? max_documents : undefined,
+        browserMode: typeof browser_mode === 'string' ? (browser_mode as any) : undefined,
+      }, digimCaller(req));
 
       res.json({
-        ...digiMResponse.payload.data,
+        ...data,
         auth_info: {
           trust_level: req.dina?.trust_level,
           rate_limit_remaining: req.dina?.rate_limit_remaining
@@ -1573,25 +1553,13 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
 
-      const digiMMessage = createDinaMessage({
-        source: { module: 'api', version: '1.0.0' },
-        target: { module: 'digim', method: 'digim_recall', priority: 6 },
-        security: {
-          user_id: req.dina!.dina_key,
-          session_id: req.dina!.session_id,
-          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-          sanitized: true
-        },
-        payload: {
-          query: String(query),
-          top_k: typeof top_k === 'number' ? top_k : undefined,
-          min_score: typeof min_score === 'number' ? min_score : undefined
-        }
-      });
-
-      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      const data = await digim.recall({
+        query: String(query),
+        topK: typeof top_k === 'number' ? top_k : undefined,
+        minScore: typeof min_score === 'number' ? min_score : undefined,
+      }, digimCaller(req));
       res.json({
-        ...digiMResponse.payload.data,
+        ...data,
         auth_info: {
           trust_level: req.dina?.trust_level,
           rate_limit_remaining: req.dina?.rate_limit_remaining
