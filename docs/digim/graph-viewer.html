@@ -289,14 +289,24 @@ function updateStats() {
 const SEM_R = 230;
 function ingestSemantic(raw) {
   const ptsIn = Array.isArray(raw.points) ? raw.points : [];
-  const points = ptsIn.map((p, i) => ({
-    id: String(p.id ?? i),
-    name: String(p.label ?? p.url ?? p.id ?? "?"),
-    url: String(p.url ?? ""),
-    provider: String(p.provider ?? "").toLowerCase(),
-    x: (Number(p.x) || 0) * SEM_R, y: (Number(p.y) || 0) * SEM_R, z: (Number(p.z) || 0) * SEM_R,
-  }));
-  return { points, dimensions: Number(raw.dimensions ?? raw.dims ?? 0) || 0,
+  // Collapse duplicate embeddings of the SAME url (re-gathered across facets/runs)
+  // so one source is one point, not a stack of near-coincident dots.
+  const seen = new Set(); let dropped = 0;
+  const points = [];
+  ptsIn.forEach((p, i) => {
+    const url = String(p.url ?? "");
+    const key = url ? url.toLowerCase().replace(/[#?].*$/, "").replace(/\/$/, "") : ("__" + i);
+    if (url && seen.has(key)) { dropped++; return; }
+    if (url) seen.add(key);
+    points.push({
+      id: String(p.id ?? i),
+      name: String(p.label ?? p.url ?? p.id ?? "?"),
+      url,
+      provider: String(p.provider ?? "").toLowerCase(),
+      x: (Number(p.x) || 0) * SEM_R, y: (Number(p.y) || 0) * SEM_R, z: (Number(p.z) || 0) * SEM_R,
+    });
+  });
+  return { points, dropped, dimensions: Number(raw.dimensions ?? raw.dims ?? 0) || 0,
     explainedVariance: Array.isArray(raw.explained_variance) ? raw.explained_variance : [] };
 }
 function setSemanticData(raw) {
@@ -524,7 +534,8 @@ function drawSemantic() {
   if (SEM.explainedVariance.length===3) {
     const pct=SEM.explainedVariance.map(v=>Math.round(v*100));
     ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.textAlign="left"; ctx.textBaseline="bottom";
-    ctx.fillText(`PCA · axes capture ${pct[0]}% / ${pct[1]}% / ${pct[2]}% of variance`, 14, H-14);
+    const dup = SEM.dropped ? ` · ${SEM.dropped} duplicate${SEM.dropped>1?"s":""} merged` : "";
+    ctx.fillText(`PCA · axes capture ${pct[0]}% / ${pct[1]}% / ${pct[2]}% of variance${dup}`, 14, H-14);
   }
 }
 // HSL string → hex, so it can flow through mix() with the fog RGB.
