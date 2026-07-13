@@ -14,6 +14,7 @@ import { canonicalizeEntityName, normalizePredicate, normalizeEntityType, isLowV
 import { suggestView } from '../../src/modules/digim/web/graph/graphView';
 import { rowToNode, rowToEdge } from '../../src/modules/digim/web/graph/graphStore';
 import { parseTriples, GraphExtractor } from '../../src/modules/digim/web/graph/graphExtractor';
+import { projectEmbeddings } from '../../src/modules/digim/web/graph/semanticProjection';
 import { DigimWebConfig } from '../../src/modules/digim/web/config/webConfig';
 
 let passed = 0;
@@ -131,6 +132,60 @@ async function main(): Promise<void> {
     let genCalls = 0;
     const ext = new GraphExtractor(extractorCfg(), { generate: async () => { genCalls++; return '{}'; } });
     ok((await ext.extract([])).length === 0 && genCalls === 0, 'empty docs → [] with no LLM call');
+  }
+
+  // --------------------------------------------------------------------------
+  section('projectEmbeddings — PCA 3D projection (the semantic view)');
+  {
+    // Degenerate corpora.
+    ok(projectEmbeddings([]).points.length === 0, 'empty corpus → no points');
+    const one = projectEmbeddings([{ id: 'a', vector: [1, 2, 3], label: 'A' }]);
+    ok(one.points.length === 1 && one.points[0].x === 0 && one.points[0].y === 0 && one.points[0].z === 0, 'single point → origin (nothing to spread)');
+    ok(projectEmbeddings([{ id: 'a', vector: [] }, { id: 'b', vector: [] }]).points.length === 0, 'all-empty vectors → dropped');
+
+    // Determinism: same input → identical output (no RNG).
+    const corpus = [
+      { id: '1', vector: [10, 0, 0, 0], label: 'x+' },
+      { id: '2', vector: [9, 1, 0, 0], label: 'x+' },
+      { id: '3', vector: [0, 10, 0, 0], label: 'y+' },
+      { id: '4', vector: [0, 9, 1, 0], label: 'y+' },
+      { id: '5', vector: [-10, 0, 0, 0], label: 'x-' },
+      { id: '6', vector: [0, -10, 0, 0], label: 'y-' },
+    ];
+    const p1 = projectEmbeddings(corpus);
+    const p2 = projectEmbeddings(corpus);
+    ok(JSON.stringify(p1.points) === JSON.stringify(p2.points), 'deterministic — identical corpus → identical cloud');
+    ok(p1.points.length === 6 && p1.dimensions === 4, 'all points projected; dimensionality reported');
+
+    // Coordinates are finite and rescaled into [-1, 1].
+    const inRange = p1.points.every((pt) => [pt.x, pt.y, pt.z].every((v) => Number.isFinite(v) && v >= -1.0000001 && v <= 1.0000001));
+    ok(inRange, 'coordinates finite and rescaled to [-1, 1]');
+
+    // Structure preservation: two points that share a near-identical vector must
+    // land closer to each other than to a clearly different one.
+    const byId = new Map(p1.points.map((pt) => [pt.id, pt]));
+    const d = (a: any, b: any) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+    const near = d(byId.get('1'), byId.get('2'));   // both x+
+    const far = d(byId.get('1'), byId.get('6'));    // x+ vs y-
+    ok(near < far, 'similar vectors project closer than dissimilar ones');
+
+    // Modal-dimension guard: a stray wrong-length vector is skipped, not fatal.
+    const mixed = projectEmbeddings([
+      { id: '1', vector: [1, 0, 0, 0] }, { id: '2', vector: [0, 1, 0, 0] },
+      { id: '3', vector: [0, 0, 1, 0] }, { id: 'bad', vector: [1, 2] },
+    ]);
+    ok(mixed.points.length === 3 && !mixed.points.some((pt) => pt.id === 'bad'), 'off-dimension vector skipped, rest projected');
+
+    // Explained variance is a fraction per axis, descending-ish, bounded.
+    ok(p1.explainedVariance.length === 3 && p1.explainedVariance.every((v) => v >= 0 && v <= 1.0000001), 'explained variance ∈ [0,1] per axis');
+
+    // High-dimensional smoke: 1024-D like production, deterministic seed vectors.
+    const hi = Array.from({ length: 12 }, (_, i) => ({
+      id: `h${i}`,
+      vector: Array.from({ length: 1024 }, (_, j) => Math.sin((i + 1) * 0.31 + j * 0.017)),
+    }));
+    const hp = projectEmbeddings(hi);
+    ok(hp.points.length === 12 && hp.dimensions === 1024 && hp.points.every((pt) => Number.isFinite(pt.x)), '1024-D corpus → finite 3D cloud');
   }
 
   console.log(`\n=== RESULTS: ${passed} passed, ${failed} failed ===`);

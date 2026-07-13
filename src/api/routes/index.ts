@@ -1641,6 +1641,30 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
+  // DIGIM Semantic view — project stored embeddings to a 3D coordinate cloud
+  apiRouter.post('/digim/semantic', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { filter, query, limit } = req.body || {};
+      const data = await digim.semantic(
+        {
+          filter: String(filter || query || '').trim() || undefined,
+          limit: typeof limit === 'number' ? limit : undefined,
+        },
+        digimCaller(req)
+      );
+      res.json({
+        ...data,
+        auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining }
+      });
+    } catch (error) {
+      console.error('❌ Error in DIGIM semantic:', error);
+      res.status(500).json({
+        error: 'DIGIM semantic failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
   // ================================
   // ADMIN ENDPOINTS (Trusted users only)
   // ================================

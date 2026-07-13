@@ -158,15 +158,18 @@ export class GraphStore {
   }
 
   private async addSource(edgeId: string, url: string, contentId: string | null): Promise<void> {
+    // INSERT IGNORE: a repeat (edge, url) — the same source re-asserting the same
+    // relationship — is a no-op at the DB layer, so it neither errors nor logs.
+    // Corroboration is counted DISTINCT source_url, so this stays correct.
     try {
       await DB.query(
-        `INSERT INTO digim_relationship_sources (id, relationship_id, source_url, source_content_id)
+        `INSERT IGNORE INTO digim_relationship_sources (id, relationship_id, source_url, source_content_id)
          VALUES (?, ?, ?, ?)`,
         [uuidv4(), edgeId, url.slice(0, 1024), contentId],
         true
       );
     } catch (err) {
-      if (!isDuplicateError(err)) throw err; // duplicate (edge, url) is expected & fine
+      if (!isDuplicateError(err)) throw err;
     }
   }
 

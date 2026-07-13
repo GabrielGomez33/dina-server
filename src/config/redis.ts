@@ -872,6 +872,19 @@ export class EnhancedDinaRedisManager extends EventEmitter {
   }
 
   /**
+   * PUBLIC read-only export of the stored embedding corpus (id + vector +
+   * metadata), for consumers that project the vectors themselves — e.g. the
+   * DIGIM semantic view (1024-D → 3D). Non-mutating; reuses the same gather
+   * path as brute-force search. `limit` caps the number returned (newest-ish
+   * by iteration order; the cap is a safety bound, not a ranking).
+   */
+  async listEmbeddings(limit = 2000): Promise<VectorEmbedding[]> {
+    const all = await this.collectEmbeddingsForSearch();
+    const n = Math.max(1, Math.min(Math.floor(limit) || 1, all.length || 1));
+    return all.slice(0, n);
+  }
+
+  /**
    * Gather all stored embeddings for brute-force search. Prefers the in-memory
    * persistence map (fast); if empty, SCANs the `embedding:*` keyspace (capped).
    */

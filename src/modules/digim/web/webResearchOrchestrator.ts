@@ -31,6 +31,8 @@ import { ResearchPlanner, InvestigationResult, PlannerLevel } from './planner/re
 import { GraphStore } from './graph/graphStore';
 import { GraphExtractor } from './graph/graphExtractor';
 import { Subgraph } from './graph/graphTypes';
+import { projectEmbeddings, SemanticProjection } from './graph/semanticProjection';
+import { redisManager } from '../../../config/redis';
 import { GatherResult, GatheredDocument, WebInsight, RetrievedMemory, SearchResult } from './types';
 
 /** A discovered candidate annotated with whether it would pass the SSRF guard. */
@@ -427,6 +429,38 @@ export class WebResearchOrchestrator {
   /** Node/edge totals for the graph (status/telemetry). */
   async getGraphStats(): Promise<{ entities: number; relationships: number }> {
     return this.graphStore.getStats();
+  }
+
+  /**
+   * SEMANTIC VIEW (Phase 2.4b-4): the "n-dimensional coordinate graph". Reads the
+   * stored 1024-D content embeddings and projects them to 3D via PCA so distance
+   * in the cloud ≈ closeness of meaning. Pure projection math lives in
+   * `semanticProjection.ts`; this method just sources the vectors and shapes the
+   * result. Optional `filter` (case-insensitive substring on title/url) narrows
+   * the corpus to a topic's neighbourhood.
+   */
+  async semanticMap(opts?: { limit?: number; filter?: string }): Promise<SemanticProjection> {
+    const limit = Math.max(2, Math.min(opts?.limit ?? this.cfg.graphMaxNodes * 4, 4000));
+    const filter = (opts?.filter || '').trim().toLowerCase();
+
+    const embeddings = await redisManager.listEmbeddings(limit);
+    const inputs = embeddings
+      .map((e) => {
+        const md = e.metadata || {};
+        return {
+          id: e.id,
+          vector: e.vector,
+          label: (md.title || md.url || e.id) as string,
+          url: (md.url || '') as string,
+          provider: (md.provider || md.source || '') as string,
+        };
+      })
+      .filter((p) => {
+        if (!filter) return true;
+        return (p.label || '').toLowerCase().includes(filter) || (p.url || '').toLowerCase().includes(filter);
+      });
+
+    return projectEmbeddings(inputs);
   }
 
   /**

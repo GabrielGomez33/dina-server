@@ -136,8 +136,37 @@ can hit the live API). Two views:
 
 Seeded with the live Iran–USA graph; use **Load data** to paste a fuller
 `digim_graph` JSON (e.g. after a `digim_investigate`). Theme-aware (light/dark).
-The **semantic** view awaits an embedding export from the graph (nodes carry an
-`embedding_ref` but the query doesn't yet return vectors) — a later increment.
+
+### 2.4b-4 — Semantic view (the "n-dimensional coordinate graph") (DONE)
+
+The third view is now real. It answers the original picture: **an x/y/z coordinate
+cloud where distance ≈ closeness of meaning.**
+
+| Piece | File | Role |
+|---|---|---|
+| **Projection** | `web/graph/semanticProjection.ts` | Pure, deterministic **PCA** (power-iteration, `C·w = Xᵀ(X·w)` — no D×D matrix, so 1024-D is cheap) that projects the stored embedding vectors to 3D and rescales each axis to `[-1,1]`. |
+| **Corpus export** | `redisManager.listEmbeddings(limit)` | Public, read-only wrapper over the existing embedding store (in-memory map or `embedding:*` SCAN). |
+| **Orchestrator** | `webResearchOrchestrator.semanticMap({filter,limit})` | Sources the vectors, projects them, returns `{points, dimensions, count, explainedVariance}`. Optional `filter` narrows the cloud to a topic. |
+| **Capability** | `digim_semantic` (DUMP) + `POST /digim/semantic` + `DigimClient.semantic()` | Reachable by the API and any foreign module through the DUMP client. |
+| **Renderer** | `docs/digim/graph-viewer.html` → **Semantic** tab | Renders the cloud with the SAME 3D camera as the network view (orbit, zoom, depth fog, auto-rotate). Points coloured by **provider**, origin axes for reference, a PCA explained-variance caption, click-to-inspect (label · provider · x/y/z · source URL). **Load data** auto-detects `points` (→ semantic) vs `nodes`+`edges` (→ network/timeline). |
+
+Why PCA: the top-3 principal components are the 3 directions of greatest variance
+— literally the axes along which the documents differ most — so the projection is
+the most faithful 3D shadow of the 1024-D space, and it's deterministic (no
+t-SNE/UMAP randomness), which keeps it unit-testable and stable across reloads.
+
+**All three views coexist** — Network (force-directed relationships), Timeline
+(events on a date axis), Semantic (embedding cloud) — switchable by tab, each fed
+by its own endpoint (`digim_graph` / `digim_graph` / `digim_semantic`).
+
+Verified: **graph 61/61** (`npm run test:graph`) — adds the projection suite:
+empty/single/degenerate corpora, determinism (identical corpus → identical cloud),
+`[-1,1]` bounds, **structure preservation** (near-identical vectors project closer
+than dissimilar ones), off-dimension-vector guard, explained-variance bounds, and a
+1024-D smoke test. tsc clean; no regression (tools 32, sources 20, web 107, memory
+33, migration 18). Viewer rendered headlessly (Chromium) to confirm the Semantic
+tab draws the cloud, colours by provider, and click-selects a point with its
+coordinates + source.
 
 ## Verification
 

@@ -125,10 +125,11 @@
   <div class="tabs" role="tablist" aria-label="View">
     <button class="tab" role="tab" id="tab-network" aria-selected="true">3D Network</button>
     <button class="tab" role="tab" id="tab-timeline" aria-selected="false">Timeline</button>
+    <button class="tab" role="tab" id="tab-semantic" aria-selected="false">Semantic</button>
   </div>
   <div class="stats">
-    <div class="stat"><b id="s-nodes">0</b><span>Entities</span></div>
-    <div class="stat"><b id="s-edges">0</b><span>Relations</span></div>
+    <div class="stat"><b id="s-nodes">0</b><span id="s-nodes-lbl">Entities</span></div>
+    <div class="stat"><b id="s-edges">0</b><span id="s-edges-lbl">Relations</span></div>
     <button class="iconbtn" id="spin-btn" aria-pressed="true" title="Toggle auto-rotate">⟳</button>
     <button class="btn" id="load-btn">Load data</button>
     <button class="iconbtn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme">◑</button>
@@ -142,8 +143,8 @@
     <div class="hint" id="hint">drag to orbit · scroll to zoom · click a node</div>
   </div>
   <aside>
-    <div><p class="rail-h">Node type</p><div class="legend" id="legend"></div>
-      <p class="legend-note">size = mentions · edge width = corroboration · depth = 3D</p></div>
+    <div><p class="rail-h" id="legend-h">Node type</p><div class="legend" id="legend"></div>
+      <p class="legend-note" id="legend-note">size = mentions · edge width = corroboration · depth = 3D</p></div>
     <div class="detail empty" id="detail"><p class="rail-h">Selected</p>
       <div class="dtl-body">Click a node to inspect its relationships and provenance.</div></div>
   </aside>
@@ -152,8 +153,8 @@
 <dialog id="modal">
   <div class="modal-h"><h2>Load graph data</h2><button class="btn" id="modal-x" aria-label="Close">✕</button></div>
   <div class="modal-b">
-    <p>Paste the JSON returned by <code>POST /digim/graph</code> (the object with <code>nodes</code> and <code>edges</code>). It replaces the current graph.</p>
-    <textarea id="json-in" spellcheck="false" placeholder='{ "nodes": [...], "edges": [...] }'></textarea>
+    <p>Paste the JSON from <code>POST /digim/graph</code> (an object with <code>nodes</code> + <code>edges</code>) for the Network/Timeline views, or from <code>POST /digim/semantic</code> (an object with <code>points</code>) for the Semantic cloud. It replaces the current data and switches to the matching view.</p>
+    <textarea id="json-in" spellcheck="false" placeholder='{ "nodes": [...], "edges": [...] }  — or —  { "points": [...] }'></textarea>
     <div class="err" id="json-err"></div>
     <div class="modal-f"><button class="btn" id="json-sample">Reset to sample</button><button class="btn primary" id="json-load">Load</button></div>
   </div>
@@ -161,27 +162,53 @@
 
 <script>
 "use strict";
+// Post-polish sample: generic/indefinite entities ("three vessels", "a container
+// ship") are dropped at extraction (isLowValueEntity), and same-meaning predicates
+// collapse so corroboration accumulates instead of splintering into 1-count edges.
 const SAMPLE = {
   suggested_view: "network",
   nodes: [
     { name: "Iran", type: "location", occurred_at: null, weight: 8 },
-    { name: "United States", type: "organization", occurred_at: null, weight: 4 },
-    { name: "three vessels", type: "event", occurred_at: "2026-07-07T00:00:00.000Z", weight: 1 },
-    { name: "three commercial vessels", type: "event", occurred_at: "2026-07-07T00:00:00.000Z", weight: 1 },
-    { name: "Qatari-flagged vessel al-Rakiyat", type: "other", occurred_at: null, weight: 1 },
-    { name: "a container ship", type: "other", occurred_at: null, weight: 1 }
+    { name: "United States", type: "organization", occurred_at: null, weight: 5 },
+    { name: "Strait of Hormuz", type: "location", occurred_at: null, weight: 3 },
+    { name: "Qatari-flagged vessel al-Rakiyat", type: "other", occurred_at: "2026-07-07T00:00:00.000Z", weight: 1 },
+    { name: "Brent crude", type: "concept", occurred_at: null, weight: 2 }
   ],
   edges: [
-    { from: "United States", predicate: "reimposed_sanctions_on_iranian_oil_sales", to: "Iran", corroboration: 1 },
-    { from: "United States", predicate: "launched_strikes_on", to: "Iran", corroboration: 1 },
-    { from: "United States", predicate: "launched_a_series_of_powerful_strikes_against", to: "Iran", corroboration: 1 },
-    { from: "United States", predicate: "revoked_the_ability_to_openly_sell_crude_oil_in_the_world_market", to: "Iran", corroboration: 1 },
-    { from: "Iran", predicate: "struck", to: "Qatari-flagged vessel al-Rakiyat", corroboration: 1 },
-    { from: "Iran", predicate: "fired_a_drone_at_a_ship", to: "a container ship", corroboration: 1 },
-    { from: "Iran", predicate: "fired_on", to: "three commercial vessels", corroboration: 1 },
-    { from: "Iran", predicate: "attacked_commercial_ships_near_the_strait_of_hormuz", to: "three vessels", corroboration: 1 }
+    { from: "United States", predicate: "reimposed_sanctions_on", to: "Iran", corroboration: 2 },
+    { from: "United States", predicate: "launched_strikes_on", to: "Iran", corroboration: 3 },
+    { from: "Iran", predicate: "struck", to: "Qatari-flagged vessel al-Rakiyat", corroboration: 1, occurred_at: "2026-07-07T00:00:00.000Z" },
+    { from: "Iran", predicate: "threatened_to_close", to: "Strait of Hormuz", corroboration: 2 },
+    { from: "Strait of Hormuz", predicate: "chokepoint_for", to: "Brent crude", corroboration: 1 }
   ]
 };
+// Semantic sample — a small deterministic 3D cloud (as digim_semantic returns).
+// Three loose clusters so the "proximity = meaning" idea reads immediately.
+const SAMPLE_SEM = (() => {
+  const seeds = [
+    { c: [0.7, 0.5, 0.2], provider: "wikipedia", tag: "Iran–US conflict" },
+    { c: [-0.6, -0.3, 0.5], provider: "hackernews", tag: "oil & energy markets" },
+    { c: [0.1, -0.7, -0.6], provider: "searxng", tag: "regional diplomacy" },
+  ];
+  const points = [];
+  let k = 0;
+  for (const s of seeds) {
+    for (let i = 0; i < 5; i++) {
+      const j = k++;
+      points.push({
+        id: "s" + j,
+        label: s.tag + " · doc " + (i + 1),
+        url: "https://example.org/" + s.provider + "/" + j,
+        provider: s.provider,
+        x: s.c[0] + Math.sin(j * 1.7) * 0.18,
+        y: s.c[1] + Math.cos(j * 2.3) * 0.18,
+        z: s.c[2] + Math.sin(j * 0.9) * 0.18,
+      });
+    }
+  }
+  return { view: "semantic", dimensions: 1024, point_count: points.length, explained_variance: [0.41, 0.29, 0.17], points };
+})();
+
 const TYPES = ["person","organization","location","event","technology","concept","other"];
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const typeColor = (t) => cssVar("--t-" + (TYPES.includes(t) ? t : "other")) || cssVar("--t-other");
@@ -189,6 +216,7 @@ const pretty = (p) => (p || "").replace(/_/g, " ");
 const clip = (s, n) => s.length > n ? s.slice(0, n-1) + "…" : s;
 
 let G = { nodes: [], edges: [] };
+let SEM = { points: [], dimensions: 0, explainedVariance: [] };
 let view = "network", selected = null, hoverNode = null, focusTerm = "";
 let spin = !matchMedia("(prefers-reduced-motion: reduce)").matches;
 const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
@@ -223,13 +251,56 @@ function setData(raw) {
   alpha = 1;
 }
 function updateStats() {
-  document.getElementById("s-nodes").textContent = G.nodes.length;
-  document.getElementById("s-edges").textContent = G.edges.length;
+  if (view === "semantic") {
+    document.getElementById("s-nodes").textContent = SEM.points.length;
+    document.getElementById("s-edges").textContent = SEM.dimensions || 0;
+    document.getElementById("s-nodes-lbl").textContent = "Points";
+    document.getElementById("s-edges-lbl").textContent = "Dimensions";
+  } else {
+    document.getElementById("s-nodes").textContent = G.nodes.length;
+    document.getElementById("s-edges").textContent = G.edges.length;
+    document.getElementById("s-nodes-lbl").textContent = "Entities";
+    document.getElementById("s-edges-lbl").textContent = "Relations";
+  }
+}
+
+// Semantic cloud: PCA coordinates arrive in [-1,1]; scale to world space so the
+// existing 3D projection/camera renders them exactly like the network view.
+const SEM_R = 230;
+function ingestSemantic(raw) {
+  const ptsIn = Array.isArray(raw.points) ? raw.points : [];
+  const points = ptsIn.map((p, i) => ({
+    id: String(p.id ?? i),
+    name: String(p.label ?? p.url ?? p.id ?? "?"),
+    url: String(p.url ?? ""),
+    provider: String(p.provider ?? "").toLowerCase(),
+    x: (Number(p.x) || 0) * SEM_R, y: (Number(p.y) || 0) * SEM_R, z: (Number(p.z) || 0) * SEM_R,
+  }));
+  return { points, dimensions: Number(raw.dimensions ?? raw.dims ?? 0) || 0,
+    explainedVariance: Array.isArray(raw.explained_variance) ? raw.explained_variance : [] };
+}
+function setSemanticData(raw) {
+  SEM = ingestSemantic(raw); selected = null; renderDetail(); updateStats();
+}
+// Stable, evenly-spread colour per provider (golden-angle hue).
+const _provHue = new Map();
+function providerColor(prov) {
+  const key = prov || "unknown";
+  if (!_provHue.has(key)) _provHue.set(key, (_provHue.size * 137.508) % 360);
+  const dark = (document.documentElement.getAttribute("data-theme")
+    || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")) === "dark";
+  return `hsl(${_provHue.get(key).toFixed(0)}, 62%, ${dark ? 62 : 46}%)`;
+}
+function semProviders() {
+  const s = []; const seen = new Set();
+  for (const p of SEM.points) { const k = p.provider || "unknown"; if (!seen.has(k)) { seen.add(k); s.push(k); } }
+  return s;
 }
 
 // ---- 3D force sim ----
 let alpha = 1;
 function tick() {
+  if (view === "semantic") { if (spin && !dragging) cam.rotY += 0.0022; return; }
   if (view !== "network") return;
   if (spin && !dragging) cam.rotY += 0.0022;
   alpha *= 0.99; if (alpha < 0.03) alpha = 0.03;
@@ -267,7 +338,9 @@ const nodeR = (nd) => 4.5 + Math.sqrt(nd.weight) * 3.2;
 
 function draw() {
   ctx.save(); ctx.scale(DPR, DPR); ctx.clearRect(0,0,W,H);
-  view === "network" ? drawNetwork() : drawTimeline();
+  if (view === "network") drawNetwork();
+  else if (view === "timeline") drawTimeline();
+  else drawSemantic();
   ctx.restore();
 }
 function neighborsOf(name){const s=new Set();for(const e of G.edges){if(e.s.name===name)s.add(e.t.name);if(e.t.name===name)s.add(e.s.name);}return s;}
@@ -349,8 +422,74 @@ function drawTimeline() {
 }
 function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
 
+// ---- semantic cloud (3D point cloud from projected embeddings) ----
+function drawSemantic() {
+  const inkDim=cssVar("--ink-dim"), ink=cssVar("--ink"), grid=cssVar("--line");
+  if (!SEM.points.length) {
+    ctx.fillStyle=inkDim; ctx.textAlign="center"; ctx.font="12px "+cssVar("--font-ui");
+    ctx.fillText("No embeddings to project yet.", W/2, H/2-8);
+    ctx.font="11px "+cssVar("--font-mono");
+    ctx.fillText("Load the JSON from POST /digim/semantic (an object with 'points').", W/2, H/2+12);
+    return;
+  }
+  const P = new Map();
+  for (const pt of SEM.points) P.set(pt, project(pt));
+  const zs=[...P.values()].map(p=>p.z); const zmin=Math.min(...zs), zmax=Math.max(...zs), zspan=(zmax-zmin)||1;
+  const fog=(z)=>0.32+0.68*((z-zmin)/zspan);
+  const hi = selected;
+  // faint origin axes for spatial reference
+  const O=project({x:0,y:0,z:0}), AX=[["x",{x:SEM_R,y:0,z:0}],["y",{x:0,y:SEM_R,z:0}],["z",{x:0,y:0,z:SEM_R}]];
+  ctx.lineWidth=1; ctx.strokeStyle=grid; ctx.globalAlpha=0.5;
+  for (const [,v] of AX){ const p=project(v); ctx.beginPath(); ctx.moveTo(O.x,O.y); ctx.lineTo(p.x,p.y); ctx.stroke(); }
+  ctx.globalAlpha=1;
+  const order=SEM.points.map(pt=>({pt,p:P.get(pt)})).sort((a,b)=>a.p.z-b.p.z);
+  for (const {pt,p} of order) {
+    const f=fog(p.z), r=Math.max(2.2, 5.2*p.scale);
+    const isSel=pt.id===hi, isFoc=focusTerm && pt.name.toLowerCase().includes(focusTerm);
+    ctx.globalAlpha=(hi && !isSel)?0.35*f:f;
+    ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2);
+    ctx.fillStyle=mix(hslToHex(providerColor(pt.provider)), cssVar("--fog"), 1-f); ctx.fill();
+    if (isSel || isFoc) { ctx.globalAlpha=1; ctx.lineWidth=2.5; ctx.strokeStyle=cssVar("--accent"); ctx.stroke(); }
+    if (isSel || isFoc || p.scale>1.15) {
+      ctx.globalAlpha=Math.min(1,f+0.2); ctx.fillStyle=ink;
+      ctx.font=(isSel?"600 ":"500 ")+"11px "+cssVar("--font-ui"); ctx.textAlign="center"; ctx.textBaseline="top";
+      ctx.fillText(clip(pt.name,28), p.x, p.y+r+3);
+    }
+  }
+  ctx.globalAlpha=1;
+  // explained-variance caption (how much structure the 3 axes capture)
+  if (SEM.explainedVariance.length===3) {
+    const pct=SEM.explainedVariance.map(v=>Math.round(v*100));
+    ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.textAlign="left"; ctx.textBaseline="bottom";
+    ctx.fillText(`PCA · axes capture ${pct[0]}% / ${pct[1]}% / ${pct[2]}% of variance`, 14, H-14);
+  }
+}
+// HSL string → hex, so it can flow through mix() with the fog RGB.
+function hslToHex(hsl) {
+  const m=/hsl\(\s*([\d.]+)[, ]+([\d.]+)%[, ]+([\d.]+)%/.exec(hsl); if(!m) return "#7c9cbf";
+  let h=+m[1]/360, s=+m[2]/100, l=+m[3]/100;
+  const k=n=>(n+h*12)%12, a=s*Math.min(l,1-l), f=n=>l-a*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));
+  const to=v=>Math.round(v*255).toString(16).padStart(2,"0");
+  return "#"+to(f(0))+to(f(8))+to(f(4));
+}
+
 function renderDetail() {
   const el = document.getElementById("detail");
+  if (view === "semantic") {
+    if (!selected) { el.classList.add("empty");
+      el.innerHTML='<p class="rail-h">Selected</p><div class="dtl-body">Click a point to inspect its document. Nearby points are semantically similar.</div>'; return; }
+    const pt = SEM.points.find(p=>p.id===selected); if (!pt) return;
+    el.classList.remove("empty");
+    const col=providerColor(pt.provider);
+    el.innerHTML=`<p class="rail-h">Selected</p><p class="dtl-name">${clip(pt.name,80)}</p>
+      <span class="dtl-type" style="color:${col}"><span class="dot" style="background:${col}"></span>${pt.provider||"unknown"}</span>
+      <div class="dtl-meta">
+        <div class="kv"><span class="k">x</span><span class="v">${(pt.x/SEM_R).toFixed(3)}</span></div>
+        <div class="kv"><span class="k">y</span><span class="v">${(pt.y/SEM_R).toFixed(3)}</span></div>
+        <div class="kv"><span class="k">z</span><span class="v">${(pt.z/SEM_R).toFixed(3)}</span></div></div>
+      ${pt.url?`<p class="rail-h" style="margin-top:16px">Source</p><div class="rels"><div class="rel"><a href="${pt.url}" target="_blank" rel="noopener" class="other">${clip(pt.url,44)}</a></div></div>`:""}`;
+    return;
+  }
   if (!selected) { el.classList.add("empty");
     el.innerHTML='<p class="rail-h">Selected</p><div class="dtl-body">Click a node to inspect its relationships and provenance.</div>'; return; }
   const nd = G.nodes.find(n=>n.name===selected); if (!nd) return;
@@ -368,6 +507,16 @@ function renderDetail() {
     ${ins.length?`<p class="rail-h" style="margin-top:14px">Incoming</p><div class="rels">${ins.map(e=>rel(e,"in")).join("")}</div>`:""}`;
 }
 function buildLegend() {
+  if (view === "semantic") {
+    document.getElementById("legend-h").textContent = "Provider";
+    document.getElementById("legend-note").textContent = "proximity = similar meaning · depth = 3rd PCA axis";
+    const provs = semProviders();
+    document.getElementById("legend").innerHTML = (provs.length ? provs : ["unknown"]).map(p =>
+      `<div class="legend-row"><span class="dot" style="background:${providerColor(p)}"></span>${p}</div>`).join("");
+    return;
+  }
+  document.getElementById("legend-h").textContent = "Node type";
+  document.getElementById("legend-note").textContent = "size = mentions · edge width = corroboration · depth = 3D";
   const present=new Set(G.nodes.map(n=>n.type)); const order=TYPES.filter(t=>present.has(t));
   document.getElementById("legend").innerHTML=(order.length?order:["other"]).map(t=>
     `<div class="legend-row"><span class="dot" style="background:${typeColor(t)}"></span>${t}</div>`).join("");
@@ -377,11 +526,19 @@ function buildLegend() {
 let dragNode=null, dragging=false, last=null, moved=false;
 function nodeAt(sx,sy) {
   if (view==="timeline") { for (const nd of G.nodes){ if(!nd._tl) continue; if(Math.hypot(sx-nd._tl.x,sy-nd._tl.y)<9) return nd; } return null; }
+  if (view==="semantic") {
+    let best=null, bd=1e9;
+    for (const pt of SEM.points){ const p=project(pt); const r=Math.max(4,5.2*p.scale)+5; const d=Math.hypot(sx-p.x,sy-p.y);
+      if (d<r && d<bd){bd=d;best=pt;} }
+    return best;
+  }
   let best=null, bd=1e9;
   for (const nd of G.nodes){ const p=project(nd); const r=Math.max(4,nodeR(nd)*p.scale)+4; const d=Math.hypot(sx-p.x,sy-p.y);
     if (d<r && p.z<bd*0+1e9) { if (d<bd){bd=d;best=nd;} } }
   return best;
 }
+// The selection key differs by view: semantic points key on id, graph nodes on name.
+function selKey(nd){ return view==="semantic" ? nd.id : nd.name; }
 cv.addEventListener("pointerdown",(e)=>{ cv.setPointerCapture(e.pointerId);
   const r=cv.getBoundingClientRect(); const sx=e.clientX-r.left, sy=e.clientY-r.top;
   moved=false; last={x:e.clientX,y:e.clientY};
@@ -397,23 +554,31 @@ cv.addEventListener("pointermove",(e)=>{
     let d = { x: dx/s, y: dy/s, z: 0 };
     d = rotX(d, -cam.rotX); d = rotY(d, -cam.rotY);
     dragNode.x+=d.x; dragNode.y+=d.y; dragNode.z+=d.z; dragNode.vx=dragNode.vy=dragNode.vz=0; alpha=Math.max(alpha,0.4);
-  } else if (view==="network"){ cam.rotY += dx*0.01; cam.rotX += dy*0.01; cam.rotX=Math.max(-1.4,Math.min(1.4,cam.rotX)); }
+  } else if (view==="network" || view==="semantic"){ cam.rotY += dx*0.01; cam.rotX += dy*0.01; cam.rotX=Math.max(-1.4,Math.min(1.4,cam.rotX)); }
 });
 function endDrag(e){ if (dragging && !moved){ const r=cv.getBoundingClientRect(); const nd=nodeAt(e.clientX-r.left,e.clientY-r.top);
-    selected = nd ? (nd.name===selected?null:nd.name) : null; renderDetail(); }
+    selected = nd ? (selKey(nd)===selected?null:selKey(nd)) : null; renderDetail(); }
   dragging=false; dragNode=null; cv.classList.remove("dragging"); }
 cv.addEventListener("pointerup",endDrag); cv.addEventListener("pointercancel",endDrag);
 cv.addEventListener("wheel",(e)=>{ e.preventDefault(); cam.zoom=Math.max(0.3,Math.min(4,cam.zoom*(e.deltaY<0?1.1:0.909))); },{passive:false});
 document.getElementById("focus").addEventListener("input",(e)=>{ focusTerm=e.target.value.trim().toLowerCase();
-  const hit=focusTerm && G.nodes.find(n=>n.name.toLowerCase().includes(focusTerm)); if(hit){selected=hit.name;renderDetail();} });
+  if (!focusTerm) return;
+  if (view==="semantic"){ const hit=SEM.points.find(p=>p.name.toLowerCase().includes(focusTerm)); if(hit){selected=hit.id;renderDetail();} return; }
+  const hit=G.nodes.find(n=>n.name.toLowerCase().includes(focusTerm)); if(hit){selected=hit.name;renderDetail();} });
 
-function setView(v){ view=v;
+function setView(v){ const prev=view; view=v;
   document.getElementById("tab-network").setAttribute("aria-selected", v==="network");
   document.getElementById("tab-timeline").setAttribute("aria-selected", v==="timeline");
-  document.getElementById("hint").style.display = v==="network"?"":"none";
+  document.getElementById("tab-semantic").setAttribute("aria-selected", v==="semantic");
+  document.getElementById("hint").style.display = (v==="network"||v==="semantic")?"":"none";
+  // Selection keys differ between the graph views and the semantic cloud — reset
+  // when crossing that boundary so a stale key can't mis-highlight.
+  if ((prev==="semantic") !== (v==="semantic")) { selected=null; }
+  buildLegend(); updateStats(); renderDetail();
   if (v==="network") alpha=Math.max(alpha,0.5); }
 document.getElementById("tab-network").onclick=()=>setView("network");
 document.getElementById("tab-timeline").onclick=()=>setView("timeline");
+document.getElementById("tab-semantic").onclick=()=>setView("semantic");
 const spinBtn=document.getElementById("spin-btn");
 spinBtn.setAttribute("aria-pressed", String(spin));
 spinBtn.onclick=()=>{ spin=!spin; spinBtn.setAttribute("aria-pressed",String(spin)); };
@@ -421,11 +586,21 @@ spinBtn.onclick=()=>{ spin=!spin; spinBtn.setAttribute("aria-pressed",String(spi
 const modal=document.getElementById("modal");
 document.getElementById("load-btn").onclick=()=>{ document.getElementById("json-err").textContent=""; modal.showModal(); };
 document.getElementById("modal-x").onclick=()=>modal.close();
-document.getElementById("json-sample").onclick=()=>{ setData(SAMPLE); buildLegend(); modal.close(); };
+document.getElementById("json-sample").onclick=()=>{
+  if (view==="semantic") { setSemanticData(SAMPLE_SEM); buildLegend(); }
+  else { setData(SAMPLE); buildLegend(); }
+  modal.close(); };
 document.getElementById("json-load").onclick=()=>{ const err=document.getElementById("json-err");
   try { const raw=JSON.parse(document.getElementById("json-in").value);
-    if(!raw.nodes||!raw.edges) throw new Error("JSON must have 'nodes' and 'edges' arrays.");
-    setData(raw); buildLegend(); if(raw.suggested_view==="temporal") setView("timeline"); modal.close();
+    if (Array.isArray(raw.points)) {                 // digim_semantic → the cloud
+      setSemanticData(raw); setView("semantic"); buildLegend(); modal.close(); return;
+    }
+    if(!raw.nodes||!raw.edges) throw new Error("JSON must have 'nodes'+'edges' (graph) or 'points' (semantic).");
+    setData(raw);
+    if(raw.suggested_view==="temporal") setView("timeline");
+    else if(raw.suggested_view==="semantic" && Array.isArray(raw.points)) setView("semantic");
+    else setView("network");
+    buildLegend(); modal.close();
   } catch(ex){ err.textContent=ex.message; } };
 document.getElementById("theme-btn").onclick=()=>{ const cur=document.documentElement.getAttribute("data-theme")
   || (matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");
@@ -433,7 +608,7 @@ document.getElementById("theme-btn").onclick=()=>{ const cur=document.documentEl
 
 function frame(){ tick(); draw(); requestAnimationFrame(frame); }
 new ResizeObserver(resize).observe(cv);
-setData(SAMPLE); buildLegend(); resize(); setView("network"); frame();
+setData(SAMPLE); setSemanticData(SAMPLE_SEM); buildLegend(); resize(); setView("network"); frame();
 </script>
 
 </body>

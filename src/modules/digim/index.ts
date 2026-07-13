@@ -288,6 +288,9 @@ async  initialize(): Promise<void> {
       case 'digim_graph':
         return await this.handleGraphRequest(requestData);
 
+      case 'digim_semantic':
+        return await this.handleSemanticRequest(requestData);
+
       case 'digim_memory_backfill':
         return await this.handleMemoryBackfillRequest(requestData);
 
@@ -574,6 +577,34 @@ async  initialize(): Promise<void> {
         occurred_at: e.occurredAt, sources: e.sources || [],
       })),
       graph_totals: stats,
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_semantic — the SEMANTIC VIEW ("n-dimensional coordinate graph"): project
+   * the stored 1024-D content embeddings to a 3D point cloud where nearness ≈
+   * closeness of meaning. Returns a `points` array the graph viewer's Semantic tab
+   * renders directly. Optional `filter` narrows the corpus to a topic.
+   */
+  private async handleSemanticRequest(requestData: any): Promise<any> {
+    const filter: string = (requestData?.filter || requestData?.query || requestData?.q || '').trim();
+    const limit = requestData?.limit;
+    console.log(`🌌 Handling semantic-map request${filter ? ` (filter="${filter.substring(0, 40)}")` : ''}`);
+
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+
+    const proj = await this.webResearch.semanticMap({ filter, limit });
+    return {
+      status: 'success',
+      view: 'semantic',
+      filter: filter || null,
+      dimensions: proj.dimensions,
+      point_count: proj.count,
+      explained_variance: proj.explainedVariance,
+      points: proj.points,
       generated_at: new Date(),
     };
   }
