@@ -1641,6 +1641,36 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
+  // DIGIM Research history — list past researches (frontend history sidebar)
+  apiRouter.get('/digim/history', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const q = req.query;
+      const data = await digim.history({
+        limit: q.limit !== undefined ? Number(q.limit) : undefined,
+        offset: q.offset !== undefined ? Number(q.offset) : undefined,
+        type: (q.type || q.level) as string | undefined,
+        search: (q.search || q.q) as string | undefined,
+      }, digimCaller(req));
+      res.json({ ...data, auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining } });
+    } catch (error) {
+      console.error('❌ Error in DIGIM history:', error);
+      res.status(500).json({ error: 'DIGIM history failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // DIGIM Get research — open one past research by id (full detail)
+  apiRouter.get('/digim/research/:id', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const withDocs = req.query.with_documents === 'true' || req.query.with_documents === '1';
+      const data = await digim.get({ id: String(req.params.id), withDocuments: withDocs }, digimCaller(req));
+      const code = data && data.status === 'not_found' ? 404 : 200;
+      res.status(code).json({ ...data, auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining } });
+    } catch (error) {
+      console.error('❌ Error in DIGIM get research:', error);
+      res.status(500).json({ error: 'DIGIM get research failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
   // DIGIM Semantic view — project stored embeddings to a 3D coordinate cloud
   apiRouter.post('/digim/semantic', async (req: AuthenticatedRequest, res: Response) => {
     try {

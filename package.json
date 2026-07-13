@@ -30,6 +30,7 @@
     "test:sources": "ts-node test/digim/sourceTest.ts",
     "test:planner": "ts-node test/digim/plannerTest.ts",
     "test:graph": "ts-node test/digim/graphTest.ts",
+    "test:history": "ts-node test/digim/historyTest.ts",
     "type-check": "tsc --noEmit"
   },
   "keywords": [

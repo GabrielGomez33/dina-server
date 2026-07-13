@@ -150,6 +150,24 @@ export class DigimClient {
     }, caller);
   }
 
+  /** List past researches (history sidebar) — paginated, optional filter/search. */
+  history(input: { limit?: number; offset?: number; type?: string; search?: string } = {}, caller?: Partial<DigimCaller>): Promise<any> {
+    return this.dispatch('digim_history', 4, {
+      limit: input.limit,
+      offset: input.offset,
+      type: input.type,
+      search: input.search,
+    }, caller);
+  }
+
+  /** Open one past research by id (full detail; optionally its documents). */
+  get(input: { id: string; withDocuments?: boolean }, caller?: Partial<DigimCaller>): Promise<any> {
+    return this.dispatch('digim_get', 4, {
+      id: input.id,
+      with_documents: input.withDocuments,
+    }, caller);
+  }
+
   /** Recall from semantic memory by meaning — no gathering. */
   recall(input: DigimRecallInput, caller?: Partial<DigimCaller>): Promise<any> {
     return this.dispatch('digim_recall', 6, {

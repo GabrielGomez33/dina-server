@@ -479,6 +479,38 @@ export class WebResearchOrchestrator {
   }
 
   /**
+   * RESEARCH HISTORY (frontend infra): list past researches for a history
+   * sidebar. Reads the intelligence records every run already persists.
+   */
+  async listResearch(opts?: { limit?: number; offset?: number; type?: string; search?: string }): Promise<{ total: number; items: any[] }> {
+    this.assertEnabled();
+    const [items, total] = await Promise.all([
+      this.store.listIntelligence(opts || {}),
+      this.store.countIntelligence({ type: opts?.type, search: opts?.search }),
+    ]);
+    return { total, items };
+  }
+
+  /**
+   * Open one past research by id (detail view). Optionally resolves the gathered
+   * source documents (title/url/snippet) behind it so a frontend can show them.
+   */
+  async getResearch(id: string, opts?: { withDocuments?: boolean }): Promise<any | null> {
+    this.assertEnabled();
+    const rec = await this.store.getIntelligenceById(id);
+    if (!rec) return null;
+    if (opts?.withDocuments && rec.sourceContentIds.length > 0) {
+      const rows = await this.store.getContentByIds(rec.sourceContentIds);
+      (rec as any).documents = rows.map((r) => ({
+        id: r.id, title: r.title || '', url: r.url || '',
+        snippet: String(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 280),
+        provider: r.provider || (r.metadata && r.metadata.provider) || '',
+      }));
+    }
+    return rec;
+  }
+
+  /**
    * ON-DEMAND NODE INSIGHT (Phase 2.4b-5): given a clicked entity/document, generate
    * a concise grounded insight about what it is and why it matters — from what DINA
    * ALREADY has (its graph relationships + stored source snippets), NOT a fresh web
