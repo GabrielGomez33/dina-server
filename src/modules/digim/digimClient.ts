@@ -74,6 +74,13 @@ export interface DigimRecallInput {
   minScore?: number;
 }
 
+export interface DigimSemanticInput {
+  /** Optional case-insensitive substring on title/url to narrow the cloud. */
+  filter?: string;
+  /** Max embeddings to project (safety bound). */
+  limit?: number;
+}
+
 /**
  * Typed DUMP client for DIGIM. Construct once with the DinaCore instance (and an
  * optional default caller identity), then call the capability methods.
@@ -124,6 +131,14 @@ export class DigimClient {
     return this.dispatch('digim_graph', 6, {
       query: input.query,
       max_nodes: input.maxNodes,
+    }, caller);
+  }
+
+  /** Semantic view: project stored embeddings to a 3D coordinate cloud. */
+  semantic(input: DigimSemanticInput = {}, caller?: Partial<DigimCaller>): Promise<any> {
+    return this.dispatch('digim_semantic', 5, {
+      filter: input.filter,
+      limit: input.limit,
     }, caller);
   }
 
