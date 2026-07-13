@@ -32,6 +32,7 @@ import { GraphStore } from './graph/graphStore';
 import { GraphExtractor } from './graph/graphExtractor';
 import { Subgraph } from './graph/graphTypes';
 import { projectEmbeddings, SemanticProjection } from './graph/semanticProjection';
+import { buildFencedSources, INJECTION_SYSTEM_RULE } from './security/promptGuard';
 import { redisManager } from '../../../config/redis';
 import { GatherResult, GatheredDocument, WebInsight, RetrievedMemory, SearchResult } from './types';
 
@@ -99,6 +100,8 @@ export class WebResearchOrchestrator {
   private initialized = false;
   private sweepTimer: NodeJS.Timeout | null = null;
   private pruning = false;
+  /** On-demand per-node insight cache (entity → generated insight), TTL-bounded. */
+  private insightCache = new Map<string, { insight: string; sources: string[]; relationships: string[]; at: number }>();
 
   constructor(cfg: DigimWebConfig = getDigimWebConfig()) {
     this.cfg = cfg;
@@ -444,7 +447,7 @@ export class WebResearchOrchestrator {
     const filter = (opts?.filter || '').trim().toLowerCase();
 
     const embeddings = await redisManager.listEmbeddings(limit);
-    const inputs = embeddings
+    const mapped = embeddings
       .map((e) => {
         const md = e.metadata || {};
         return {
@@ -460,7 +463,127 @@ export class WebResearchOrchestrator {
         return (p.label || '').toLowerCase().includes(filter) || (p.url || '').toLowerCase().includes(filter);
       });
 
+    // Collapse duplicate embeddings of the same source URL (content re-gathered
+    // across investigate facets / repeated runs is stored under distinct ids, so
+    // the same page can appear many times). One source → one point.
+    const seenUrl = new Set<string>();
+    const inputs = mapped.filter((p) => {
+      if (!p.url) return true;
+      const key = p.url.toLowerCase().replace(/[#?].*$/, '').replace(/\/$/, '');
+      if (seenUrl.has(key)) return false;
+      seenUrl.add(key);
+      return true;
+    });
+
     return projectEmbeddings(inputs);
+  }
+
+  /**
+   * RESEARCH HISTORY (frontend infra): list past researches for a history
+   * sidebar. Reads the intelligence records every run already persists.
+   */
+  async listResearch(opts?: { limit?: number; offset?: number; type?: string; search?: string }): Promise<{ total: number; items: any[] }> {
+    this.assertEnabled();
+    const [items, total] = await Promise.all([
+      this.store.listIntelligence(opts || {}),
+      this.store.countIntelligence({ type: opts?.type, search: opts?.search }),
+    ]);
+    return { total, items };
+  }
+
+  /**
+   * Open one past research by id (detail view). Optionally resolves the gathered
+   * source documents (title/url/snippet) behind it so a frontend can show them.
+   */
+  async getResearch(id: string, opts?: { withDocuments?: boolean }): Promise<any | null> {
+    this.assertEnabled();
+    const rec = await this.store.getIntelligenceById(id);
+    if (!rec) return null;
+    if (opts?.withDocuments && rec.sourceContentIds.length > 0) {
+      const rows = await this.store.getContentByIds(rec.sourceContentIds);
+      (rec as any).documents = rows.map((r) => ({
+        id: r.id, title: r.title || '', url: r.url || '',
+        snippet: String(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 280),
+        provider: r.provider || (r.metadata && r.metadata.provider) || '',
+      }));
+    }
+    return rec;
+  }
+
+  /**
+   * ON-DEMAND NODE INSIGHT (Phase 2.4b-5): given a clicked entity/document, generate
+   * a concise grounded insight about what it is and why it matters — from what DINA
+   * ALREADY has (its graph relationships + stored source snippets), NOT a fresh web
+   * crawl. One LLM call, cached per node, so it is cheap and never bulk. Fully
+   * guarded and injection-fenced.
+   */
+  async nodeInsight(input: { entity: string; maxSources?: number }): Promise<{
+    entity: string; insight: string; sources: string[]; relationships: string[]; cached: boolean;
+  }> {
+    this.assertEnabled();
+    const entity = (input.entity || '').trim();
+    if (!entity) throw new Error('nodeInsight requires an "entity"');
+    const maxSources = Math.max(1, Math.min(input.maxSources ?? 5, 12));
+
+    const key = entity.toLowerCase();
+    const TTL = 30 * 60 * 1000; // 30 min — graph rarely changes mid-session
+    const hit = this.insightCache.get(key);
+    if (hit && Date.now() - hit.at < TTL) {
+      return { entity, insight: hit.insight, sources: hit.sources, relationships: hit.relationships, cached: true };
+    }
+
+    // 1) Graph context: the entity's relationships + their provenance URLs.
+    const relationships: string[] = [];
+    const graphSources: string[] = [];
+    if (this.cfg.graphEnabled) {
+      try {
+        const sub = await this.graphStore.getSubgraph(entity, { maxNodes: 40 });
+        const nameById = new Map(sub.nodes.map((n) => [n.id, n.name]));
+        for (const e of sub.edges) {
+          const s = nameById.get(e.subjectId) || '', o = nameById.get(e.objectId) || '';
+          if (s && o) relationships.push(`${s} ${e.predicate.replace(/_/g, ' ')} ${o}`);
+          (e.sources || []).forEach((u) => u && graphSources.push(u));
+        }
+      } catch { /* graph optional */ }
+    }
+
+    // 2) Memory context: stored source snippets most relevant to the entity.
+    const mems = await this.memory.retrieve(entity, { topK: maxSources });
+
+    // 3) Synthesize a focused insight (fenced, guarded). If there is nothing to
+    //    ground on, say so honestly rather than hallucinate.
+    let insight: string;
+    if (relationships.length === 0 && mems.length === 0) {
+      insight = `No stored relationships or source material found for "${entity}" yet. Run a research or investigate pass that covers it, then try again.`;
+    } else {
+      const { block } = buildFencedSources(
+        mems.map((m) => ({ title: m.title, url: m.url, content: m.content, publishedAt: m.publishedAt })),
+        this.cfg.synthesisPerDocChars
+      );
+      const relBlock = relationships.length
+        ? `Known relationships (from the intelligence graph):\n- ${relationships.slice(0, 20).join('\n- ')}\n\n`
+        : '';
+      const prompt =
+        `${INJECTION_SYSTEM_RULE}\n\n` +
+        `You are an intelligence analyst. In 3-5 sentences, explain the entity "${entity}": ` +
+        `what it is, its role in this situation, and why it matters — grounded ONLY in the ` +
+        `relationships and sources below. Be specific and neutral; if the material is thin, say so.\n\n` +
+        relBlock +
+        (block ? `SOURCES:\n${block}\n\n` : '') +
+        `Insight about "${entity}":`;
+      insight = (await this.generateText(prompt, 'digim_node_insight', this.cfg.synthesisMaxTokens)).trim()
+        || `Not enough material to summarize "${entity}".`;
+    }
+
+    const sources = Array.from(new Set([...graphSources, ...mems.map((m) => m.url).filter(Boolean)])).slice(0, 8);
+    const rels = relationships.slice(0, 12);
+
+    this.insightCache.set(key, { insight, sources, relationships: rels, at: Date.now() });
+    if (this.insightCache.size > 300) { // simple bound: evict oldest
+      const oldest = [...this.insightCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (oldest) this.insightCache.delete(oldest[0]);
+    }
+    return { entity, insight, sources, relationships: rels, cached: false };
   }
 
   /**

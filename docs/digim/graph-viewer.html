@@ -104,6 +104,24 @@
   .rel-src .src { color: var(--accent); font: 500 10px/1.3 var(--font-mono); text-decoration: none; border-bottom: 1px dotted var(--accent); }
   .rel-src .src:hover { opacity: .8; }
   .rel a.other { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+  .insight-btn { margin-top: 14px; width: 100%; font: 600 11px/1 var(--font-ui); }
+  .insight { margin-top: 14px; }
+  .insight-body { font: 400 12.5px/1.6 var(--font-ui); color: var(--ink); background: var(--panel-2);
+    border-radius: 8px; padding: 11px 12px; border-left: 2px solid var(--accent); }
+  .insight.loading { font: 500 12px/1.5 var(--font-mono); color: var(--ink-dim);
+    background: var(--panel-2); border-radius: 8px; padding: 11px 12px; }
+  .insight.loading::after { content: ""; animation: dots 1.2s steps(4,end) infinite; }
+  @keyframes dots { 0%{content:""} 25%{content:"."} 50%{content:".."} 75%{content:"..."} }
+  .insight-err { font: 500 11.5px/1.5 var(--font-ui); color: var(--t-event);
+    background: color-mix(in srgb, var(--t-event) 10%, transparent); border-radius: 8px; padding: 10px 11px; }
+  .fetch-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .fetch-row select, .fetch-row input { font: 500 12px/1.4 var(--font-mono); color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 8px 9px; }
+  .fetch-row input { flex: 1; min-width: 140px; }
+  .api-row { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; font: 600 11px/1.3 var(--font-mono); color: var(--ink-dim); }
+  .api-row span { font-weight: 400; }
+  .api-row input { font: 500 12px/1.4 var(--font-mono); color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 7px; padding: 8px 9px; }
   #sample-badge { align-self: center; font: 700 9px/1 var(--font-mono); letter-spacing: .08em;
     color: var(--t-event); background: color-mix(in srgb, var(--t-event) 15%, transparent);
     border: 1px solid color-mix(in srgb, var(--t-event) 45%, transparent); padding: 5px 7px; border-radius: 6px; }
@@ -162,10 +180,23 @@
 <dialog id="modal">
   <div class="modal-h"><h2>Load graph data</h2><button class="btn" id="modal-x" aria-label="Close">✕</button></div>
   <div class="modal-b">
-    <p>Paste the JSON from <code>POST /digim/graph</code> (<code>nodes</code> + <code>edges</code>) for Network/Timeline, or from <code>POST /digim/semantic</code> (<code>points</code>) for the Semantic cloud. It auto-detects which, switches view, and ignores surrounding shell text so you can paste a whole terminal block.</p>
+    <p class="rail-h" style="margin:0 0 8px">Fetch live from the API</p>
+    <div class="fetch-row">
+      <select id="fetch-kind" aria-label="What to fetch">
+        <option value="graph">Graph (nodes + edges)</option>
+        <option value="semantic">Semantic cloud (points)</option>
+      </select>
+      <input id="fetch-q" type="text" spellcheck="false" placeholder="focus / filter — e.g. Iran">
+      <button class="btn primary" id="fetch-btn">Fetch</button>
+    </div>
+    <p style="color:var(--ink-dim);font:500 11px/1.5 var(--font-mono);margin:6px 0 0">Uses the API base below. Needs the page served from your DINA domain (or a reachable API base). The hosted preview blocks live calls — paste there instead.</p>
+    <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    <p>Or paste the JSON from <code>POST /digim/graph</code> (<code>nodes</code> + <code>edges</code>) or <code>POST /digim/semantic</code> (<code>points</code>). It auto-detects which, switches view, and ignores surrounding shell text so you can paste a whole terminal block.</p>
     <p style="color:var(--ink-dim);font:500 11px/1.5 var(--font-mono)">Tip: don't <code>jq</code>-filter the semantic response — the cloud needs the full <code>points</code> array. Use <code>| jq .</code> (or no filter), not <code>| jq '{point_count}'</code>.</p>
     <textarea id="json-in" spellcheck="false" placeholder='{ "nodes": [...], "edges": [...] }  — or —  { "points": [...] }'></textarea>
     <div class="err" id="json-err"></div>
+    <label class="api-row">API base <span>(for live "Generate insight"; blank = same origin)</span>
+      <input id="api-base" type="text" spellcheck="false" placeholder="https://your-host/dina/api/v1"></label>
     <div class="modal-f"><button class="btn" id="json-sample">Reset to sample</button><button class="btn primary" id="json-load">Load</button></div>
   </div>
 </dialog>
@@ -232,6 +263,7 @@ let spin = !matchMedia("(prefers-reduced-motion: reduce)").matches;
 const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
 let W = 0, H = 0, DPR = 1;
 const cam = { rotX: -0.35, rotY: 0.5, zoom: 1, dist: 900 }; // orbit + perspective
+let tlZoom = 1, tlPanX = 0; // timeline: scroll to zoom the time axis, drag to pan
 
 function ingest(raw) {
   const nodesIn = Array.isArray(raw.nodes) ? raw.nodes : [];
@@ -265,7 +297,7 @@ let graphSample = false, semSample = false;
 function refreshSampleBadge(){ const on = view==="semantic" ? semSample : graphSample;
   const b=document.getElementById("sample-badge"); if(b) b.hidden = !on; }
 function setData(raw) {
-  G = ingest(raw); selected = null; graphSample = !!(raw && raw.sample); refreshSampleBadge(); renderDetail(); updateStats();
+  G = ingest(raw); selected = null; tlZoom = 1; tlPanX = 0; graphSample = !!(raw && raw.sample); refreshSampleBadge(); renderDetail(); updateStats();
   document.getElementById("s-nodes").textContent = G.nodes.length;
   document.getElementById("s-edges").textContent = G.edges.length;
   alpha = 1;
@@ -289,14 +321,24 @@ function updateStats() {
 const SEM_R = 230;
 function ingestSemantic(raw) {
   const ptsIn = Array.isArray(raw.points) ? raw.points : [];
-  const points = ptsIn.map((p, i) => ({
-    id: String(p.id ?? i),
-    name: String(p.label ?? p.url ?? p.id ?? "?"),
-    url: String(p.url ?? ""),
-    provider: String(p.provider ?? "").toLowerCase(),
-    x: (Number(p.x) || 0) * SEM_R, y: (Number(p.y) || 0) * SEM_R, z: (Number(p.z) || 0) * SEM_R,
-  }));
-  return { points, dimensions: Number(raw.dimensions ?? raw.dims ?? 0) || 0,
+  // Collapse duplicate embeddings of the SAME url (re-gathered across facets/runs)
+  // so one source is one point, not a stack of near-coincident dots.
+  const seen = new Set(); let dropped = 0;
+  const points = [];
+  ptsIn.forEach((p, i) => {
+    const url = String(p.url ?? "");
+    const key = url ? url.toLowerCase().replace(/[#?].*$/, "").replace(/\/$/, "") : ("__" + i);
+    if (url && seen.has(key)) { dropped++; return; }
+    if (url) seen.add(key);
+    points.push({
+      id: String(p.id ?? i),
+      name: String(p.label ?? p.url ?? p.id ?? "?"),
+      url,
+      provider: String(p.provider ?? "").toLowerCase(),
+      x: (Number(p.x) || 0) * SEM_R, y: (Number(p.y) || 0) * SEM_R, z: (Number(p.z) || 0) * SEM_R,
+    });
+  });
+  return { points, dropped, dimensions: Number(raw.dimensions ?? raw.dims ?? 0) || 0,
     explainedVariance: Array.isArray(raw.explained_variance) ? raw.explained_variance : [] };
 }
 function setSemanticData(raw) {
@@ -459,17 +501,20 @@ function drawTimeline() {
     ctx.fillText("Nodes or edges carrying occurred_at appear here as a cascade.", W/2, H/2+12); return; }
   const pad=70, y0=90, laneGap=62, lanes=5;
   const times=items.map(d=>d.t); const min=Math.min(...times),max=Math.max(...times),span=max-min;
-  // When every item shares one instant (span 0), spread evenly by index so they
-  // don't collapse onto a single tick — otherwise position by real time.
-  const xOf=(t,i)=> span>0 ? pad+((t-min)/span)*(W-pad*2) : pad+(items.length>1? i/(items.length-1):0.5)*(W-pad*2);
+  // Normalized position in [0,1], then apply the timeline zoom/pan transform so
+  // scroll magnifies the axis and drag scans along it. When every item shares one
+  // instant (span 0), spread evenly by index so they don't collapse onto one tick.
+  const uOf=(t,i)=> span>0 ? (t-min)/span : (items.length>1? i/(items.length-1):0.5);
+  const xOf=(t,i)=> pad + (uOf(t,i)*(W-pad*2))*tlZoom + tlPanX;
   ctx.strokeStyle=grid; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(pad,y0); ctx.lineTo(W-pad,y0); ctx.stroke();
   timelineItems = items.map((it,i)=>{ const x=xOf(it.t,i); const y=y0+34+(i%lanes)*laneGap;
     const sel = selected && it.ref && it.ref.name===selected;
     ctx.font="600 12px "+cssVar("--font-ui"); const title=clip(it.title,28);
     const tw=Math.max(ctx.measureText(title).width, ctx.measureText(clip(it.sub,30)).width, 90)+20, h=46;
-    // keep the card fully on-canvas even for first/last ticks; the connector still
-    // runs to the true time position on the axis.
-    const cx=Math.max(pad+tw/2, Math.min(W-pad-tw/2, x));
+    // At zoom 1, keep first/last cards on-canvas; when zoomed in, let them move
+    // with the pan so you can scan the axis. The connector always runs to the
+    // true time position.
+    const cx = tlZoom>1.01 ? x : Math.max(pad+tw/2, Math.min(W-pad-tw/2, x));
     ctx.strokeStyle=grid; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(x,y0); ctx.lineTo(cx,y); ctx.stroke();
     ctx.fillStyle=it.color; ctx.beginPath(); ctx.arc(x,y0,5,0,Math.PI*2); ctx.fill();
     ctx.fillStyle=cssVar("--panel"); ctx.strokeStyle=sel?accent:cssVar("--line"); ctx.lineWidth=sel?2:1;
@@ -478,10 +523,12 @@ function drawTimeline() {
     ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.fillText(clip(it.sub,30),cx,y+21);
     ctx.fillText(new Date(it.t).toISOString().slice(0,10),cx,y+32);
     return {...it, box:{x:cx-tw/2,y,w:tw,h}, dot:{x,y:y0}}; });
-  ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.textAlign="left";
-  ctx.fillText(new Date(min).toISOString().slice(0,10),pad,y0-14);
-  ctx.textAlign="right"; ctx.fillText(new Date(max).toISOString().slice(0,10),W-pad,y0-14);
+  ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono");
+  const xMin=xOf(min,0), xMax=xOf(max,items.length-1);
+  if (xMin>pad-40 && xMin<W){ ctx.textAlign="center"; ctx.fillText(new Date(min).toISOString().slice(0,10), Math.max(pad,xMin), y0-14); }
+  if (xMax>0 && xMax<W-pad+40){ ctx.textAlign="center"; ctx.fillText(new Date(max).toISOString().slice(0,10), Math.min(W-pad,xMax), y0-14); }
   if (span===0){ ctx.textAlign="center"; ctx.fillText("all items share one date — spaced evenly", W/2, y0-14); }
+  if (tlZoom>1.01){ ctx.textAlign="right"; ctx.fillText(`${tlZoom.toFixed(1)}×`, W-pad, H-14); }
 }
 function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
 
@@ -500,10 +547,21 @@ function drawSemantic() {
   const zs=[...P.values()].map(p=>p.z); const zmin=Math.min(...zs), zmax=Math.max(...zs), zspan=(zmax-zmin)||1;
   const fog=(z)=>0.32+0.68*((z-zmin)/zspan);
   const hi = selected;
-  // faint origin axes for spatial reference
-  const O=project({x:0,y:0,z:0}), AX=[["x",{x:SEM_R,y:0,z:0}],["y",{x:0,y:SEM_R,z:0}],["z",{x:0,y:0,z:SEM_R}]];
-  ctx.lineWidth=1; ctx.strokeStyle=grid; ctx.globalAlpha=0.5;
-  for (const [,v] of AX){ const p=project(v); ctx.beginPath(); ctx.moveTo(O.x,O.y); ctx.lineTo(p.x,p.y); ctx.stroke(); }
+  // Bold, labelled origin axes (PC1/PC2/PC3) so the orientation of the cloud is
+  // legible as it rotates. Each axis is drawn both ways from the origin.
+  const O=project({x:0,y:0,z:0});
+  const AX=[["PC1",{x:SEM_R*1.15,y:0,z:0},cssVar("--t-person")],
+            ["PC2",{x:0,y:SEM_R*1.15,z:0},cssVar("--t-location")],
+            ["PC3",{x:0,y:0,z:SEM_R*1.15},cssVar("--t-event")]];
+  for (const [lbl,v,col] of AX){
+    const p=project(v), pn=project({x:-v.x,y:-v.y,z:-v.z});
+    ctx.globalAlpha=0.35; ctx.strokeStyle=col; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(pn.x,pn.y); ctx.lineTo(O.x,O.y); ctx.stroke();      // negative half, faint
+    ctx.globalAlpha=0.85; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(O.x,O.y); ctx.lineTo(p.x,p.y); ctx.stroke();        // positive half, bold
+    ctx.globalAlpha=1; ctx.fillStyle=col; ctx.font="700 11px "+cssVar("--font-mono");
+    ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(lbl, p.x, p.y);
+  }
   ctx.globalAlpha=1;
   const order=SEM.points.map(pt=>({pt,p:P.get(pt)})).sort((a,b)=>a.p.z-b.p.z);
   for (const {pt,p} of order) {
@@ -524,7 +582,8 @@ function drawSemantic() {
   if (SEM.explainedVariance.length===3) {
     const pct=SEM.explainedVariance.map(v=>Math.round(v*100));
     ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.textAlign="left"; ctx.textBaseline="bottom";
-    ctx.fillText(`PCA · axes capture ${pct[0]}% / ${pct[1]}% / ${pct[2]}% of variance`, 14, H-14);
+    const dup = SEM.dropped ? ` · ${SEM.dropped} duplicate${SEM.dropped>1?"s":""} merged` : "";
+    ctx.fillText(`PCA · axes capture ${pct[0]}% / ${pct[1]}% / ${pct[2]}% of variance${dup}`, 14, H-14);
   }
 }
 // HSL string → hex, so it can flow through mix() with the fog RGB.
@@ -538,6 +597,46 @@ function hslToHex(hsl) {
 
 const esc = (s)=>String(s??"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const host = (u)=>{ try { return new URL(u).hostname.replace(/^www\./,""); } catch { return clip(String(u),40); } };
+
+// ---- on-demand node insight (calls the live API; one LLM call, cached) ----
+const insightStore = new Map(); // entityKey(lower) → {loading|text|error|sources|cached}
+function apiBase(){
+  const v=(localStorage.getItem("digim_api_base")||"").trim();
+  if(v) return v.replace(/\/+$/,"");
+  if(location.protocol.startsWith("http")) return location.origin+"/dina/api/v1";
+  return ""; // file:// with no override → fetch will fail; we surface a clear hint
+}
+async function generateInsight(entity){
+  const key=(entity||"").toLowerCase(); if(!key) return;
+  insightStore.set(key,{loading:true}); renderDetail();
+  try{
+    const base=apiBase();
+    const res=await fetch(base+"/digim/node-insight",{method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify({entity})});
+    if(!res.ok) throw new Error("API returned HTTP "+res.status);
+    const data=await res.json();
+    if(data.status && data.status!=="success") throw new Error(data.message||"insight unavailable");
+    insightStore.set(key,{text:String(data.insight||""), sources:Array.isArray(data.sources)?data.sources:[], cached:!!data.cached});
+  }catch(ex){ insightStore.set(key,{error:String(ex.message||ex)}); }
+  renderDetail();
+}
+// The button + result block shown under a selected node/point.
+function insightSection(entity){
+  const st=insightStore.get((entity||"").toLowerCase());
+  if(st && st.loading) return `<div class="insight loading">Analyzing sources…</div>`;
+  if(st && st.text){
+    const src=(st.sources||[]).slice(0,6).map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener" class="src">${esc(host(u))}</a>`).join("");
+    return `<div class="insight"><p class="rail-h">Insight${st.cached?" · cached":""}</p>
+      <div class="insight-body">${esc(st.text)}</div>${src?`<div class="rel-src" style="margin-top:8px">${src}</div>`:""}
+      <button class="btn insight-btn" id="gen-insight" data-entity="${esc(entity)}">Regenerate</button></div>`;
+  }
+  if(st && st.error){
+    return `<div class="insight"><div class="insight-err">Couldn't generate insight: ${esc(st.error)}.
+      ${apiBase()?"":"Set the API base in <b>Load data ▸ API base</b> first (this page can't reach the API over file://)."}</div>
+      <button class="btn insight-btn" id="gen-insight" data-entity="${esc(entity)}">Try again</button></div>`;
+  }
+  return `<button class="btn insight-btn" id="gen-insight" data-entity="${esc(entity)}">✦ Generate insight</button>`;
+}
 const conf = (c)=> c==null ? "" : (Math.round(c*100)+"%");
 // A relationship line with its full provenance: predicate, corroboration,
 // confidence, and every source URL that attests it.
@@ -571,7 +670,8 @@ function renderDetail() {
         <div class="kv"><span class="k">embedding</span><span class="v">${SEM.dimensions||0}-D</span></div></div>
       ${pt.url?`<p class="rail-h" style="margin-top:16px">Source</p><div class="rels"><div class="rel"><a href="${esc(pt.url)}" target="_blank" rel="noopener" class="other">${esc(clip(pt.url,44))}</a></div></div>`:""}
       ${near.length?`<p class="rail-h" style="margin-top:16px">Nearest in meaning</p><div class="rels">${
-        near.map(n=>`<div class="rel"><span class="other">${esc(clip(n.p.name,30))}</span><div class="rel-meta">dist ${n.d.toFixed(2)} · ${esc(n.p.provider||"—")}</div></div>`).join("")}</div>`:""}`;
+        near.map(n=>`<div class="rel"><span class="other">${esc(clip(n.p.name,30))}</span><div class="rel-meta">dist ${n.d.toFixed(2)} · ${esc(n.p.provider||"—")}</div></div>`).join("")}</div>`:""}
+      ${insightSection(pt.name)}`;
     return;
   }
   if (!selected) { el.classList.add("empty");
@@ -590,7 +690,8 @@ function renderDetail() {
       ${nd.occurredAt?`<div class="kv"><span class="k">occurred</span><span class="v">${new Date(nd.occurredAt).toISOString().slice(0,10)}</span></div>`:""}</div>
     ${outs.length?`<p class="rail-h" style="margin-top:16px">Outgoing (${outs.length})</p><div class="rels">${outs.map(e=>relRow(e,"out")).join("")}</div>`:""}
     ${ins.length?`<p class="rail-h" style="margin-top:14px">Incoming (${ins.length})</p><div class="rels">${ins.map(e=>relRow(e,"in")).join("")}</div>`:""}
-    ${(!outs.length&&!ins.length)?`<div class="dtl-body" style="margin-top:12px">No relationships recorded for this entity.</div>`:""}`;
+    ${(!outs.length&&!ins.length)?`<div class="dtl-body" style="margin-top:12px">No relationships recorded for this entity.</div>`:""}
+    ${insightSection(nd.name)}`;
 }
 function buildLegend() {
   if (view === "semantic") {
@@ -646,22 +747,39 @@ cv.addEventListener("pointermove",(e)=>{
     d = rotX(d, -cam.rotX); d = rotY(d, -cam.rotY);
     dragNode.x+=d.x; dragNode.y+=d.y; dragNode.z+=d.z; dragNode.vx=dragNode.vy=dragNode.vz=0; alpha=Math.max(alpha,0.4);
   } else if (view==="network" || view==="semantic"){ cam.rotY += dx*0.01; cam.rotX += dy*0.01; cam.rotX=Math.max(-1.4,Math.min(1.4,cam.rotX)); }
+  else if (view==="timeline"){ tlPanX += dx; clampTlPan(); }
 });
+function clampTlPan(){ const span=(W-140)*(tlZoom-1); tlPanX=Math.max(-span-40, Math.min(40, tlPanX)); }
 function endDrag(e){ if (dragging && !moved){ const r=cv.getBoundingClientRect(); const nd=nodeAt(e.clientX-r.left,e.clientY-r.top);
     selected = nd ? (selKey(nd)===selected?null:selKey(nd)) : null; renderDetail(); }
   dragging=false; dragNode=null; cv.classList.remove("dragging"); }
 cv.addEventListener("pointerup",endDrag); cv.addEventListener("pointercancel",endDrag);
-cv.addEventListener("wheel",(e)=>{ e.preventDefault(); cam.zoom=Math.max(0.3,Math.min(4,cam.zoom*(e.deltaY<0?1.1:0.909))); },{passive:false});
+cv.addEventListener("wheel",(e)=>{ e.preventDefault();
+  if (view==="timeline"){
+    const r=cv.getBoundingClientRect(), mx=e.clientX-r.left, pad=70;
+    const before=(mx-pad-tlPanX)/tlZoom;                       // keep the point under the cursor fixed
+    tlZoom=Math.max(1,Math.min(14,tlZoom*(e.deltaY<0?1.15:0.87)));
+    tlPanX=mx-pad-before*tlZoom; clampTlPan();
+  } else { cam.zoom=Math.max(0.3,Math.min(4,cam.zoom*(e.deltaY<0?1.1:0.909))); }
+},{passive:false});
 document.getElementById("focus").addEventListener("input",(e)=>{ focusTerm=e.target.value.trim().toLowerCase();
   if (!focusTerm) return;
   if (view==="semantic"){ const hit=SEM.points.find(p=>p.name.toLowerCase().includes(focusTerm)); if(hit){selected=hit.id;renderDetail();} return; }
   const hit=G.nodes.find(n=>n.name.toLowerCase().includes(focusTerm)); if(hit){selected=hit.name;renderDetail();} });
+// Insight button (delegated — the detail panel re-renders its innerHTML).
+document.getElementById("detail").addEventListener("click",(e)=>{
+  const btn=e.target.closest("#gen-insight"); if(!btn) return;
+  generateInsight(btn.getAttribute("data-entity"));
+});
 
 function setView(v){ const prev=view; view=v;
   document.getElementById("tab-network").setAttribute("aria-selected", v==="network");
   document.getElementById("tab-timeline").setAttribute("aria-selected", v==="timeline");
   document.getElementById("tab-semantic").setAttribute("aria-selected", v==="semantic");
-  document.getElementById("hint").style.display = (v==="network"||v==="semantic")?"":"none";
+  const hintEl=document.getElementById("hint"); hintEl.style.display="";
+  hintEl.textContent = v==="timeline" ? "scroll to zoom · drag to pan · click an event"
+    : v==="semantic" ? "drag to orbit · scroll to zoom · click a point"
+    : "drag to orbit · scroll to zoom · click a node";
   // Selection keys differ between the graph views and the semantic cloud — reset
   // when crossing that boundary so a stale key can't mis-highlight.
   if ((prev==="semantic") !== (v==="semantic")) { selected=null; }
@@ -675,8 +793,36 @@ spinBtn.setAttribute("aria-pressed", String(spin));
 spinBtn.onclick=()=>{ spin=!spin; spinBtn.setAttribute("aria-pressed",String(spin)); };
 
 const modal=document.getElementById("modal");
+const apiInput=document.getElementById("api-base");
+apiInput.value=(localStorage.getItem("digim_api_base")||"");
+apiInput.addEventListener("input",()=>localStorage.setItem("digim_api_base", apiInput.value.trim()));
 document.getElementById("load-btn").onclick=()=>{ document.getElementById("json-err").textContent=""; modal.showModal(); };
 document.getElementById("modal-x").onclick=()=>modal.close();
+// Fetch live from the API (no copy-paste). Works when the page is served from
+// the DINA domain or an API base is set; the hosted preview blocks this by CSP.
+document.getElementById("fetch-btn").onclick=async ()=>{
+  const err=document.getElementById("json-err"); err.textContent="";
+  const kind=document.getElementById("fetch-kind").value;
+  const q=document.getElementById("fetch-q").value.trim();
+  const btn=document.getElementById("fetch-btn"); const label=btn.textContent;
+  btn.textContent="Fetching…"; btn.disabled=true;
+  try{
+    const base=apiBase(); if(!base) throw new Error("Set an API base first (or serve this page from your DINA domain).");
+    if(kind==="semantic"){
+      const res=await fetch(base+"/digim/semantic",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({filter:q})});
+      if(!res.ok) throw new Error("API returned HTTP "+res.status);
+      const data=await res.json(); if(!Array.isArray(data.points)) throw new Error(data.message||"no points returned");
+      setSemanticData(data); setView("semantic"); buildLegend(); modal.close();
+    } else {
+      if(!q) throw new Error("Enter a focus entity/topic for the graph (e.g. Iran).");
+      const res=await fetch(base+"/digim/graph",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q})});
+      if(!res.ok) throw new Error("API returned HTTP "+res.status);
+      const data=await res.json(); if(!Array.isArray(data.nodes)) throw new Error(data.message||"no graph returned");
+      setData(data); setView(data.suggested_view==="temporal"?"timeline":"network"); buildLegend(); modal.close();
+    }
+  }catch(ex){ err.textContent=String(ex.message||ex); }
+  finally{ btn.textContent=label; btn.disabled=false; }
+};
 document.getElementById("json-sample").onclick=()=>{
   if (view==="semantic") { setSemanticData(SAMPLE_SEM); buildLegend(); }
   else { setData(SAMPLE); buildLegend(); }

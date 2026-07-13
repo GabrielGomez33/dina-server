@@ -291,6 +291,15 @@ async  initialize(): Promise<void> {
       case 'digim_semantic':
         return await this.handleSemanticRequest(requestData);
 
+      case 'digim_node_insight':
+        return await this.handleNodeInsightRequest(requestData);
+
+      case 'digim_history':
+        return await this.handleHistoryRequest(requestData);
+
+      case 'digim_get':
+        return await this.handleGetResearchRequest(requestData);
+
       case 'digim_memory_backfill':
         return await this.handleMemoryBackfillRequest(requestData);
 
@@ -605,6 +614,74 @@ async  initialize(): Promise<void> {
       point_count: proj.count,
       explained_variance: proj.explainedVariance,
       points: proj.points,
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_history — list past researches (newest first) for a history sidebar.
+   * Paginated; optional level filter + query search.
+   */
+  private async handleHistoryRequest(requestData: any): Promise<any> {
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    const { total, items } = await this.webResearch.listResearch({
+      limit: requestData?.limit,
+      offset: requestData?.offset,
+      type: requestData?.type || requestData?.level,
+      search: requestData?.search || requestData?.q,
+    });
+    return {
+      status: 'success',
+      total,
+      count: items.length,
+      offset: Number(requestData?.offset) || 0,
+      items,
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_get — open one past research by id (full detail). Set with_documents
+   * to also resolve the gathered source documents behind it.
+   */
+  private async handleGetResearchRequest(requestData: any): Promise<any> {
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    const id: string = (requestData?.id || requestData?.research_id || '').trim();
+    if (!id) throw new Error('digim_get requires an "id"');
+    const withDocuments = requestData?.with_documents === true || requestData?.with_documents === 'true';
+    const rec = await this.webResearch.getResearch(id, { withDocuments });
+    if (!rec) return { status: 'not_found', message: `No research found for id "${id}"` };
+    return { status: 'success', research: rec, generated_at: new Date() };
+  }
+
+  /**
+   * digim_node_insight — on-demand: generate a concise grounded insight about a
+   * single clicked entity/node from what DINA already has (graph relationships +
+   * stored sources). Cached per entity; one LLM call; never bulk.
+   */
+  private async handleNodeInsightRequest(requestData: any): Promise<any> {
+    const entity: string = (requestData?.entity || requestData?.query || requestData?.node || requestData?.q || '').trim();
+    console.log(`💡 Handling node-insight request: "${entity.substring(0, 60)}"`);
+
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    if (!entity) {
+      throw new Error('digim_node_insight requires an "entity" (the node/label to explain)');
+    }
+
+    const res = await this.webResearch.nodeInsight({ entity, maxSources: requestData?.max_sources });
+    return {
+      status: 'success',
+      entity: res.entity,
+      insight: res.insight,
+      relationships: res.relationships,
+      sources: res.sources,
+      cached: res.cached,
       generated_at: new Date(),
     };
   }

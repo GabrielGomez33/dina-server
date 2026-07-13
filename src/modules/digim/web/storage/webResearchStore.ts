@@ -43,6 +43,32 @@ export interface StoreContentResult {
   duplicate: boolean;
 }
 
+/** Lightweight row for the research-history sidebar. */
+export interface ResearchSummary {
+  id: string;
+  query: string;
+  level: string;
+  confidence: number;
+  model: string;
+  processingTimeMs: number;
+  generatedAt: string | null;
+  expiresAt: string | null;
+  sourceCount: number;
+  snippet: string;
+}
+
+/** Full stored research (detail view). */
+export interface ResearchRecord extends ResearchSummary {
+  summary: string;
+  keyInsights: any[];
+  trends: any[];
+  entities: any[];
+  topics: any[];
+  caveats: any[];
+  sources: any[];
+  sourceContentIds: string[];
+}
+
 export class WebResearchStore {
   private systemSourceReady = false;
 
@@ -319,6 +345,71 @@ export class WebResearchStore {
     }
   }
 
+  // --------------------------------------------------------------------------
+  // RESEARCH HISTORY (for the DINA frontend) — read the intelligence records
+  // that every research/investigate run already persists.
+  // --------------------------------------------------------------------------
+
+  /**
+   * List past researches (newest first), as lightweight summary rows for a
+   * history sidebar. Optional `type` filters by level; optional `search` does a
+   * LIKE on the query text. `limit`/`offset` paginate (both clamped/inlined —
+   * mysql2 prepared statements reject bound LIMIT/OFFSET).
+   */
+  async listIntelligence(opts: { limit?: number; offset?: number; type?: string; search?: string } = {}): Promise<ResearchSummary[]> {
+    const limit = clampInt(opts.limit ?? 30, 1, 200);
+    const offset = clampInt(opts.offset ?? 0, 0, 1_000_000);
+    const where: string[] = [];
+    const args: any[] = [];
+    if (opts.type) { where.push('intelligence_type = ?'); args.push(opts.type); }
+    if (opts.search && opts.search.trim()) { where.push('query_text LIKE ?'); args.push(`%${opts.search.trim()}%`); }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    try {
+      const rows = await DB.query(
+        `SELECT id, query_text, intelligence_type, confidence_score, model_used,
+                processing_time_ms, generated_at, expires_at, source_content_ids, summary
+         FROM digim_intelligence ${clause}
+         ORDER BY generated_at DESC
+         LIMIT ${limit} OFFSET ${offset}`,
+        args,
+        true
+      );
+      return (Array.isArray(rows) ? rows : []).map(toResearchSummary);
+    } catch (err) {
+      console.warn(`⚠️ [webResearchStore] listIntelligence failed: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  /** Total count of stored researches (for pagination), same filters as list. */
+  async countIntelligence(opts: { type?: string; search?: string } = {}): Promise<number> {
+    const where: string[] = [];
+    const args: any[] = [];
+    if (opts.type) { where.push('intelligence_type = ?'); args.push(opts.type); }
+    if (opts.search && opts.search.trim()) { where.push('query_text LIKE ?'); args.push(`%${opts.search.trim()}%`); }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    try {
+      const rows = await DB.query(`SELECT COUNT(*) AS n FROM digim_intelligence ${clause}`, args, true);
+      const n = Array.isArray(rows) && rows[0] ? Number((rows[0] as any).n ?? (rows[0] as any).N) : 0;
+      return Number.isFinite(n) ? n : 0;
+    } catch (err) {
+      console.warn(`⚠️ [webResearchStore] countIntelligence failed: ${(err as Error).message}`);
+      return 0;
+    }
+  }
+
+  /** Full stored research record by id (for the detail view), or null. */
+  async getIntelligenceById(id: string): Promise<ResearchRecord | null> {
+    try {
+      const rows = await DB.query(`SELECT * FROM digim_intelligence WHERE id = ? LIMIT 1`, [id], true);
+      if (!Array.isArray(rows) || rows.length === 0) return null;
+      return parseIntelligenceRow(rows[0]);
+    } catch (err) {
+      console.warn(`⚠️ [webResearchStore] getIntelligenceById failed: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
   /** Load stored documents by id (for re-synthesis / inspection). */
   async getContentByIds(ids: string[]): Promise<any[]> {
     if (ids.length === 0) return [];
@@ -356,6 +447,61 @@ function toMysqlDate(iso: string): string | null {
 function truncate(s: string, max: number): string {
   if (typeof s !== 'string') return '';
   return s.length > max ? s.slice(0, max) : s;
+}
+
+function clampInt(v: any, min: number, max: number): number {
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+/** JSON column values arrive as strings or already-parsed objects — tolerate both. */
+function safeJson(v: any, fallback: any): any {
+  if (v == null) return fallback;
+  if (typeof v === 'object') return v;
+  if (typeof v === 'string') { try { return JSON.parse(v); } catch { return fallback; } }
+  return fallback;
+}
+function asArray(v: any): any[] { const j = safeJson(v, []); return Array.isArray(j) ? j : []; }
+
+function toIsoDate(v: any): string | null {
+  if (!v) return null;
+  if (v instanceof Date) return v.toISOString();
+  const t = Date.parse(String(v).replace(' ', 'T'));
+  return Number.isFinite(t) ? new Date(t).toISOString() : String(v);
+}
+
+/** Map a raw digim_intelligence row → a history summary. Pure (unit-testable). */
+export function toResearchSummary(row: any): ResearchSummary {
+  const ids = asArray(row.source_content_ids);
+  return {
+    id: String(row.id),
+    query: String(row.query_text ?? ''),
+    level: String(row.intelligence_type ?? ''),
+    confidence: Number(row.confidence_score ?? 0) || 0,
+    model: String(row.model_used ?? ''),
+    processingTimeMs: Number(row.processing_time_ms ?? 0) || 0,
+    generatedAt: toIsoDate(row.generated_at),
+    expiresAt: toIsoDate(row.expires_at),
+    sourceCount: ids.length,
+    snippet: truncate(String(row.summary ?? '').replace(/\s+/g, ' ').trim(), 180),
+  };
+}
+
+/** Map a raw digim_intelligence row → a full research record. Pure (unit-testable). */
+export function parseIntelligenceRow(row: any): ResearchRecord {
+  const raw = safeJson(row.raw_data, {});
+  return {
+    ...toResearchSummary(row),
+    summary: String(row.summary ?? ''),
+    keyInsights: asArray(row.insights),
+    trends: asArray(row.trends),
+    entities: Array.isArray(raw.entities) ? raw.entities : [],
+    topics: Array.isArray(raw.topics) ? raw.topics : [],
+    caveats: Array.isArray(raw.caveats) ? raw.caveats : [],
+    sources: Array.isArray(raw.sources) ? raw.sources : [],
+    sourceContentIds: asArray(row.source_content_ids).map(String),
+  };
 }
 
 function clamp01(n: number): number {
