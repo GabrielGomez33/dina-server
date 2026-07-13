@@ -1,0 +1,870 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DIGIM Relationship Graph</title>
+<style>
+  :root {
+    --bg: #f5f7fa; --panel: #ffffff; --panel-2: #eef1f6; --line: #d7dee8;
+    --ink: #17212e; --ink-dim: #5c6b7d; --accent: #0e8ea3; --accent-soft: #d4edf1;
+    --edge: #8aa0b3;
+    --t-person: #2f6ae0; --t-organization: #9a54c9; --t-location: #2aa17e;
+    --t-event: #d0872e; --t-technology: #4a63d6; --t-concept: #6b7b8c; --t-other: #6b7b8c;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --shadow: 0 1px 3px rgba(20,30,45,.08), 0 6px 24px rgba(20,30,45,.06);
+    --fog: 245, 247, 250;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1017; --panel: #131b26; --panel-2: #1a2432; --line: #26313f;
+      --ink: #e6ecf5; --ink-dim: #9aabbe; --accent: #4cc4d6; --accent-soft: #123039;
+      --edge: #37475a;
+      --t-person: #6ea8fe; --t-organization: #c98bdb; --t-location: #57c7a3;
+      --t-event: #e0a458; --t-technology: #8093f0; --t-concept: #8794a4; --t-other: #7c8798;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 30px rgba(0,0,0,.35);
+      --fog: 11, 16, 23;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f7fa; --panel: #ffffff; --panel-2: #eef1f6; --line: #d7dee8;
+    --ink: #17212e; --ink-dim: #5c6b7d; --accent: #0e8ea3; --accent-soft: #d4edf1; --edge: #8aa0b3;
+    --t-person: #2f6ae0; --t-organization: #9a54c9; --t-location: #2aa17e;
+    --t-event: #d0872e; --t-technology: #4a63d6; --t-concept: #6b7b8c; --t-other: #6b7b8c;
+    --shadow: 0 1px 3px rgba(20,30,45,.08), 0 6px 24px rgba(20,30,45,.06); --fog: 245, 247, 250;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1017; --panel: #131b26; --panel-2: #1a2432; --line: #26313f;
+    --ink: #e6ecf5; --ink-dim: #9aabbe; --accent: #4cc4d6; --accent-soft: #123039; --edge: #37475a;
+    --t-person: #6ea8fe; --t-organization: #c98bdb; --t-location: #57c7a3;
+    --t-event: #e0a458; --t-technology: #8093f0; --t-concept: #8794a4; --t-other: #7c8798;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 30px rgba(0,0,0,.35); --fog: 11, 16, 23;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-ui);
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+  header { display: flex; align-items: center; gap: 18px; padding: 12px 18px;
+    border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  .brand { display: flex; flex-direction: column; gap: 1px; }
+  .brand h1 { font: 600 14px/1.1 var(--font-ui); margin: 0; letter-spacing: .2px; }
+  .brand .sub { font: 500 10.5px/1 var(--font-mono); color: var(--ink-dim); letter-spacing: .12em; text-transform: uppercase; }
+  .tabs { display: flex; gap: 4px; background: var(--panel-2); padding: 3px; border-radius: 9px; }
+  .tab { font: 600 12px/1 var(--font-ui); color: var(--ink-dim); background: transparent; border: 0;
+    padding: 8px 14px; border-radius: 7px; cursor: pointer; }
+  .tab[aria-selected="true"] { background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
+  .tab:focus-visible, .btn:focus-visible, .iconbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .stats { margin-left: auto; display: flex; gap: 18px; align-items: center; }
+  .stat { display: flex; flex-direction: column; align-items: flex-end; }
+  .stat b { font: 600 16px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+  .stat span { font: 500 9.5px/1.4 var(--font-mono); color: var(--ink-dim); letter-spacing: .1em; text-transform: uppercase; }
+  .btn { font: 600 12px/1 var(--font-ui); color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 13px; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .iconbtn { font-size: 15px; line-height: 1; color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+  .iconbtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  .stage { position: relative; flex: 1; min-width: 0; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  canvas.dragging { cursor: grabbing; }
+  .hint { position: absolute; left: 14px; bottom: 12px; z-index: 2; font: 500 11px/1.5 var(--font-mono);
+    color: var(--ink-dim); background: color-mix(in srgb, var(--panel) 78%, transparent);
+    padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line); pointer-events: none; }
+  .focuswrap { position: absolute; top: 12px; left: 12px; z-index: 3; display: flex; gap: 8px; }
+  .focuswrap input { font: 500 12px/1 var(--font-mono); color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; width: 200px; box-shadow: var(--shadow); }
+  .focuswrap input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+
+  aside { width: 300px; flex: 0 0 300px; border-left: 1px solid var(--line); background: var(--panel);
+    overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 18px; }
+  .rail-h { font: 600 10.5px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-dim); margin: 0 0 10px; }
+  .legend { display: flex; flex-direction: column; gap: 7px; }
+  .legend-row { display: flex; align-items: center; gap: 9px; font: 500 12px/1 var(--font-ui); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+  .legend-note { font: 500 11px/1.5 var(--font-mono); color: var(--ink-dim); margin-top: 4px; }
+  .detail { border-top: 1px solid var(--line); padding-top: 16px; }
+  .detail.empty .dtl-body { color: var(--ink-dim); font: 500 12px/1.6 var(--font-ui); }
+  .dtl-name { font: 600 15px/1.25 var(--font-ui); margin: 0 0 4px; text-wrap: balance; word-break: break-word; }
+  .dtl-type { display: inline-flex; align-items: center; gap: 6px; font: 600 10px/1 var(--font-mono);
+    letter-spacing: .1em; text-transform: uppercase; padding: 4px 8px; border-radius: 6px; background: var(--panel-2); }
+  .dtl-meta { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+  .kv { display: flex; justify-content: space-between; gap: 12px; font: 500 12px/1.4 var(--font-mono); }
+  .kv .k { color: var(--ink-dim); } .kv .v { color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
+  .rels { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+  .rel { font: 500 11.5px/1.45 var(--font-mono); background: var(--panel-2); padding: 8px 9px;
+    border-radius: 7px; border-left: 2px solid var(--accent); }
+  .rel .pred { color: var(--accent); } .rel .other { color: var(--ink-dim); }
+  .rel-meta { color: var(--ink-dim); font: 500 10px/1.4 var(--font-mono); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .rel-src { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 5px; }
+  .rel-src .src { color: var(--accent); font: 500 10px/1.3 var(--font-mono); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+  .rel-src .src:hover { opacity: .8; }
+  .rel a.other { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+  .insight-btn { margin-top: 14px; width: 100%; font: 600 11px/1 var(--font-ui); }
+  .insight { margin-top: 14px; }
+  .insight-body { font: 400 12.5px/1.6 var(--font-ui); color: var(--ink); background: var(--panel-2);
+    border-radius: 8px; padding: 11px 12px; border-left: 2px solid var(--accent); }
+  .insight.loading { font: 500 12px/1.5 var(--font-mono); color: var(--ink-dim);
+    background: var(--panel-2); border-radius: 8px; padding: 11px 12px; }
+  .insight.loading::after { content: ""; animation: dots 1.2s steps(4,end) infinite; }
+  @keyframes dots { 0%{content:""} 25%{content:"."} 50%{content:".."} 75%{content:"..."} }
+  .insight-err { font: 500 11.5px/1.5 var(--font-ui); color: var(--t-event);
+    background: color-mix(in srgb, var(--t-event) 10%, transparent); border-radius: 8px; padding: 10px 11px; }
+  .fetch-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .fetch-row select, .fetch-row input { font: 500 12px/1.4 var(--font-mono); color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 8px 9px; }
+  .fetch-row input { flex: 1; min-width: 140px; }
+  .api-row { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; font: 600 11px/1.3 var(--font-mono); color: var(--ink-dim); }
+  .api-row span { font-weight: 400; }
+  .api-row input { font: 500 12px/1.4 var(--font-mono); color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 7px; padding: 8px 9px; }
+  #sample-badge { align-self: center; font: 700 9px/1 var(--font-mono); letter-spacing: .08em;
+    color: var(--t-event); background: color-mix(in srgb, var(--t-event) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--t-event) 45%, transparent); padding: 5px 7px; border-radius: 6px; }
+
+  dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--ink);
+    padding: 0; width: min(560px, 92vw); box-shadow: var(--shadow); }
+  dialog::backdrop { background: rgba(6,10,16,.55); }
+  .modal-h { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+  .modal-h h2 { font: 600 14px/1 var(--font-ui); margin: 0; }
+  .modal-b { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  .modal-b p { margin: 0; font: 500 12.5px/1.6 var(--font-ui); color: var(--ink-dim); }
+  .modal-b code { font-family: var(--font-mono); background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; color: var(--ink); }
+  textarea { font: 500 12px/1.5 var(--font-mono); color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 9px; padding: 11px; min-height: 150px; resize: vertical; width: 100%; }
+  textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .modal-f { display: flex; gap: 10px; justify-content: flex-end; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #06232a; }
+  .err { color: #d9534f; font: 500 11.5px/1.4 var(--font-mono); min-height: 14px; }
+  @media (max-width: 720px) { aside { display: none; } .stats .stat:nth-child(3) { display: none; } }
+</style>
+</head>
+<body>
+
+
+<header>
+  <div class="brand"><h1>DIGIM · Relationship Graph</h1><div class="sub">DINA intelligence · see the relationships</div></div>
+  <div class="tabs" role="tablist" aria-label="View">
+    <button class="tab" role="tab" id="tab-network" aria-selected="true">3D Network</button>
+    <button class="tab" role="tab" id="tab-timeline" aria-selected="false">Timeline</button>
+    <button class="tab" role="tab" id="tab-semantic" aria-selected="false">Semantic</button>
+  </div>
+  <div class="stats">
+    <span id="sample-badge" hidden title="Built-in demo data — click Load data to replace with real digim output">SAMPLE DATA</span>
+    <div class="stat"><b id="s-nodes">0</b><span id="s-nodes-lbl">Entities</span></div>
+    <div class="stat"><b id="s-edges">0</b><span id="s-edges-lbl">Relations</span></div>
+    <button class="iconbtn" id="spin-btn" aria-pressed="true" title="Toggle auto-rotate">⟳</button>
+    <button class="btn" id="load-btn">Load data</button>
+    <button class="iconbtn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme">◑</button>
+  </div>
+</header>
+
+<main>
+  <div class="stage">
+    <div class="focuswrap"><input id="focus" type="search" placeholder="highlight entity…" aria-label="Highlight entity" autocomplete="off" /></div>
+    <canvas id="cv"></canvas>
+    <div class="hint" id="hint">drag to orbit · scroll to zoom · click a node</div>
+  </div>
+  <aside>
+    <div><p class="rail-h" id="legend-h">Node type</p><div class="legend" id="legend"></div>
+      <p class="legend-note" id="legend-note">size = mentions · edge width = corroboration · depth = 3D</p></div>
+    <div class="detail empty" id="detail"><p class="rail-h">Selected</p>
+      <div class="dtl-body">Click a node to inspect its relationships and provenance.</div></div>
+  </aside>
+</main>
+
+<dialog id="modal">
+  <div class="modal-h"><h2>Load graph data</h2><button class="btn" id="modal-x" aria-label="Close">✕</button></div>
+  <div class="modal-b">
+    <p class="rail-h" style="margin:0 0 8px">Fetch live from the API</p>
+    <div class="fetch-row">
+      <select id="fetch-kind" aria-label="What to fetch">
+        <option value="graph">Graph (nodes + edges)</option>
+        <option value="semantic">Semantic cloud (points)</option>
+      </select>
+      <input id="fetch-q" type="text" spellcheck="false" placeholder="focus / filter — e.g. Iran">
+      <button class="btn primary" id="fetch-btn">Fetch</button>
+    </div>
+    <p style="color:var(--ink-dim);font:500 11px/1.5 var(--font-mono);margin:6px 0 0">Uses the API base below. Needs the page served from your DINA domain (or a reachable API base). The hosted preview blocks live calls — paste there instead.</p>
+    <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    <p>Or paste the JSON from <code>POST /digim/graph</code> (<code>nodes</code> + <code>edges</code>) or <code>POST /digim/semantic</code> (<code>points</code>). It auto-detects which, switches view, and ignores surrounding shell text so you can paste a whole terminal block.</p>
+    <p style="color:var(--ink-dim);font:500 11px/1.5 var(--font-mono)">Tip: don't <code>jq</code>-filter the semantic response — the cloud needs the full <code>points</code> array. Use <code>| jq .</code> (or no filter), not <code>| jq '{point_count}'</code>.</p>
+    <textarea id="json-in" spellcheck="false" placeholder='{ "nodes": [...], "edges": [...] }  — or —  { "points": [...] }'></textarea>
+    <div class="err" id="json-err"></div>
+    <label class="api-row">API base <span>(for live "Generate insight"; blank = same origin)</span>
+      <input id="api-base" type="text" spellcheck="false" placeholder="https://your-host/dina/api/v1"></label>
+    <div class="modal-f"><button class="btn" id="json-sample">Reset to sample</button><button class="btn primary" id="json-load">Load</button></div>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+// Post-polish sample: generic/indefinite entities ("three vessels", "a container
+// ship") are dropped at extraction (isLowValueEntity), and same-meaning predicates
+// collapse so corroboration accumulates instead of splintering into 1-count edges.
+const SAMPLE = {
+  suggested_view: "network", sample: true,
+  nodes: [
+    { name: "Iran", type: "location", occurred_at: null, weight: 8 },
+    { name: "United States", type: "organization", occurred_at: null, weight: 5 },
+    { name: "Strait of Hormuz", type: "location", occurred_at: null, weight: 3 },
+    { name: "Qatari-flagged vessel al-Rakiyat", type: "other", occurred_at: "2026-07-07T00:00:00.000Z", weight: 1 },
+    { name: "Brent crude", type: "concept", occurred_at: null, weight: 2 }
+  ],
+  edges: [
+    { from: "United States", predicate: "reimposed_sanctions_on", to: "Iran", corroboration: 2 },
+    { from: "United States", predicate: "launched_strikes_on", to: "Iran", corroboration: 3 },
+    { from: "Iran", predicate: "struck", to: "Qatari-flagged vessel al-Rakiyat", corroboration: 1, occurred_at: "2026-07-07T00:00:00.000Z" },
+    { from: "Iran", predicate: "threatened_to_close", to: "Strait of Hormuz", corroboration: 2 },
+    { from: "Strait of Hormuz", predicate: "chokepoint_for", to: "Brent crude", corroboration: 1 }
+  ]
+};
+// Semantic sample — a small deterministic 3D cloud (as digim_semantic returns).
+// Three loose clusters so the "proximity = meaning" idea reads immediately.
+const SAMPLE_SEM = (() => {
+  const seeds = [
+    { c: [0.7, 0.5, 0.2], provider: "wikipedia", tag: "Iran–US conflict" },
+    { c: [-0.6, -0.3, 0.5], provider: "hackernews", tag: "oil & energy markets" },
+    { c: [0.1, -0.7, -0.6], provider: "searxng", tag: "regional diplomacy" },
+  ];
+  const points = [];
+  let k = 0;
+  for (const s of seeds) {
+    for (let i = 0; i < 5; i++) {
+      const j = k++;
+      points.push({
+        id: "s" + j,
+        label: s.tag + " · doc " + (i + 1),
+        url: "",                       // sample data — no fake source URLs
+        provider: s.provider,
+        x: s.c[0] + Math.sin(j * 1.7) * 0.18,
+        y: s.c[1] + Math.cos(j * 2.3) * 0.18,
+        z: s.c[2] + Math.sin(j * 0.9) * 0.18,
+      });
+    }
+  }
+  return { view: "semantic", sample: true, dimensions: 1024, point_count: points.length, explained_variance: [0.41, 0.29, 0.17], points };
+})();
+
+const TYPES = ["person","organization","location","event","technology","concept","other"];
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const typeColor = (t) => cssVar("--t-" + (TYPES.includes(t) ? t : "other")) || cssVar("--t-other");
+const pretty = (p) => (p || "").replace(/_/g, " ");
+const clip = (s, n) => s.length > n ? s.slice(0, n-1) + "…" : s;
+
+let G = { nodes: [], edges: [] };
+let SEM = { points: [], dimensions: 0, explainedVariance: [] };
+let view = "network", selected = null, hoverNode = null, focusTerm = "";
+let spin = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+const cam = { rotX: -0.35, rotY: 0.5, zoom: 1, dist: 900 }; // orbit + perspective
+let tlZoom = 1, tlPanX = 0; // timeline: scroll to zoom the time axis, drag to pan
+
+function ingest(raw) {
+  const nodesIn = Array.isArray(raw.nodes) ? raw.nodes : [];
+  const edgesIn = Array.isArray(raw.edges) ? raw.edges : [];
+  const byName = new Map();
+  const R = 220;
+  const nodes = nodesIn.map((n, i) => {
+    const node = { name: String(n.name ?? n.id ?? "?"), type: String(n.type ?? "other").toLowerCase(),
+      occurredAt: n.occurred_at ?? n.occurredAt ?? null, weight: Number(n.weight ?? n.mentionCount ?? 1) || 1,
+      x:(Math.random()-0.5)*R, y:(Math.random()-0.5)*R, z:(Math.random()-0.5)*R, vx:0, vy:0, vz:0, deg:0 };
+    byName.set(node.name, node); return node;
+  });
+  const edges = [];
+  for (const e of edgesIn) {
+    const s = byName.get(String(e.from ?? e.subject ?? "")), t = byName.get(String(e.to ?? e.object ?? ""));
+    if (!s || !t || s === t) continue;
+    const srcs = Array.isArray(e.sources) ? e.sources.filter(Boolean).map(String) : [];
+    edges.push({ s, t, predicate: String(e.predicate ?? "related to"),
+      corr: Number(e.corroboration ?? e.corroborationCount ?? 1) || 1,
+      confidence: (e.confidence != null ? Number(e.confidence) : null),
+      sources: srcs, occurredAt: e.occurred_at ?? e.occurredAt ?? null });
+    s.deg++; t.deg++;
+  }
+  // Fan out parallel edges (same unordered pair) so their curves + labels don't stack.
+  const groups = new Map();
+  for (const e of edges) { const k = [e.s.name, e.t.name].sort().join(""); (groups.get(k) || groups.set(k, []).get(k)).push(e); }
+  for (const list of groups.values()) list.forEach((e, i) => { e._pi = i; e._pn = list.length; });
+  return { nodes, edges };
+}
+let graphSample = false, semSample = false;
+function refreshSampleBadge(){ const on = view==="semantic" ? semSample : graphSample;
+  const b=document.getElementById("sample-badge"); if(b) b.hidden = !on; }
+function setData(raw) {
+  G = ingest(raw); selected = null; tlZoom = 1; tlPanX = 0; graphSample = !!(raw && raw.sample); refreshSampleBadge(); renderDetail(); updateStats();
+  document.getElementById("s-nodes").textContent = G.nodes.length;
+  document.getElementById("s-edges").textContent = G.edges.length;
+  alpha = 1;
+}
+function updateStats() {
+  if (view === "semantic") {
+    document.getElementById("s-nodes").textContent = SEM.points.length;
+    document.getElementById("s-edges").textContent = SEM.dimensions || 0;
+    document.getElementById("s-nodes-lbl").textContent = "Points";
+    document.getElementById("s-edges-lbl").textContent = "Dimensions";
+  } else {
+    document.getElementById("s-nodes").textContent = G.nodes.length;
+    document.getElementById("s-edges").textContent = G.edges.length;
+    document.getElementById("s-nodes-lbl").textContent = "Entities";
+    document.getElementById("s-edges-lbl").textContent = "Relations";
+  }
+}
+
+// Semantic cloud: PCA coordinates arrive in [-1,1]; scale to world space so the
+// existing 3D projection/camera renders them exactly like the network view.
+const SEM_R = 230;
+function ingestSemantic(raw) {
+  const ptsIn = Array.isArray(raw.points) ? raw.points : [];
+  // Collapse duplicate embeddings of the SAME url (re-gathered across facets/runs)
+  // so one source is one point, not a stack of near-coincident dots.
+  const seen = new Set(); let dropped = 0;
+  const points = [];
+  ptsIn.forEach((p, i) => {
+    const url = String(p.url ?? "");
+    const key = url ? url.toLowerCase().replace(/[#?].*$/, "").replace(/\/$/, "") : ("__" + i);
+    if (url && seen.has(key)) { dropped++; return; }
+    if (url) seen.add(key);
+    points.push({
+      id: String(p.id ?? i),
+      name: String(p.label ?? p.url ?? p.id ?? "?"),
+      url,
+      provider: String(p.provider ?? "").toLowerCase(),
+      x: (Number(p.x) || 0) * SEM_R, y: (Number(p.y) || 0) * SEM_R, z: (Number(p.z) || 0) * SEM_R,
+    });
+  });
+  return { points, dropped, dimensions: Number(raw.dimensions ?? raw.dims ?? 0) || 0,
+    explainedVariance: Array.isArray(raw.explained_variance) ? raw.explained_variance : [] };
+}
+function setSemanticData(raw) {
+  SEM = ingestSemantic(raw); selected = null; semSample = !!(raw && raw.sample); refreshSampleBadge(); renderDetail(); updateStats();
+}
+// Stable, evenly-spread colour per provider (golden-angle hue).
+const _provHue = new Map();
+function providerColor(prov) {
+  const key = prov || "unknown";
+  if (!_provHue.has(key)) _provHue.set(key, (_provHue.size * 137.508) % 360);
+  const dark = (document.documentElement.getAttribute("data-theme")
+    || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")) === "dark";
+  return `hsl(${_provHue.get(key).toFixed(0)}, 62%, ${dark ? 62 : 46}%)`;
+}
+function semProviders() {
+  const s = []; const seen = new Set();
+  for (const p of SEM.points) { const k = p.provider || "unknown"; if (!seen.has(k)) { seen.add(k); s.push(k); } }
+  return s;
+}
+
+// ---- 3D force sim ----
+let alpha = 1;
+function tick() {
+  if (view === "semantic") { if (spin && !dragging) cam.rotY += 0.0022; return; }
+  if (view !== "network") return;
+  if (spin && !dragging) cam.rotY += 0.0022;
+  alpha *= 0.99; if (alpha < 0.03) alpha = 0.03;
+  const rep = 6000, spring = 0.02, springLen = 95, center = 0.012, damp = 0.85, N = G.nodes;
+  for (let i = 0; i < N.length; i++) { const a = N[i];
+    for (let j = i+1; j < N.length; j++) { const b = N[j];
+      let dx=a.x-b.x, dy=a.y-b.y, dz=a.z-b.z; let d2=dx*dx+dy*dy+dz*dz||0.01; const d=Math.sqrt(d2);
+      const f=rep/d2, fx=dx/d*f, fy=dy/d*f, fz=dz/d*f;
+      a.vx+=fx;a.vy+=fy;a.vz+=fz; b.vx-=fx;b.vy-=fy;b.vz-=fz; } }
+  for (const e of G.edges) {
+    let dx=e.t.x-e.s.x, dy=e.t.y-e.s.y, dz=e.t.z-e.s.z; const d=Math.sqrt(dx*dx+dy*dy+dz*dz)||0.01;
+    const f=(d-springLen)*spring, fx=dx/d*f, fy=dy/d*f, fz=dz/d*f;
+    e.s.vx+=fx;e.s.vy+=fy;e.s.vz+=fz; e.t.vx-=fx;e.t.vy-=fy;e.t.vz-=fz; }
+  for (const nd of N) { if (nd===dragNode) continue;
+    nd.vx-=nd.x*center; nd.vy-=nd.y*center; nd.vz-=nd.z*center;
+    nd.vx*=damp; nd.vy*=damp; nd.vz*=damp;
+    nd.x+=nd.vx*alpha*1.3; nd.y+=nd.vy*alpha*1.3; nd.z+=nd.vz*alpha*1.3; }
+}
+
+// ---- projection ----
+function rotY(p,a){const c=Math.cos(a),s=Math.sin(a);return{x:p.x*c+p.z*s,y:p.y,z:-p.x*s+p.z*c};}
+function rotX(p,a){const c=Math.cos(a),s=Math.sin(a);return{x:p.x,y:p.y*c-p.z*s,z:p.y*s+p.z*c};}
+function project(nd) {
+  let p = rotY(nd, cam.rotY); p = rotX(p, cam.rotX);
+  const persp = cam.dist / (cam.dist - p.z);
+  const k = persp * cam.zoom;
+  return { x: W/2 + p.x*k, y: H/2 + p.y*k, z: p.z, scale: k };
+}
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const r = cv.getBoundingClientRect(); W = r.width; H = r.height;
+  cv.width = W*DPR; cv.height = H*DPR;
+}
+const nodeR = (nd) => 4.5 + Math.sqrt(nd.weight) * 3.2;
+
+function draw() {
+  ctx.save(); ctx.scale(DPR, DPR); ctx.clearRect(0,0,W,H);
+  if (view === "network") drawNetwork();
+  else if (view === "timeline") drawTimeline();
+  else drawSemantic();
+  ctx.restore();
+}
+function neighborsOf(name){const s=new Set();for(const e of G.edges){if(e.s.name===name)s.add(e.t.name);if(e.t.name===name)s.add(e.s.name);}return s;}
+
+function drawNetwork() {
+  // project all
+  const P = new Map();
+  for (const nd of G.nodes) P.set(nd, project(nd));
+  const zs = [...P.values()].map(p=>p.z); const zmin=Math.min(...zs), zmax=Math.max(...zs), zspan=(zmax-zmin)||1;
+  const fog = (z) => 0.35 + 0.65*((z - zmin)/zspan);
+  const hi = selected || hoverNode, near = hi ? neighborsOf(hi) : null;
+  const edgeCol = cssVar("--edge"), accent = cssVar("--accent"), ink = cssVar("--ink"), inkDim = cssVar("--ink-dim");
+  // edges sorted by midpoint depth. Parallel edges (same pair) are bowed apart by
+  // their _pi index so neither the curves nor their labels overlap.
+  const edges = G.edges.map(e => ({ e, z: (P.get(e.s).z + P.get(e.t).z)/2 })).sort((a,b)=>a.z-b.z);
+  const labelSpots = []; // {x,y} of labels already drawn, to nudge collisions apart
+  for (const {e} of edges) {
+    const p1 = P.get(e.s), p2 = P.get(e.t);
+    const active = hi && (e.s.name===hi || e.t.name===hi);
+    // control point: midpoint pushed along the edge normal, spread by parallel index
+    const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2, ex=p2.x-p1.x, ey=p2.y-p1.y, elen=Math.hypot(ex,ey)||1;
+    const nx=-ey/elen, ny=ex/elen;
+    const spread = e._pn>1 ? (e._pi-(e._pn-1)/2) : 0;
+    const bow = spread * Math.min(46, 22+elen*0.06);
+    const cx=mx+nx*bow, cy=my+ny*bow;
+    ctx.strokeStyle = active ? accent : edgeCol;
+    ctx.globalAlpha = (hi ? (active?0.95:0.08) : 0.4) * fog((p1.z+p2.z)/2);
+    ctx.lineWidth = Math.max(1, Math.min(6, e.corr*1.6)) * (active?1.4:1);
+    ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.quadraticCurveTo(cx,cy,p2.x,p2.y); ctx.stroke();
+    // arrowhead at the object end, aimed along the curve's incoming tangent
+    if (active || !hi) {
+      const tx=p2.x-cx, ty=p2.y-cy, tl=Math.hypot(tx,ty)||1, ux=tx/tl, uy=ty/tl;
+      const nr=Math.max(3,nodeR(e.t)*(P.get(e.t).scale))+2, ax=p2.x-ux*nr, ay=p2.y-uy*nr, ah=6;
+      ctx.globalAlpha=(hi?(active?0.95:0.1):0.5)*fog(p2.z);
+      ctx.beginPath(); ctx.moveTo(ax,ay);
+      ctx.lineTo(ax-ux*ah-uy*ah*0.6, ay-uy*ah+ux*ah*0.6);
+      ctx.lineTo(ax-ux*ah+uy*ah*0.6, ay-uy*ah-ux*ah*0.6);
+      ctx.closePath(); ctx.fillStyle=active?accent:edgeCol; ctx.fill();
+    }
+    // label at the curve apex; nudge if it lands on an already-placed label
+    if (active && cam.zoom > 0.5) {
+      let lx=(mx+cx)/2, ly=(my+cy)/2 - 5;
+      for (let g=0; g<labelSpots.length; g++){ const s=labelSpots[g];
+        if (Math.abs(s.x-lx)<70 && Math.abs(s.y-ly)<12){ ly = s.y - 13; } }
+      labelSpots.push({x:lx,y:ly});
+      const txt = pretty(e.predicate) + (e.corr>1?` ·${e.corr}`:"");
+      ctx.font = "10px " + cssVar("--font-mono"); ctx.textAlign = "center";
+      const tw = ctx.measureText(txt).width;
+      ctx.globalAlpha = 0.9; ctx.fillStyle = cssVar("--panel");
+      ctx.fillRect(lx-tw/2-4, ly-9, tw+8, 13);           // chip so text stays legible over edges
+      ctx.globalAlpha = 0.98; ctx.fillStyle = ink;
+      ctx.textBaseline="middle"; ctx.fillText(txt, lx, ly-2);
+    }
+  }
+  // nodes sorted far→near
+  const order = G.nodes.map(nd => ({ nd, p: P.get(nd) })).sort((a,b)=>a.p.z-b.p.z);
+  for (const { nd, p } of order) {
+    const r = nodeR(nd) * p.scale;
+    const dim = hi && nd.name!==hi && near && !near.has(nd.name);
+    const focused = focusTerm && nd.name.toLowerCase().includes(focusTerm);
+    const f = fog(p.z);
+    ctx.globalAlpha = dim ? 0.15 : f;
+    ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2,r), 0, Math.PI*2);
+    ctx.fillStyle = mix(typeColor(nd.type), cssVar("--fog"), 1 - f); ctx.fill();
+    if (nd.name===selected || focused) { ctx.globalAlpha = 1; ctx.lineWidth = 2.5; ctx.strokeStyle = accent; ctx.stroke(); }
+    else { ctx.lineWidth = 1; ctx.strokeStyle = cssVar("--panel"); ctx.stroke(); }
+    if (cam.zoom*p.scale > 0.62 || nd.weight > 2 || nd.name===hi) {
+      ctx.globalAlpha = dim ? 0.25 : Math.min(1, f + 0.2); ctx.fillStyle = ink;
+      ctx.font = (nd.name===hi ? "600 " : "500 ") + "11px " + cssVar("--font-ui");
+      ctx.textAlign = "center"; ctx.textBaseline = "top";
+      ctx.fillText(clip(nd.name, 24), p.x, p.y + Math.max(2,r) + 3);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+function mix(hex, fogRGB, t) {
+  const c = hex.replace('#',''); const r=parseInt(c.substr(0,2),16), g=parseInt(c.substr(2,2),16), b=parseInt(c.substr(4,2),16);
+  const [fr,fg,fb] = fogRGB.split(',').map(Number);
+  return `rgb(${Math.round(r+(fr-r)*t)},${Math.round(g+(fg-g)*t)},${Math.round(b+(fb-b)*t)})`;
+}
+
+// ---- timeline (2D) ----
+// Both time-stamped NODES (events) and time-stamped EDGES (dated relationships)
+// are laid out, so a graph whose dates live on the relationships still populates.
+let timelineItems = [];
+function drawTimeline() {
+  const inkDim=cssVar("--ink-dim"), ink=cssVar("--ink"), grid=cssVar("--line"), accent=cssVar("--accent");
+  const items = [];
+  for (const n of G.nodes) if (n.occurredAt) items.push({ t:+new Date(n.occurredAt), title:n.name, sub:n.type, color:typeColor(n.type), ref:n });
+  for (const e of G.edges) if (e.occurredAt) items.push({ t:+new Date(e.occurredAt), title:pretty(e.predicate), sub:`${e.s.name} → ${e.t.name}`, color:accent, ref:e.s });
+  items.sort((a,b)=>a.t-b.t);
+  ctx.font = "12px " + cssVar("--font-ui");
+  if (!items.length) { timelineItems=[]; ctx.fillStyle=inkDim; ctx.textAlign="center";
+    ctx.fillText("No time-stamped events or relationships in this graph yet.", W/2, H/2-8);
+    ctx.font="11px "+cssVar("--font-mono");
+    ctx.fillText("Nodes or edges carrying occurred_at appear here as a cascade.", W/2, H/2+12); return; }
+  const pad=70, y0=90, laneGap=62, lanes=5;
+  const times=items.map(d=>d.t); const min=Math.min(...times),max=Math.max(...times),span=max-min;
+  // Normalized position in [0,1], then apply the timeline zoom/pan transform so
+  // scroll magnifies the axis and drag scans along it. When every item shares one
+  // instant (span 0), spread evenly by index so they don't collapse onto one tick.
+  const uOf=(t,i)=> span>0 ? (t-min)/span : (items.length>1? i/(items.length-1):0.5);
+  const xOf=(t,i)=> pad + (uOf(t,i)*(W-pad*2))*tlZoom + tlPanX;
+  ctx.strokeStyle=grid; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(pad,y0); ctx.lineTo(W-pad,y0); ctx.stroke();
+  timelineItems = items.map((it,i)=>{ const x=xOf(it.t,i); const y=y0+34+(i%lanes)*laneGap;
+    const sel = selected && it.ref && it.ref.name===selected;
+    ctx.font="600 12px "+cssVar("--font-ui"); const title=clip(it.title,28);
+    const tw=Math.max(ctx.measureText(title).width, ctx.measureText(clip(it.sub,30)).width, 90)+20, h=46;
+    // At zoom 1, keep first/last cards on-canvas; when zoomed in, let them move
+    // with the pan so you can scan the axis. The connector always runs to the
+    // true time position.
+    const cx = tlZoom>1.01 ? x : Math.max(pad+tw/2, Math.min(W-pad-tw/2, x));
+    ctx.strokeStyle=grid; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(x,y0); ctx.lineTo(cx,y); ctx.stroke();
+    ctx.fillStyle=it.color; ctx.beginPath(); ctx.arc(x,y0,5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=cssVar("--panel"); ctx.strokeStyle=sel?accent:cssVar("--line"); ctx.lineWidth=sel?2:1;
+    roundRect(cx-tw/2,y,tw,h,8); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=ink; ctx.textAlign="center"; ctx.textBaseline="top"; ctx.fillText(title,cx,y+6);
+    ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.fillText(clip(it.sub,30),cx,y+21);
+    ctx.fillText(new Date(it.t).toISOString().slice(0,10),cx,y+32);
+    return {...it, box:{x:cx-tw/2,y,w:tw,h}, dot:{x,y:y0}}; });
+  ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono");
+  const xMin=xOf(min,0), xMax=xOf(max,items.length-1);
+  if (xMin>pad-40 && xMin<W){ ctx.textAlign="center"; ctx.fillText(new Date(min).toISOString().slice(0,10), Math.max(pad,xMin), y0-14); }
+  if (xMax>0 && xMax<W-pad+40){ ctx.textAlign="center"; ctx.fillText(new Date(max).toISOString().slice(0,10), Math.min(W-pad,xMax), y0-14); }
+  if (span===0){ ctx.textAlign="center"; ctx.fillText("all items share one date — spaced evenly", W/2, y0-14); }
+  if (tlZoom>1.01){ ctx.textAlign="right"; ctx.fillText(`${tlZoom.toFixed(1)}×`, W-pad, H-14); }
+}
+function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+
+// ---- semantic cloud (3D point cloud from projected embeddings) ----
+function drawSemantic() {
+  const inkDim=cssVar("--ink-dim"), ink=cssVar("--ink"), grid=cssVar("--line");
+  if (!SEM.points.length) {
+    ctx.fillStyle=inkDim; ctx.textAlign="center"; ctx.font="12px "+cssVar("--font-ui");
+    ctx.fillText("No embeddings to project yet.", W/2, H/2-8);
+    ctx.font="11px "+cssVar("--font-mono");
+    ctx.fillText("Load the JSON from POST /digim/semantic (an object with 'points').", W/2, H/2+12);
+    return;
+  }
+  const P = new Map();
+  for (const pt of SEM.points) P.set(pt, project(pt));
+  const zs=[...P.values()].map(p=>p.z); const zmin=Math.min(...zs), zmax=Math.max(...zs), zspan=(zmax-zmin)||1;
+  const fog=(z)=>0.32+0.68*((z-zmin)/zspan);
+  const hi = selected;
+  // Bold, labelled origin axes (PC1/PC2/PC3) so the orientation of the cloud is
+  // legible as it rotates. Each axis is drawn both ways from the origin.
+  const O=project({x:0,y:0,z:0});
+  const AX=[["PC1",{x:SEM_R*1.15,y:0,z:0},cssVar("--t-person")],
+            ["PC2",{x:0,y:SEM_R*1.15,z:0},cssVar("--t-location")],
+            ["PC3",{x:0,y:0,z:SEM_R*1.15},cssVar("--t-event")]];
+  for (const [lbl,v,col] of AX){
+    const p=project(v), pn=project({x:-v.x,y:-v.y,z:-v.z});
+    ctx.globalAlpha=0.35; ctx.strokeStyle=col; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(pn.x,pn.y); ctx.lineTo(O.x,O.y); ctx.stroke();      // negative half, faint
+    ctx.globalAlpha=0.85; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(O.x,O.y); ctx.lineTo(p.x,p.y); ctx.stroke();        // positive half, bold
+    ctx.globalAlpha=1; ctx.fillStyle=col; ctx.font="700 11px "+cssVar("--font-mono");
+    ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(lbl, p.x, p.y);
+  }
+  ctx.globalAlpha=1;
+  const order=SEM.points.map(pt=>({pt,p:P.get(pt)})).sort((a,b)=>a.p.z-b.p.z);
+  for (const {pt,p} of order) {
+    const f=fog(p.z), r=Math.max(2.2, 5.2*p.scale);
+    const isSel=pt.id===hi, isFoc=focusTerm && pt.name.toLowerCase().includes(focusTerm);
+    ctx.globalAlpha=(hi && !isSel)?0.35*f:f;
+    ctx.beginPath(); ctx.arc(p.x,p.y,r,0,Math.PI*2);
+    ctx.fillStyle=mix(hslToHex(providerColor(pt.provider)), cssVar("--fog"), 1-f); ctx.fill();
+    if (isSel || isFoc) { ctx.globalAlpha=1; ctx.lineWidth=2.5; ctx.strokeStyle=cssVar("--accent"); ctx.stroke(); }
+    if (isSel || isFoc || p.scale>1.15) {
+      ctx.globalAlpha=Math.min(1,f+0.2); ctx.fillStyle=ink;
+      ctx.font=(isSel?"600 ":"500 ")+"11px "+cssVar("--font-ui"); ctx.textAlign="center"; ctx.textBaseline="top";
+      ctx.fillText(clip(pt.name,28), p.x, p.y+r+3);
+    }
+  }
+  ctx.globalAlpha=1;
+  // explained-variance caption (how much structure the 3 axes capture)
+  if (SEM.explainedVariance.length===3) {
+    const pct=SEM.explainedVariance.map(v=>Math.round(v*100));
+    ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.textAlign="left"; ctx.textBaseline="bottom";
+    const dup = SEM.dropped ? ` · ${SEM.dropped} duplicate${SEM.dropped>1?"s":""} merged` : "";
+    ctx.fillText(`PCA · axes capture ${pct[0]}% / ${pct[1]}% / ${pct[2]}% of variance${dup}`, 14, H-14);
+  }
+}
+// HSL string → hex, so it can flow through mix() with the fog RGB.
+function hslToHex(hsl) {
+  const m=/hsl\(\s*([\d.]+)[, ]+([\d.]+)%[, ]+([\d.]+)%/.exec(hsl); if(!m) return "#7c9cbf";
+  let h=+m[1]/360, s=+m[2]/100, l=+m[3]/100;
+  const k=n=>(n+h*12)%12, a=s*Math.min(l,1-l), f=n=>l-a*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));
+  const to=v=>Math.round(v*255).toString(16).padStart(2,"0");
+  return "#"+to(f(0))+to(f(8))+to(f(4));
+}
+
+const esc = (s)=>String(s??"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const host = (u)=>{ try { return new URL(u).hostname.replace(/^www\./,""); } catch { return clip(String(u),40); } };
+
+// ---- on-demand node insight (calls the live API; one LLM call, cached) ----
+const insightStore = new Map(); // entityKey(lower) → {loading|text|error|sources|cached}
+function apiBase(){
+  const v=(localStorage.getItem("digim_api_base")||"").trim();
+  if(v) return v.replace(/\/+$/,"");
+  if(location.protocol.startsWith("http")) return location.origin+"/dina/api/v1";
+  return ""; // file:// with no override → fetch will fail; we surface a clear hint
+}
+async function generateInsight(entity){
+  const key=(entity||"").toLowerCase(); if(!key) return;
+  insightStore.set(key,{loading:true}); renderDetail();
+  try{
+    const base=apiBase();
+    const res=await fetch(base+"/digim/node-insight",{method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify({entity})});
+    if(!res.ok) throw new Error("API returned HTTP "+res.status);
+    const data=await res.json();
+    if(data.status && data.status!=="success") throw new Error(data.message||"insight unavailable");
+    insightStore.set(key,{text:String(data.insight||""), sources:Array.isArray(data.sources)?data.sources:[], cached:!!data.cached});
+  }catch(ex){ insightStore.set(key,{error:String(ex.message||ex)}); }
+  renderDetail();
+}
+// The button + result block shown under a selected node/point.
+function insightSection(entity){
+  const st=insightStore.get((entity||"").toLowerCase());
+  if(st && st.loading) return `<div class="insight loading">Analyzing sources…</div>`;
+  if(st && st.text){
+    const src=(st.sources||[]).slice(0,6).map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener" class="src">${esc(host(u))}</a>`).join("");
+    return `<div class="insight"><p class="rail-h">Insight${st.cached?" · cached":""}</p>
+      <div class="insight-body">${esc(st.text)}</div>${src?`<div class="rel-src" style="margin-top:8px">${src}</div>`:""}
+      <button class="btn insight-btn" id="gen-insight" data-entity="${esc(entity)}">Regenerate</button></div>`;
+  }
+  if(st && st.error){
+    return `<div class="insight"><div class="insight-err">Couldn't generate insight: ${esc(st.error)}.
+      ${apiBase()?"":"Set the API base in <b>Load data ▸ API base</b> first (this page can't reach the API over file://)."}</div>
+      <button class="btn insight-btn" id="gen-insight" data-entity="${esc(entity)}">Try again</button></div>`;
+  }
+  return `<button class="btn insight-btn" id="gen-insight" data-entity="${esc(entity)}">✦ Generate insight</button>`;
+}
+const conf = (c)=> c==null ? "" : (Math.round(c*100)+"%");
+// A relationship line with its full provenance: predicate, corroboration,
+// confidence, and every source URL that attests it.
+function relRow(e, dir){
+  const other = dir==="out" ? e.t.name : e.s.name;
+  const head = dir==="out"
+    ? `<span class="pred">${esc(pretty(e.predicate))}</span> → <span class="other">${esc(clip(other,24))}</span>`
+    : `<span class="other">${esc(clip(other,24))}</span> <span class="pred">${esc(pretty(e.predicate))}</span> →`;
+  const meta = [ e.corr>1?`×${e.corr} corrob.`:"", e.confidence!=null?`${conf(e.confidence)} conf`:"",
+    e.occurredAt?new Date(e.occurredAt).toISOString().slice(0,10):"" ].filter(Boolean).join(" · ");
+  const srcs = (e.sources||[]).slice(0,4).map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener" class="src">${esc(host(u))}</a>`).join("");
+  return `<div class="rel">${head}${meta?`<div class="rel-meta">${esc(meta)}</div>`:""}${srcs?`<div class="rel-src">${srcs}</div>`:""}</div>`;
+}
+function renderDetail() {
+  const el = document.getElementById("detail");
+  if (view === "semantic") {
+    if (!selected) { el.classList.add("empty");
+      el.innerHTML='<p class="rail-h">Selected</p><div class="dtl-body">Click a point to inspect its document. Nearby points are semantically similar — the panel lists its closest neighbours.</div>'; return; }
+    const pt = SEM.points.find(p=>p.id===selected); if (!pt) return;
+    el.classList.remove("empty");
+    const col=providerColor(pt.provider);
+    // nearest neighbours in the 3D projection — "what is this document near, and how close"
+    const near = SEM.points.filter(p=>p.id!==pt.id)
+      .map(p=>({p, d:Math.hypot(p.x-pt.x,p.y-pt.y,p.z-pt.z)/SEM_R})).sort((a,b)=>a.d-b.d).slice(0,5);
+    el.innerHTML=`<p class="rail-h">Selected point</p><p class="dtl-name">${esc(clip(pt.name,80))}</p>
+      <span class="dtl-type" style="color:${col}"><span class="dot" style="background:${col}"></span>${esc(pt.provider||"unknown")}</span>
+      <div class="dtl-meta">
+        <div class="kv"><span class="k">x · PC1</span><span class="v">${(pt.x/SEM_R).toFixed(3)}</span></div>
+        <div class="kv"><span class="k">y · PC2</span><span class="v">${(pt.y/SEM_R).toFixed(3)}</span></div>
+        <div class="kv"><span class="k">z · PC3</span><span class="v">${(pt.z/SEM_R).toFixed(3)}</span></div>
+        <div class="kv"><span class="k">embedding</span><span class="v">${SEM.dimensions||0}-D</span></div></div>
+      ${pt.url?`<p class="rail-h" style="margin-top:16px">Source</p><div class="rels"><div class="rel"><a href="${esc(pt.url)}" target="_blank" rel="noopener" class="other">${esc(clip(pt.url,44))}</a></div></div>`:""}
+      ${near.length?`<p class="rail-h" style="margin-top:16px">Nearest in meaning</p><div class="rels">${
+        near.map(n=>`<div class="rel"><span class="other">${esc(clip(n.p.name,30))}</span><div class="rel-meta">dist ${n.d.toFixed(2)} · ${esc(n.p.provider||"—")}</div></div>`).join("")}</div>`:""}
+      ${insightSection(pt.name)}`;
+    return;
+  }
+  if (!selected) { el.classList.add("empty");
+    el.innerHTML='<p class="rail-h">Selected</p><div class="dtl-body">Click a node to inspect its relationships and provenance.</div>'; return; }
+  const nd = G.nodes.find(n=>n.name===selected); if (!nd) return;
+  el.classList.remove("empty");
+  const outs=G.edges.filter(e=>e.s.name===selected), ins=G.edges.filter(e=>e.t.name===selected);
+  const allSrc = new Set(); [...outs,...ins].forEach(e=>(e.sources||[]).forEach(u=>allSrc.add(u)));
+  el.innerHTML=`<p class="rail-h">Selected entity</p><p class="dtl-name">${esc(nd.name)}</p>
+    <span class="dtl-type" style="color:${typeColor(nd.type)}"><span class="dot" style="background:${typeColor(nd.type)}"></span>${esc(nd.type)}</span>
+    <div class="dtl-meta">
+      <div class="kv"><span class="k">mentions</span><span class="v">${nd.weight}</span></div>
+      <div class="kv"><span class="k">degree</span><span class="v">${outs.length+ins.length}</span></div>
+      <div class="kv"><span class="k">out / in</span><span class="v">${outs.length} / ${ins.length}</span></div>
+      <div class="kv"><span class="k">sources</span><span class="v">${allSrc.size}</span></div>
+      ${nd.occurredAt?`<div class="kv"><span class="k">occurred</span><span class="v">${new Date(nd.occurredAt).toISOString().slice(0,10)}</span></div>`:""}</div>
+    ${outs.length?`<p class="rail-h" style="margin-top:16px">Outgoing (${outs.length})</p><div class="rels">${outs.map(e=>relRow(e,"out")).join("")}</div>`:""}
+    ${ins.length?`<p class="rail-h" style="margin-top:14px">Incoming (${ins.length})</p><div class="rels">${ins.map(e=>relRow(e,"in")).join("")}</div>`:""}
+    ${(!outs.length&&!ins.length)?`<div class="dtl-body" style="margin-top:12px">No relationships recorded for this entity.</div>`:""}
+    ${insightSection(nd.name)}`;
+}
+function buildLegend() {
+  if (view === "semantic") {
+    document.getElementById("legend-h").textContent = "Provider";
+    document.getElementById("legend-note").textContent = "proximity = similar meaning · depth = 3rd PCA axis";
+    const provs = semProviders();
+    document.getElementById("legend").innerHTML = (provs.length ? provs : ["unknown"]).map(p =>
+      `<div class="legend-row"><span class="dot" style="background:${providerColor(p)}"></span>${p}</div>`).join("");
+    return;
+  }
+  document.getElementById("legend-h").textContent = "Node type";
+  document.getElementById("legend-note").textContent = "size = mentions · edge width = corroboration · depth = 3D";
+  const present=new Set(G.nodes.map(n=>n.type)); const order=TYPES.filter(t=>present.has(t));
+  document.getElementById("legend").innerHTML=(order.length?order:["other"]).map(t=>
+    `<div class="legend-row"><span class="dot" style="background:${typeColor(t)}"></span>${t}</div>`).join("");
+}
+
+// ---- interaction ----
+let dragNode=null, dragging=false, last=null, moved=false;
+function nodeAt(sx,sy) {
+  if (view==="timeline") {
+    for (const it of timelineItems){ const b=it.box;
+      if (sx>=b.x && sx<=b.x+b.w && sy>=b.y && sy<=b.y+b.h) return it.ref;
+      if (Math.hypot(sx-it.dot.x, sy-it.dot.y)<9) return it.ref; }
+    return null;
+  }
+  if (view==="semantic") {
+    let best=null, bd=1e9;
+    for (const pt of SEM.points){ const p=project(pt); const r=Math.max(4,5.2*p.scale)+5; const d=Math.hypot(sx-p.x,sy-p.y);
+      if (d<r && d<bd){bd=d;best=pt;} }
+    return best;
+  }
+  let best=null, bd=1e9;
+  for (const nd of G.nodes){ const p=project(nd); const r=Math.max(4,nodeR(nd)*p.scale)+4; const d=Math.hypot(sx-p.x,sy-p.y);
+    if (d<r && p.z<bd*0+1e9) { if (d<bd){bd=d;best=nd;} } }
+  return best;
+}
+// The selection key differs by view: semantic points key on id, graph nodes on name.
+function selKey(nd){ return view==="semantic" ? nd.id : nd.name; }
+cv.addEventListener("pointerdown",(e)=>{ cv.setPointerCapture(e.pointerId);
+  const r=cv.getBoundingClientRect(); const sx=e.clientX-r.left, sy=e.clientY-r.top;
+  moved=false; last={x:e.clientX,y:e.clientY};
+  const nd=nodeAt(sx,sy);
+  if (nd && view==="network"){ dragNode=nd; alpha=Math.max(alpha,0.5); }
+  dragging=true; cv.classList.add("dragging"); });
+cv.addEventListener("pointermove",(e)=>{
+  const r=cv.getBoundingClientRect(); const sx=e.clientX-r.left, sy=e.clientY-r.top;
+  if (!dragging){ const nd=nodeAt(sx,sy); const nm=nd?nd.name:null; if(nm!==hoverNode){hoverNode=nm; cv.style.cursor=nd?"pointer":"grab";} return; }
+  const dx=e.clientX-last.x, dy=e.clientY-last.y; if(Math.abs(dx)+Math.abs(dy)>3) moved=true; last={x:e.clientX,y:e.clientY};
+  if (dragNode && view==="network"){ // move node in the camera's view plane
+    const s = cam.dist/(cam.dist) * cam.zoom;
+    let d = { x: dx/s, y: dy/s, z: 0 };
+    d = rotX(d, -cam.rotX); d = rotY(d, -cam.rotY);
+    dragNode.x+=d.x; dragNode.y+=d.y; dragNode.z+=d.z; dragNode.vx=dragNode.vy=dragNode.vz=0; alpha=Math.max(alpha,0.4);
+  } else if (view==="network" || view==="semantic"){ cam.rotY += dx*0.01; cam.rotX += dy*0.01; cam.rotX=Math.max(-1.4,Math.min(1.4,cam.rotX)); }
+  else if (view==="timeline"){ tlPanX += dx; clampTlPan(); }
+});
+function clampTlPan(){ const span=(W-140)*(tlZoom-1); tlPanX=Math.max(-span-40, Math.min(40, tlPanX)); }
+function endDrag(e){ if (dragging && !moved){ const r=cv.getBoundingClientRect(); const nd=nodeAt(e.clientX-r.left,e.clientY-r.top);
+    selected = nd ? (selKey(nd)===selected?null:selKey(nd)) : null; renderDetail(); }
+  dragging=false; dragNode=null; cv.classList.remove("dragging"); }
+cv.addEventListener("pointerup",endDrag); cv.addEventListener("pointercancel",endDrag);
+cv.addEventListener("wheel",(e)=>{ e.preventDefault();
+  if (view==="timeline"){
+    const r=cv.getBoundingClientRect(), mx=e.clientX-r.left, pad=70;
+    const before=(mx-pad-tlPanX)/tlZoom;                       // keep the point under the cursor fixed
+    tlZoom=Math.max(1,Math.min(14,tlZoom*(e.deltaY<0?1.15:0.87)));
+    tlPanX=mx-pad-before*tlZoom; clampTlPan();
+  } else { cam.zoom=Math.max(0.3,Math.min(4,cam.zoom*(e.deltaY<0?1.1:0.909))); }
+},{passive:false});
+document.getElementById("focus").addEventListener("input",(e)=>{ focusTerm=e.target.value.trim().toLowerCase();
+  if (!focusTerm) return;
+  if (view==="semantic"){ const hit=SEM.points.find(p=>p.name.toLowerCase().includes(focusTerm)); if(hit){selected=hit.id;renderDetail();} return; }
+  const hit=G.nodes.find(n=>n.name.toLowerCase().includes(focusTerm)); if(hit){selected=hit.name;renderDetail();} });
+// Insight button (delegated — the detail panel re-renders its innerHTML).
+document.getElementById("detail").addEventListener("click",(e)=>{
+  const btn=e.target.closest("#gen-insight"); if(!btn) return;
+  generateInsight(btn.getAttribute("data-entity"));
+});
+
+function setView(v){ const prev=view; view=v;
+  document.getElementById("tab-network").setAttribute("aria-selected", v==="network");
+  document.getElementById("tab-timeline").setAttribute("aria-selected", v==="timeline");
+  document.getElementById("tab-semantic").setAttribute("aria-selected", v==="semantic");
+  const hintEl=document.getElementById("hint"); hintEl.style.display="";
+  hintEl.textContent = v==="timeline" ? "scroll to zoom · drag to pan · click an event"
+    : v==="semantic" ? "drag to orbit · scroll to zoom · click a point"
+    : "drag to orbit · scroll to zoom · click a node";
+  // Selection keys differ between the graph views and the semantic cloud — reset
+  // when crossing that boundary so a stale key can't mis-highlight.
+  if ((prev==="semantic") !== (v==="semantic")) { selected=null; }
+  buildLegend(); updateStats(); refreshSampleBadge(); renderDetail();
+  if (v==="network") alpha=Math.max(alpha,0.5); }
+document.getElementById("tab-network").onclick=()=>setView("network");
+document.getElementById("tab-timeline").onclick=()=>setView("timeline");
+document.getElementById("tab-semantic").onclick=()=>setView("semantic");
+const spinBtn=document.getElementById("spin-btn");
+spinBtn.setAttribute("aria-pressed", String(spin));
+spinBtn.onclick=()=>{ spin=!spin; spinBtn.setAttribute("aria-pressed",String(spin)); };
+
+const modal=document.getElementById("modal");
+const apiInput=document.getElementById("api-base");
+apiInput.value=(localStorage.getItem("digim_api_base")||"");
+apiInput.addEventListener("input",()=>localStorage.setItem("digim_api_base", apiInput.value.trim()));
+document.getElementById("load-btn").onclick=()=>{ document.getElementById("json-err").textContent=""; modal.showModal(); };
+document.getElementById("modal-x").onclick=()=>modal.close();
+// Fetch live from the API (no copy-paste). Works when the page is served from
+// the DINA domain or an API base is set; the hosted preview blocks this by CSP.
+document.getElementById("fetch-btn").onclick=async ()=>{
+  const err=document.getElementById("json-err"); err.textContent="";
+  const kind=document.getElementById("fetch-kind").value;
+  const q=document.getElementById("fetch-q").value.trim();
+  const btn=document.getElementById("fetch-btn"); const label=btn.textContent;
+  btn.textContent="Fetching…"; btn.disabled=true;
+  try{
+    const base=apiBase(); if(!base) throw new Error("Set an API base first (or serve this page from your DINA domain).");
+    if(kind==="semantic"){
+      const res=await fetch(base+"/digim/semantic",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({filter:q})});
+      if(!res.ok) throw new Error("API returned HTTP "+res.status);
+      const data=await res.json(); if(!Array.isArray(data.points)) throw new Error(data.message||"no points returned");
+      setSemanticData(data); setView("semantic"); buildLegend(); modal.close();
+    } else {
+      if(!q) throw new Error("Enter a focus entity/topic for the graph (e.g. Iran).");
+      const res=await fetch(base+"/digim/graph",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q})});
+      if(!res.ok) throw new Error("API returned HTTP "+res.status);
+      const data=await res.json(); if(!Array.isArray(data.nodes)) throw new Error(data.message||"no graph returned");
+      setData(data); setView(data.suggested_view==="temporal"?"timeline":"network"); buildLegend(); modal.close();
+    }
+  }catch(ex){ err.textContent=String(ex.message||ex); }
+  finally{ btn.textContent=label; btn.disabled=false; }
+};
+document.getElementById("json-sample").onclick=()=>{
+  if (view==="semantic") { setSemanticData(SAMPLE_SEM); buildLegend(); }
+  else { setData(SAMPLE); buildLegend(); }
+  modal.close(); };
+// Pull the FIRST balanced {…} or […] out of a paste, so a whole terminal
+// transcript (shell prompt, trailing objects, curl echo) still loads cleanly.
+function extractFirstJson(text){
+  const s=String(text||""); const start=s.search(/[{[]/); if(start<0) return null;
+  const open=s[start], close=open==="{"?"}":"]"; let depth=0, inStr=false, esc=false;
+  for(let i=start;i<s.length;i++){ const c=s[i];
+    if(inStr){ if(esc)esc=false; else if(c==="\\")esc=true; else if(c==='"')inStr=false; continue; }
+    if(c==='"')inStr=true; else if(c===open)depth++; else if(c===close){ if(--depth===0) return s.slice(start,i+1); } }
+  return null;
+}
+document.getElementById("json-load").onclick=()=>{ const err=document.getElementById("json-err");
+  try {
+    const src=document.getElementById("json-in").value;
+    let raw;
+    try { raw=JSON.parse(src); }
+    catch { const j=extractFirstJson(src); if(!j) throw new Error("No JSON object found in the pasted text.");
+      raw=JSON.parse(j); }
+    if (Array.isArray(raw.points)) {                 // digim_semantic → the cloud
+      setSemanticData(raw); setView("semantic"); buildLegend(); modal.close(); return;
+    }
+    if (Array.isArray(raw.nodes) && Array.isArray(raw.edges)) {
+      setData(raw);
+      if(raw.suggested_view==="temporal") setView("timeline");
+      else setView("network");
+      buildLegend(); modal.close(); return;
+    }
+    if ("point_count" in raw && !("points" in raw))
+      throw new Error("This looks like a summarised /digim/semantic response (no 'points'). Re-run without the jq filter — see the note below.");
+    throw new Error("JSON must have 'points' (semantic) or 'nodes'+'edges' (graph).");
+  } catch(ex){ err.textContent=ex.message; } };
+document.getElementById("theme-btn").onclick=()=>{ const cur=document.documentElement.getAttribute("data-theme")
+  || (matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");
+  document.documentElement.setAttribute("data-theme", cur==="dark"?"light":"dark"); };
+
+function frame(){ tick(); draw(); requestAnimationFrame(frame); }
+new ResizeObserver(resize).observe(cv);
+setData(SAMPLE); setSemanticData(SAMPLE_SEM); buildLegend(); resize(); setView("network"); frame();
+</script>
+
+</body>
+</html>

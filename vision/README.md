@@ -24,7 +24,7 @@ build (`tsconfig` compiles `src/`):
 | Concern | Location |
 |---|---|
 | Vision subsystem (all module code) | `src/modules/vision/` |
-| Database migration | `migrations/002_vision_schema.ts` |
+| Database migration | `migrations/003_vision_schema.ts` |
 | Hermetic edge-case tests | `test/vision/visionEdgeCases.ts` |
 | Design / integration / edge-case docs | `vision/` (this folder) |
 
@@ -143,7 +143,7 @@ the operator ceiling). Frames are supplied by the client (browser
    ```
 2. **Provision the schema** (either boot with the flag, or run the migration):
    ```bash
-   npm run migrate            # applies migrations/002_vision_schema.ts
+   npm run migrate            # applies migrations/003_vision_schema.ts
    ```
 3. **Set the flag** (PM2 env block / `.env`):
    ```bash

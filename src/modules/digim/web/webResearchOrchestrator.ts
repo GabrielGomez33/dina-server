@@ -27,7 +27,14 @@ import { WebResearchStore } from './storage/webResearchStore';
 import { SemanticMemory } from './memory/semanticMemory';
 import { checkUrlSafety } from './security/urlGuard';
 import { DinaLLMManager } from '../../llm/manager';
-import { GatherResult, WebInsight, RetrievedMemory, SearchResult } from './types';
+import { ResearchPlanner, InvestigationResult, PlannerLevel } from './planner/researchPlanner';
+import { GraphStore } from './graph/graphStore';
+import { GraphExtractor } from './graph/graphExtractor';
+import { Subgraph } from './graph/graphTypes';
+import { projectEmbeddings, SemanticProjection } from './graph/semanticProjection';
+import { buildFencedSources, INJECTION_SYSTEM_RULE } from './security/promptGuard';
+import { redisManager } from '../../../config/redis';
+import { GatherResult, GatheredDocument, WebInsight, RetrievedMemory, SearchResult } from './types';
 
 /** A discovered candidate annotated with whether it would pass the SSRF guard. */
 export interface DiscoveredCandidate extends SearchResult {
@@ -54,6 +61,12 @@ export interface WebResearchStatus {
   browserMode: string;
   browserAvailable: boolean;
   browserStatus: string;
+  /** Enabled Phase-2.3 discovery sources (rss/wikipedia/hn). */
+  sources: string[];
+  /** Whether the Phase-2.4 research planner (digim_investigate) is enabled. */
+  plannerEnabled: boolean;
+  /** Whether the Phase-2.4b relationship graph is enabled. */
+  graphEnabled: boolean;
 }
 
 export type IntelligenceLevel = 'surface' | 'deep' | 'predictive';
@@ -71,6 +84,8 @@ export interface ResearchResult {
   memoryUsed: number;
   /** Where the answer came from: 'web' | 'memory' | 'web+memory' | 'none' | 'cache'. */
   basis: 'web' | 'memory' | 'web+memory' | 'none' | 'cache';
+  /** Relationship triples added to the graph from this run (0 when graph disabled). */
+  graphAdded: number;
 }
 
 export class WebResearchOrchestrator {
@@ -80,9 +95,13 @@ export class WebResearchOrchestrator {
   private synthesizer: WebInsightSynthesizer;
   private store: WebResearchStore;
   private memory: SemanticMemory;
+  private graphStore: GraphStore;
+  private graphExtractor: GraphExtractor;
   private initialized = false;
   private sweepTimer: NodeJS.Timeout | null = null;
   private pruning = false;
+  /** On-demand per-node insight cache (entity → generated insight), TTL-bounded. */
+  private insightCache = new Map<string, { insight: string; sources: string[]; relationships: string[]; at: number }>();
 
   constructor(cfg: DigimWebConfig = getDigimWebConfig()) {
     this.cfg = cfg;
@@ -91,6 +110,9 @@ export class WebResearchOrchestrator {
     this.synthesizer = new WebInsightSynthesizer(this.llmManager, cfg);
     this.store = new WebResearchStore(cfg);
     this.memory = new SemanticMemory(this.llmManager, cfg);
+    // Relationship graph (Phase 2.4b): extractor reuses the LLM; store is DB-backed.
+    this.graphStore = new GraphStore(cfg);
+    this.graphExtractor = new GraphExtractor(cfg, { generate: (p) => this.generateText(p, 'digim_graph_extract', cfg.graphExtractMaxTokens) });
   }
 
   get enabled(): boolean {
@@ -207,6 +229,9 @@ export class WebResearchOrchestrator {
       browserMode: this.cfg.browserMode,
       browserAvailable: this.pipeline.browserAvailable,
       browserStatus: this.pipeline.browserStatusReason,
+      sources: this.pipeline.sourceNames,
+      plannerEnabled: this.cfg.plannerEnabled,
+      graphEnabled: this.cfg.graphEnabled,
     };
   }
 
@@ -293,6 +318,7 @@ export class WebResearchOrchestrator {
           processingTimeMs: performance.now() - start,
           memoryUsed: 0,
           basis: 'cache',
+          graphAdded: 0,
         };
       }
     }
@@ -344,6 +370,13 @@ export class WebResearchOrchestrator {
       }
     }
 
+    // (graph) Extract relationship triples into the graph — best effort, gated,
+    // never fails the response (Phase 2.4b).
+    let graphAdded = 0;
+    if (this.cfg.graphEnabled && gather.documents.length > 0) {
+      graphAdded = await this.buildGraphFrom(gather.documents);
+    }
+
     const gatheredCount = gather.documents.length;
     const memoryUsed = priorMemory.length;
     const basis: ResearchResult['basis'] =
@@ -362,7 +395,245 @@ export class WebResearchOrchestrator {
       processingTimeMs: performance.now() - start,
       memoryUsed,
       basis,
+      graphAdded,
     };
+  }
+
+  /**
+   * Multi-facet investigation (Phase 2.4a): decompose a broad question into
+   * sub-queries, research each through the proven pipeline, and fuse into one
+   * comprehensive briefing. Composes existing capabilities — no new gathering.
+   */
+  async investigate(query: string, opts?: { level?: IntelligenceLevel }): Promise<InvestigationResult> {
+    this.assertEnabled();
+    if (!this.cfg.plannerEnabled) {
+      throw new Error('DIGIM research planner is disabled (set DIGIM_WEB_PLANNER_ENABLED=true to enable)');
+    }
+    const planner = new ResearchPlanner(this.cfg, {
+      generate: (prompt) => this.generateText(prompt, 'digim_planner_decompose'),
+      research: async (q, level) => {
+        const r = await this.research(q, { level: level as IntelligenceLevel });
+        return { insight: r.insight, documentsGathered: r.gather.documents.length, basis: r.basis };
+      },
+      synthesize: (q, sources, level) => this.synthesizer.synthesize(q, sources, level),
+    });
+    return planner.investigate(query, { level: opts?.level as PlannerLevel });
+  }
+
+  /**
+   * Query the relationship graph: return the subgraph around a focus term plus
+   * the view the system recommends for it (Phase 2.4b).
+   */
+  async graph(focus: string, opts?: { maxNodes?: number }): Promise<Subgraph> {
+    this.assertEnabled();
+    return this.graphStore.getSubgraph(focus, opts);
+  }
+
+  /** Node/edge totals for the graph (status/telemetry). */
+  async getGraphStats(): Promise<{ entities: number; relationships: number }> {
+    return this.graphStore.getStats();
+  }
+
+  /**
+   * SEMANTIC VIEW (Phase 2.4b-4): the "n-dimensional coordinate graph". Reads the
+   * stored 1024-D content embeddings and projects them to 3D via PCA so distance
+   * in the cloud ≈ closeness of meaning. Pure projection math lives in
+   * `semanticProjection.ts`; this method just sources the vectors and shapes the
+   * result. Optional `filter` (case-insensitive substring on title/url) narrows
+   * the corpus to a topic's neighbourhood.
+   */
+  async semanticMap(opts?: { limit?: number; filter?: string }): Promise<SemanticProjection> {
+    const limit = Math.max(2, Math.min(opts?.limit ?? this.cfg.graphMaxNodes * 4, 4000));
+    const filter = (opts?.filter || '').trim().toLowerCase();
+
+    const embeddings = await redisManager.listEmbeddings(limit);
+    const mapped = embeddings
+      .map((e) => {
+        const md = e.metadata || {};
+        return {
+          id: e.id,
+          vector: e.vector,
+          label: (md.title || md.url || e.id) as string,
+          url: (md.url || '') as string,
+          provider: (md.provider || md.source || '') as string,
+        };
+      })
+      .filter((p) => {
+        if (!filter) return true;
+        return (p.label || '').toLowerCase().includes(filter) || (p.url || '').toLowerCase().includes(filter);
+      });
+
+    // Collapse duplicate embeddings of the same source URL (content re-gathered
+    // across investigate facets / repeated runs is stored under distinct ids, so
+    // the same page can appear many times). One source → one point.
+    const seenUrl = new Set<string>();
+    const inputs = mapped.filter((p) => {
+      if (!p.url) return true;
+      const key = p.url.toLowerCase().replace(/[#?].*$/, '').replace(/\/$/, '');
+      if (seenUrl.has(key)) return false;
+      seenUrl.add(key);
+      return true;
+    });
+
+    return projectEmbeddings(inputs);
+  }
+
+  /**
+   * RESEARCH HISTORY (frontend infra): list past researches for a history
+   * sidebar. Reads the intelligence records every run already persists.
+   */
+  async listResearch(opts?: { limit?: number; offset?: number; type?: string; search?: string }): Promise<{ total: number; items: any[] }> {
+    this.assertEnabled();
+    const [items, total] = await Promise.all([
+      this.store.listIntelligence(opts || {}),
+      this.store.countIntelligence({ type: opts?.type, search: opts?.search }),
+    ]);
+    return { total, items };
+  }
+
+  /**
+   * Open one past research by id (detail view). Optionally resolves the gathered
+   * source documents (title/url/snippet) behind it so a frontend can show them.
+   */
+  async getResearch(id: string, opts?: { withDocuments?: boolean }): Promise<any | null> {
+    this.assertEnabled();
+    const rec = await this.store.getIntelligenceById(id);
+    if (!rec) return null;
+    if (opts?.withDocuments && rec.sourceContentIds.length > 0) {
+      const rows = await this.store.getContentByIds(rec.sourceContentIds);
+      (rec as any).documents = rows.map((r) => ({
+        id: r.id, title: r.title || '', url: r.url || '',
+        snippet: String(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 280),
+        provider: r.provider || (r.metadata && r.metadata.provider) || '',
+      }));
+    }
+    return rec;
+  }
+
+  /**
+   * ON-DEMAND NODE INSIGHT (Phase 2.4b-5): given a clicked entity/document, generate
+   * a concise grounded insight about what it is and why it matters — from what DINA
+   * ALREADY has (its graph relationships + stored source snippets), NOT a fresh web
+   * crawl. One LLM call, cached per node, so it is cheap and never bulk. Fully
+   * guarded and injection-fenced.
+   */
+  async nodeInsight(input: { entity: string; maxSources?: number }): Promise<{
+    entity: string; insight: string; sources: string[]; relationships: string[]; cached: boolean;
+  }> {
+    this.assertEnabled();
+    const entity = (input.entity || '').trim();
+    if (!entity) throw new Error('nodeInsight requires an "entity"');
+    const maxSources = Math.max(1, Math.min(input.maxSources ?? 5, 12));
+
+    const key = entity.toLowerCase();
+    const TTL = 30 * 60 * 1000; // 30 min — graph rarely changes mid-session
+    const hit = this.insightCache.get(key);
+    if (hit && Date.now() - hit.at < TTL) {
+      return { entity, insight: hit.insight, sources: hit.sources, relationships: hit.relationships, cached: true };
+    }
+
+    // 1) Graph context: the entity's relationships + their provenance URLs.
+    const relationships: string[] = [];
+    const graphSources: string[] = [];
+    if (this.cfg.graphEnabled) {
+      try {
+        const sub = await this.graphStore.getSubgraph(entity, { maxNodes: 40 });
+        const nameById = new Map(sub.nodes.map((n) => [n.id, n.name]));
+        for (const e of sub.edges) {
+          const s = nameById.get(e.subjectId) || '', o = nameById.get(e.objectId) || '';
+          if (s && o) relationships.push(`${s} ${e.predicate.replace(/_/g, ' ')} ${o}`);
+          (e.sources || []).forEach((u) => u && graphSources.push(u));
+        }
+      } catch { /* graph optional */ }
+    }
+
+    // 2) Memory context: stored source snippets most relevant to the entity.
+    const mems = await this.memory.retrieve(entity, { topK: maxSources });
+
+    // 3) Synthesize a focused insight (fenced, guarded). If there is nothing to
+    //    ground on, say so honestly rather than hallucinate.
+    let insight: string;
+    if (relationships.length === 0 && mems.length === 0) {
+      insight = `No stored relationships or source material found for "${entity}" yet. Run a research or investigate pass that covers it, then try again.`;
+    } else {
+      const { block } = buildFencedSources(
+        mems.map((m) => ({ title: m.title, url: m.url, content: m.content, publishedAt: m.publishedAt })),
+        this.cfg.synthesisPerDocChars
+      );
+      const relBlock = relationships.length
+        ? `Known relationships (from the intelligence graph):\n- ${relationships.slice(0, 20).join('\n- ')}\n\n`
+        : '';
+      const prompt =
+        `${INJECTION_SYSTEM_RULE}\n\n` +
+        `You are an intelligence analyst. In 3-5 sentences, explain the entity "${entity}": ` +
+        `what it is, its role in this situation, and why it matters — grounded ONLY in the ` +
+        `relationships and sources below. Be specific and neutral; if the material is thin, say so.\n\n` +
+        relBlock +
+        (block ? `SOURCES:\n${block}\n\n` : '') +
+        `Insight about "${entity}":`;
+      insight = (await this.generateText(prompt, 'digim_node_insight', this.cfg.synthesisMaxTokens)).trim()
+        || `Not enough material to summarize "${entity}".`;
+    }
+
+    const sources = Array.from(new Set([...graphSources, ...mems.map((m) => m.url).filter(Boolean)])).slice(0, 8);
+    const rels = relationships.slice(0, 12);
+
+    this.insightCache.set(key, { insight, sources, relationships: rels, at: Date.now() });
+    if (this.insightCache.size > 300) { // simple bound: evict oldest
+      const oldest = [...this.insightCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+      if (oldest) this.insightCache.delete(oldest[0]);
+    }
+    return { entity, insight, sources, relationships: rels, cached: false };
+  }
+
+  /**
+   * Extract relationship triples from gathered documents and upsert them into the
+   * graph. Best-effort and fully guarded — a graph failure never affects research.
+   */
+  private async buildGraphFrom(documents: GatheredDocument[]): Promise<number> {
+    try {
+      const triples = await this.graphExtractor.extract(
+        documents.map((d) => ({ title: d.title, url: d.url, content: d.content }))
+      );
+      let added = 0;
+      for (const t of triples) {
+        const id = await this.graphStore.upsertRelationship({
+          subject: { name: t.subject, type: t.subjectType, occurredAt: t.subjectType === 'event' ? t.occurredAt : null },
+          predicate: t.predicate,
+          object: { name: t.object, type: t.objectType, occurredAt: t.objectType === 'event' ? t.occurredAt : null },
+          confidence: t.confidence,
+          occurredAt: t.occurredAt,
+          sourceUrl: t.sourceUrl || (documents[0] ? documents[0].url : undefined),
+          sourceContentId: null,
+        });
+        if (id) added++;
+      }
+      if (added > 0) {
+        console.log(`🕸️ [webResearchOrchestrator] graph: +${added} relationship(s) from ${documents.length} doc(s)`);
+      }
+      return added;
+    } catch (err) {
+      console.warn(`⚠️ [webResearchOrchestrator] graph build failed: ${(err as Error).message}`);
+      return 0;
+    }
+  }
+
+  /** LLM text generation with a hard timeout (used by the planner + graph extractor). */
+  private async generateText(prompt: string, task: string, maxTokens?: number): Promise<string> {
+    const budget = maxTokens ?? this.cfg.synthesisMaxTokens;
+    const generation = this.llmManager.generate(prompt, {
+      maxTokens: budget,
+      max_tokens: budget,
+      temperature: 0.3,
+      model_preference: this.cfg.synthesisModel,
+      task,
+    });
+    const timeout = new Promise<never>((_, reject) => {
+      const t = setTimeout(() => reject(new Error(`${task} timed out after ${this.cfg.synthesisTimeoutMs}ms`)), this.cfg.synthesisTimeoutMs);
+      if (typeof (t as any).unref === 'function') (t as any).unref();
+    });
+    const response = await Promise.race([generation, timeout]);
+    return extractLlmText(response);
   }
 
   private assertEnabled(): void {
@@ -389,6 +660,15 @@ export class WebResearchOrchestrator {
 // ----------------------------------------------------------------------------
 // UTIL
 // ----------------------------------------------------------------------------
+
+/** Extract readable text from whatever shape the LLM manager returns. */
+function extractLlmText(response: any): string {
+  if (typeof response === 'string') return response;
+  if (response?.response) return response.response;
+  if (response?.content) return response.content;
+  if (response?.choices?.[0]?.message?.content) return response.choices[0].message.content;
+  throw new Error('LLM response had no readable text field');
+}
 
 function safeJson(value: any, fallback: any): any {
   if (value == null) return fallback;

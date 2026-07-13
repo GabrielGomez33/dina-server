@@ -11,8 +11,14 @@ import { DinaUniversalMessage, MessagePriority, SecurityLevel } from '../../../c
 export type DigiMMethod =
   | 'digim_gather'        // Gather content from sources
   | 'digim_research'      // Surf the web + synthesize insights (gather → synthesize)
+  | 'digim_investigate'   // Multi-facet investigation: decompose → research facets → fuse
   | 'digim_search'        // Discovery inspection: search provider candidates only
   | 'digim_recall'        // Retrieve from semantic memory (no gathering)
+  | 'digim_graph'         // Query the relationship graph (subgraph + suggested view)
+  | 'digim_semantic'      // Semantic view: project stored embeddings to a 3D cloud
+  | 'digim_node_insight'  // On-demand insight for a single graph node/entity
+  | 'digim_history'       // List past researches (intelligence records)
+  | 'digim_get'           // Open one past research by id (detail)
   | 'digim_memory_backfill' // Embed pending content into semantic memory (admin)
   | 'digim_memory_prune'  // Prune aged content + expired intelligence (admin)
   | 'digim_query'         // Natural language intelligence query
@@ -559,7 +565,7 @@ export function isDigiMMessage(message: DinaUniversalMessage): message is DigiMM
 
 export function isDigiMMethod(method: string): method is DigiMMethod {
   const digiMethods: DigiMMethod[] = [
-    'digim_gather', 'digim_research', 'digim_search', 'digim_recall', 'digim_memory_backfill',
+    'digim_gather', 'digim_research', 'digim_investigate', 'digim_search', 'digim_recall', 'digim_graph', 'digim_semantic', 'digim_node_insight', 'digim_history', 'digim_get', 'digim_memory_backfill',
     'digim_memory_prune', 'digim_query', 'digim_analyze', 'digim_generate', 'digim_cluster',
     'digim_export', 'digim_status', 'digim_sources', 'digim_security'
   ];

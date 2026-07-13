@@ -147,7 +147,7 @@ that the API layer maps straight to the correct HTTP status.
 ## 5. Persistence schema
 
 Two tables, created by the module on boot (`visionStore.initSchema()`) and/or by
-`migrations/002_vision_schema.ts`. Following the DIGIM convention, `db.ts` does
+`migrations/003_vision_schema.ts`. Following the DIGIM convention, `db.ts` does
 **not** know about them — the module owns its own tables.
 
 ```sql

@@ -30,7 +30,7 @@ src/modules/vision/                         # the whole subsystem
   storage/visionStore.ts
   visionOrchestrator.ts
   index.ts
-migrations/002_vision_schema.ts             # vision_media + vision_analysis
+migrations/003_vision_schema.ts             # vision_media + vision_analysis
 test/vision/visionEdgeCases.ts              # 121 hermetic assertions
 vision/                                      # this deliverable/docs package
 ```
@@ -108,7 +108,7 @@ Two levels:
    inert; nothing else changes. No redeploy required beyond the env flip.
 2. **Code (full revert):**
    ```bash
-   rm -rf src/modules/vision test/vision vision migrations/002_vision_schema.ts
+   rm -rf src/modules/vision test/vision vision migrations/003_vision_schema.ts
    git checkout -- src/modules/llm/manager.ts src/modules/llm/llmConfig.ts \
                    src/core/orchestrator/index.ts src/api/routes/index.ts package.json
    npm run type-check   # back to the original clean baseline

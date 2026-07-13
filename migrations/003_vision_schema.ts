@@ -1,6 +1,10 @@
-// File: migrations/002_vision_schema.ts
+// File: migrations/003_vision_schema.ts
 // ============================================================================
-// MIGRATION 002 — DINA Vision (DIVIS) schema
+// MIGRATION 003 — DINA Vision (DIVIS) schema
+// ============================================================================
+// NOTE: numbered 003 because migration 002 is owned by DIGIM
+// (002_digim_relationship_graph.ts). Migration ids must be unique — the runner
+// rejects duplicates — so the Vision schema takes the next free id.
 // ============================================================================
 //
 // Creates the two tables the Vision subsystem uses to persist analysed media
@@ -64,7 +68,7 @@ const VISION_ANALYSIS_SQL = `CREATE TABLE IF NOT EXISTS vision_analysis (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`;
 
 const migration: Migration = {
-  id: 2,
+  id: 3,
   name: 'vision_schema',
 
   async up(conn: Connection): Promise<void> {

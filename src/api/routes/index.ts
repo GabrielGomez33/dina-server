@@ -3,6 +3,7 @@
 
 import express, { Request, Response, NextFunction } from 'express';
 import { DinaCore } from '../../core/orchestrator';
+import { DigimClient } from '../../modules/digim/digimClient';
 import { authenticate, rateLimit, sanitizeInput, handleError, requireTrustLevel, requireServiceAuth, corsMiddleware, AuthenticatedRequest } from '../middleware/security';
 import { DinaUniversalMessage, createDinaMessage, MessagePriority, SecurityLevel } from '../../core/protocol';
 import { v4 as uuidv4 } from 'uuid';
@@ -49,6 +50,17 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // API-specific middleware
   const apiRouter = express.Router();
 
+  // DIGIM DUMP client — the single, correct message builder for reaching DIGIM.
+  // Routes below dispatch through this instead of hand-assembling payloads (which
+  // is how browser_mode got silently dropped once). Foreign modules use the same
+  // client, so every capability's payload is defined in exactly one place.
+  const digim = new DigimClient(dina, { sourceModule: 'api' });
+  const digimCaller = (req: AuthenticatedRequest) => ({
+    userId: req.dina!.dina_key,
+    sessionId: req.dina!.session_id,
+    clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
+  });
+
   // FIXED: Enhanced timeout handling with route-specific timeouts
   // TruthStream LLM endpoints need longer timeouts for Ollama synthesis
   apiRouter.use((req: Request, res: Response, next) => {
@@ -61,7 +73,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     const isPersonalAnalysisLLM = req.path.startsWith('/mirror/personal-analysis/generate');
     // DIGIM research/query drive web fetches + LLM synthesis; a cold model load
     // (150s+) would otherwise 408 at the default 60s. Give them the LLM budget.
-    const isDigimLLM = req.path.startsWith('/digim/research') || req.path.startsWith('/digim/query');
+    const isDigimLLM = req.path.startsWith('/digim/research') || req.path.startsWith('/digim/query') || req.path.startsWith('/digim/investigate') || req.path.startsWith('/digim/node-insight');
     // Vision inference (a cold vision-model load + per-frame video work) is slow
     // too; give the analyze endpoints the same extended budget. Status/health stay fast.
     const isVisionLLM = req.path.startsWith('/vision/analyze')
@@ -1452,30 +1464,18 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
 
-      const digiMMessage = createDinaMessage({
-        source: { module: 'api', version: '1.0.0' },
-        target: { module: 'digim', method: 'digim_research', priority: 7 },
-        security: {
-          user_id: req.dina!.dina_key,
-          session_id: req.dina!.session_id,
-          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-          sanitized: true
-        },
-        payload: {
-          query: query ? String(query) : '',
-          seed_urls: Array.isArray(seed_urls) ? seed_urls : [],
-          intelligence_level: intelligence_level || 'surface',
-          max_documents: typeof max_documents === 'number' ? max_documents : undefined,
-          force_refresh: force_refresh === true,
-          browser_mode: typeof browser_mode === 'string' ? browser_mode : undefined
-        }
-      });
-
       console.log(`🌐 DIGIM research: "${String(query || '(seeds)').substring(0, 60)}..." from ${req.dina!.trust_level} user`);
-      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      const data = await digim.research({
+        query: query ? String(query) : '',
+        seedUrls: Array.isArray(seed_urls) ? seed_urls : [],
+        intelligenceLevel: intelligence_level,
+        maxDocuments: typeof max_documents === 'number' ? max_documents : undefined,
+        forceRefresh: force_refresh === true,
+        browserMode: typeof browser_mode === 'string' ? (browser_mode as any) : undefined,
+      }, digimCaller(req));
 
       res.json({
-        ...digiMResponse.payload.data,
+        ...data,
         auth_info: {
           trust_level: req.dina?.trust_level,
           rate_limit_remaining: req.dina?.rate_limit_remaining
@@ -1485,6 +1485,42 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
       console.error('❌ Error in DIGIM research:', error);
       res.status(500).json({
         error: 'DIGIM research failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // DIGIM Investigate — multi-facet investigation (Phase 2.4a): decompose a broad
+  // question → research each facet → fuse into one comprehensive briefing.
+  apiRouter.post('/digim/investigate', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { query, intelligence_level } = req.body || {};
+      if (!query || String(query).trim().length === 0) {
+        res.status(400).json({
+          error: 'Bad Request',
+          message: 'A "query" string is required',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+
+      console.log(`🧭 DIGIM investigate: "${String(query).substring(0, 60)}..." from ${req.dina!.trust_level} user`);
+      const data = await digim.investigate(
+        { query: String(query), intelligenceLevel: intelligence_level },
+        digimCaller(req)
+      );
+
+      res.json({
+        ...data,
+        auth_info: {
+          trust_level: req.dina?.trust_level,
+          rate_limit_remaining: req.dina?.rate_limit_remaining
+        }
+      });
+    } catch (error) {
+      console.error('❌ Error in DIGIM investigate:', error);
+      res.status(500).json({
+        error: 'DIGIM investigate failed',
         message: error instanceof Error ? error.message : 'Unknown error'
       });
     }
@@ -1503,20 +1539,12 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         });
         return;
       }
-      const digiMMessage = createDinaMessage({
-        source: { module: 'api', version: '1.0.0' },
-        target: { module: 'digim', method: 'digim_search', priority: 6 },
-        security: {
-          user_id: req.dina!.dina_key,
-          session_id: req.dina!.session_id,
-          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-          sanitized: true
-        },
-        payload: { query: String(query), limit: typeof limit === 'number' ? limit : undefined }
-      });
-      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      const data = await digim.search(
+        { query: String(query), limit: typeof limit === 'number' ? limit : undefined },
+        digimCaller(req)
+      );
       res.json({
-        ...digiMResponse.payload.data,
+        ...data,
         auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining }
       });
     } catch (error) {
@@ -1542,27 +1570,15 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
 
-      const digiMMessage = createDinaMessage({
-        source: { module: 'api', version: '1.0.0' },
-        target: { module: 'digim', method: 'digim_gather', priority: 6 },
-        security: {
-          user_id: req.dina!.dina_key,
-          session_id: req.dina!.session_id,
-          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-          sanitized: true
-        },
-        payload: {
-          query: query ? String(query) : '',
-          seed_urls: Array.isArray(seed_urls) ? seed_urls : [],
-          max_documents: typeof max_documents === 'number' ? max_documents : undefined,
-          browser_mode: typeof browser_mode === 'string' ? browser_mode : undefined
-        }
-      });
-
-      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      const data = await digim.gather({
+        query: query ? String(query) : '',
+        seedUrls: Array.isArray(seed_urls) ? seed_urls : [],
+        maxDocuments: typeof max_documents === 'number' ? max_documents : undefined,
+        browserMode: typeof browser_mode === 'string' ? (browser_mode as any) : undefined,
+      }, digimCaller(req));
 
       res.json({
-        ...digiMResponse.payload.data,
+        ...data,
         auth_info: {
           trust_level: req.dina?.trust_level,
           rate_limit_remaining: req.dina?.rate_limit_remaining
@@ -1590,25 +1606,13 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
 
-      const digiMMessage = createDinaMessage({
-        source: { module: 'api', version: '1.0.0' },
-        target: { module: 'digim', method: 'digim_recall', priority: 6 },
-        security: {
-          user_id: req.dina!.dina_key,
-          session_id: req.dina!.session_id,
-          clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-          sanitized: true
-        },
-        payload: {
-          query: String(query),
-          top_k: typeof top_k === 'number' ? top_k : undefined,
-          min_score: typeof min_score === 'number' ? min_score : undefined
-        }
-      });
-
-      const digiMResponse = await dina.handleIncomingMessage(digiMMessage);
+      const data = await digim.recall({
+        query: String(query),
+        topK: typeof top_k === 'number' ? top_k : undefined,
+        minScore: typeof min_score === 'number' ? min_score : undefined,
+      }, digimCaller(req));
       res.json({
-        ...digiMResponse.payload.data,
+        ...data,
         auth_info: {
           trust_level: req.dina?.trust_level,
           rate_limit_remaining: req.dina?.rate_limit_remaining
@@ -1618,6 +1622,121 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
       console.error('❌ Error in DIGIM recall:', error);
       res.status(500).json({
         error: 'DIGIM recall failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // DIGIM Graph — query the relationship graph: subgraph around a focus term
+  // (nodes + edges + provenance) plus the recommended view (Phase 2.4b).
+  apiRouter.post('/digim/graph', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { query, focus, max_nodes } = req.body || {};
+      const focusTerm = String(query || focus || '').trim();
+      if (!focusTerm) {
+        res.status(400).json({
+          error: 'Bad Request',
+          message: 'A "query" (focus entity/topic) is required',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+      const data = await digim.graph(
+        { query: focusTerm, maxNodes: typeof max_nodes === 'number' ? max_nodes : undefined },
+        digimCaller(req)
+      );
+      res.json({
+        ...data,
+        auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining }
+      });
+    } catch (error) {
+      console.error('❌ Error in DIGIM graph:', error);
+      res.status(500).json({
+        error: 'DIGIM graph failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // DIGIM Research history — list past researches (frontend history sidebar)
+  apiRouter.get('/digim/history', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const q = req.query;
+      const data = await digim.history({
+        limit: q.limit !== undefined ? Number(q.limit) : undefined,
+        offset: q.offset !== undefined ? Number(q.offset) : undefined,
+        type: (q.type || q.level) as string | undefined,
+        search: (q.search || q.q) as string | undefined,
+      }, digimCaller(req));
+      res.json({ ...data, auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining } });
+    } catch (error) {
+      console.error('❌ Error in DIGIM history:', error);
+      res.status(500).json({ error: 'DIGIM history failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // DIGIM Get research — open one past research by id (full detail)
+  apiRouter.get('/digim/research/:id', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const withDocs = req.query.with_documents === 'true' || req.query.with_documents === '1';
+      const data = await digim.get({ id: String(req.params.id), withDocuments: withDocs }, digimCaller(req));
+      const code = data && data.status === 'not_found' ? 404 : 200;
+      res.status(code).json({ ...data, auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining } });
+    } catch (error) {
+      console.error('❌ Error in DIGIM get research:', error);
+      res.status(500).json({ error: 'DIGIM get research failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
+  // DIGIM Semantic view — project stored embeddings to a 3D coordinate cloud
+  apiRouter.post('/digim/semantic', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { filter, query, limit } = req.body || {};
+      const data = await digim.semantic(
+        {
+          filter: String(filter || query || '').trim() || undefined,
+          limit: typeof limit === 'number' ? limit : undefined,
+        },
+        digimCaller(req)
+      );
+      res.json({
+        ...data,
+        auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining }
+      });
+    } catch (error) {
+      console.error('❌ Error in DIGIM semantic:', error);
+      res.status(500).json({
+        error: 'DIGIM semantic failed',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  });
+
+  // DIGIM Node insight — on-demand grounded insight for one clicked entity
+  apiRouter.post('/digim/node-insight', async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { entity, query, node, max_sources } = req.body || {};
+      const name = String(entity || query || node || '').trim();
+      if (!name) {
+        res.status(400).json({
+          error: 'Bad Request',
+          message: 'An "entity" (node label) is required',
+          auth_info: { trust_level: req.dina?.trust_level }
+        });
+        return;
+      }
+      const data = await digim.nodeInsight(
+        { entity: name, maxSources: typeof max_sources === 'number' ? max_sources : undefined },
+        digimCaller(req)
+      );
+      res.json({
+        ...data,
+        auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining }
+      });
+    } catch (error) {
+      console.error('❌ Error in DIGIM node-insight:', error);
+      res.status(500).json({
+        error: 'DIGIM node-insight failed',
         message: error instanceof Error ? error.message : 'Unknown error'
       });
     }

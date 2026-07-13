@@ -169,7 +169,43 @@ export interface DigimWebConfig {
   browserBreakerThreshold: number;
   /** Circuit-breaker cooldown (ms) before probing the browser again. */
   browserBreakerCooldownMs: number;
+
+  // ---- Public source tools (Phase 2.3 — SourceTool role) ----
+  /**
+   * Enabled non-search discovery sources (subset of 'wikipedia' | 'hn' | 'feeds').
+   * Empty (default) = no extra sources; discovery is search-provider + seeds only.
+   */
+  sources: string[];
+  /** RSS/Atom feed URLs polled by the FeedTool (only used when 'feeds' is enabled). */
+  feedUrls: string[];
+  /** Max candidates each source contributes per query. */
+  sourceMaxResults: number;
+
+  // ---- Research planner (Phase 2.4a) ----
+  /** Master switch for the multi-facet research planner (digim_investigate). */
+  plannerEnabled: boolean;
+  /** Hard cap on decomposed sub-queries (facets) per investigation. */
+  plannerMaxSubQueries: number;
+  /** Max facets researched concurrently (protects Ollama / the box). */
+  plannerConcurrency: number;
+  /** Intelligence level each facet is researched at (fuse is the deep pass). */
+  plannerFacetLevel: IntelligenceLevelName;
+
+  // ---- Relationship graph (Phase 2.4b) ----
+  /** Master switch for entity/relationship extraction + the graph store. */
+  graphEnabled: boolean;
+  /** Max nodes returned from a single subgraph query (bounds render payloads). */
+  graphMaxNodes: number;
+  /** Max relationship triples extracted from one research batch (bounds LLM cost). */
+  graphMaxTriples: number;
+  /** How many top documents feed one extraction pass. */
+  graphExtractMaxDocs: number;
+  /** Token budget for the extraction LLM call (larger than synthesis — many triples). */
+  graphExtractMaxTokens: number;
 }
+
+/** Mirrors WebResearchOrchestrator's IntelligenceLevel, kept local to config. */
+export type IntelligenceLevelName = 'surface' | 'deep' | 'predictive';
 
 // ----------------------------------------------------------------------------
 // ENV PARSING HELPERS (defensive — never throw on bad input)
@@ -199,6 +235,17 @@ function envCsv(name: string, fallback: string[]): string[] {
   if (v === undefined || v.trim().length === 0) return dedupe(fallback);
   const parts = v.split(',').map((s) => s.trim().toLowerCase()).filter((s) => s.length > 0);
   return parts.length > 0 ? dedupe(parts) : dedupe(fallback);
+}
+
+/**
+ * Parse a comma-separated env var WITHOUT lower-casing or de-duplicating —
+ * preserves case and order. For values like URLs where case is significant.
+ */
+function envCsvRaw(name: string, fallback: string[]): string[] {
+  const v = process.env[name];
+  if (v === undefined || v.trim().length === 0) return fallback;
+  const parts = v.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+  return parts.length > 0 ? parts : fallback;
 }
 
 /** Parse a comma-separated env var of integers (ports). Invalid entries dropped. */
@@ -311,7 +358,28 @@ function buildConfig(): DigimWebConfig {
     browserOn403: envBool('DIGIM_WEB_BROWSER_ON_403', true),
     browserBreakerThreshold: clampInt(envInt('DIGIM_WEB_BROWSER_BREAKER_THRESHOLD', 3), 1, 100),
     browserBreakerCooldownMs: clampInt(envInt('DIGIM_WEB_BROWSER_BREAKER_COOLDOWN_MS', 60000), 1000, 3600000),
+
+    sources: envCsv('DIGIM_WEB_SOURCES', []),
+    feedUrls: envCsvRaw('DIGIM_WEB_FEED_URLS', []),
+    sourceMaxResults: clampInt(envInt('DIGIM_WEB_SOURCE_MAX_RESULTS', 5), 1, 50),
+
+    plannerEnabled: envBool('DIGIM_WEB_PLANNER_ENABLED', false),
+    plannerMaxSubQueries: clampInt(envInt('DIGIM_WEB_PLANNER_MAX_SUBQUERIES', 5), 1, 12),
+    plannerConcurrency: clampInt(envInt('DIGIM_WEB_PLANNER_CONCURRENCY', 2), 1, 6),
+    plannerFacetLevel: parseLevel('DIGIM_WEB_PLANNER_FACET_LEVEL', 'surface'),
+
+    graphEnabled: envBool('DIGIM_WEB_GRAPH_ENABLED', false),
+    graphMaxNodes: clampInt(envInt('DIGIM_WEB_GRAPH_MAX_NODES', 120), 1, 500),
+    graphMaxTriples: clampInt(envInt('DIGIM_WEB_GRAPH_MAX_TRIPLES', 40), 1, 200),
+    graphExtractMaxDocs: clampInt(envInt('DIGIM_WEB_GRAPH_EXTRACT_MAX_DOCS', 6), 1, 20),
+    graphExtractMaxTokens: clampInt(envInt('DIGIM_WEB_GRAPH_EXTRACT_MAX_TOKENS', 3000), 512, 8192),
   });
+}
+
+function parseLevel(name: string, fallback: IntelligenceLevelName): IntelligenceLevelName {
+  const v = (process.env[name] || '').trim().toLowerCase();
+  if (v === 'surface' || v === 'deep' || v === 'predictive') return v;
+  return fallback;
 }
 
 function clampInt(value: number, min: number, max: number): number {
@@ -356,6 +424,15 @@ function logConfigOnce(cfg: DigimWebConfig): void {
   console.log(`   • synthesis: model=${cfg.synthesisModel} maxTokens=${cfg.synthesisMaxTokens} docs=${cfg.synthesisMaxDocuments}`);
   if (cfg.browserEnabled) {
     console.log(`   • browser: mode=${cfg.browserMode} endpoint=${cfg.browserWsEndpoint || '(none)'} concurrency=${cfg.browserConcurrency} navTimeout=${cfg.browserNavTimeoutMs}ms`);
+  }
+  if (cfg.sources.length > 0) {
+    console.log(`   • sources: [${cfg.sources.join(', ')}]${cfg.sources.includes('feeds') ? ` feeds=${cfg.feedUrls.length}` : ''} maxPerSource=${cfg.sourceMaxResults}`);
+  }
+  if (cfg.plannerEnabled) {
+    console.log(`   • planner: maxSubQueries=${cfg.plannerMaxSubQueries} concurrency=${cfg.plannerConcurrency} facetLevel=${cfg.plannerFacetLevel}`);
+  }
+  if (cfg.graphEnabled) {
+    console.log(`   • graph: enabled maxNodes=${cfg.graphMaxNodes}`);
   }
   if (!cfg.enabled) {
     console.log('   • ℹ️ DIGIM web-research is DISABLED (set DIGIM_WEB_ENABLED=true to activate).');

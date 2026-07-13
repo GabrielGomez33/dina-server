@@ -276,11 +276,29 @@ async  initialize(): Promise<void> {
       case 'digim_research':
         return await this.handleResearchRequest(requestData, message.security.user_id);
 
+      case 'digim_investigate':
+        return await this.handleInvestigateRequest(requestData, message.security.user_id);
+
       case 'digim_search':
         return await this.handleSearchRequest(requestData);
 
       case 'digim_recall':
         return await this.handleRecallRequest(requestData, message.security.user_id);
+
+      case 'digim_graph':
+        return await this.handleGraphRequest(requestData);
+
+      case 'digim_semantic':
+        return await this.handleSemanticRequest(requestData);
+
+      case 'digim_node_insight':
+        return await this.handleNodeInsightRequest(requestData);
+
+      case 'digim_history':
+        return await this.handleHistoryRequest(requestData);
+
+      case 'digim_get':
+        return await this.handleGetResearchRequest(requestData);
 
       case 'digim_memory_backfill':
         return await this.handleMemoryBackfillRequest(requestData);
@@ -477,11 +495,193 @@ async  initialize(): Promise<void> {
       basis: result.basis,
       documents_gathered: result.gather.documents.length,
       memory_used: result.memoryUsed,
+      graph_relationships_added: result.graphAdded,
       insight: result.insight,
       sources_consulted: result.insight.sources.length,
       diagnostics: result.gather.diagnostics,
       intelligence_id: result.intelligenceId,
       processing_time_ms: Math.round(result.processingTimeMs),
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_investigate — multi-facet investigation (Phase 2.4a): decompose a broad
+   * question into sub-queries, research each through the pipeline, and fuse into
+   * one comprehensive, provenance-tracked briefing.
+   */
+  private async handleInvestigateRequest(requestData: any, userId?: string): Promise<any> {
+    const query: string = (requestData?.query || requestData?.q || '').trim();
+    console.log(`🧭 Handling investigate request: "${query.substring(0, 60)}..."`);
+
+    if (!this.webResearch.enabled) {
+      return {
+        status: 'disabled',
+        message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.',
+      };
+    }
+    if (!query) {
+      throw new Error('digim_investigate requires a "query"');
+    }
+
+    const level = normalizeIntelligenceLevel(requestData?.intelligence_level);
+    const result = await this.webResearch.investigate(query, { level });
+
+    return {
+      status: 'success',
+      query: result.query,
+      intelligence_level: result.level,
+      facets_planned: result.facetsPlanned,
+      plan: result.plan,
+      facets: result.facets.map((f) => ({
+        facet: f.facet,
+        query: f.query,
+        basis: f.basis,
+        documents_gathered: f.documentsGathered,
+        summary: f.insight.summary,
+        key_insights: f.insight.keyInsights,
+      })),
+      insight: result.synthesis,
+      sources_consulted: result.sourcesConsulted,
+      processing_time_ms: Math.round(result.processingTimeMs),
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_graph — query the relationship graph: the subgraph around a focus term
+   * (nodes + edges + provenance) plus the view the system recommends for it.
+   */
+  private async handleGraphRequest(requestData: any): Promise<any> {
+    const focus: string = (requestData?.query || requestData?.focus || requestData?.q || '').trim();
+    console.log(`🕸️ Handling graph request: "${focus.substring(0, 60)}..."`);
+
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    if (!focus) {
+      throw new Error('digim_graph requires a "query" (focus entity/topic)');
+    }
+
+    const sub = await this.webResearch.graph(focus, { maxNodes: requestData?.max_nodes });
+    const stats = await this.webResearch.getGraphStats();
+    // Resolve edge endpoints to names so the relationships are directly readable.
+    const nameById = new Map(sub.nodes.map((n) => [n.id, n.name]));
+    return {
+      status: 'success',
+      focus: sub.focus,
+      matched_focus: sub.matchedFocus,
+      suggested_view: sub.suggestedView,
+      node_count: sub.nodes.length,
+      edge_count: sub.edges.length,
+      nodes: sub.nodes.map((n) => ({
+        id: n.id, name: n.name, type: n.type,
+        occurred_at: n.occurredAt, weight: n.mentionCount,
+      })),
+      edges: sub.edges.map((e) => ({
+        from: nameById.get(e.subjectId) || e.subjectId,
+        predicate: e.predicate,
+        to: nameById.get(e.objectId) || e.objectId,
+        corroboration: e.corroborationCount, confidence: e.confidence,
+        occurred_at: e.occurredAt, sources: e.sources || [],
+      })),
+      graph_totals: stats,
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_semantic — the SEMANTIC VIEW ("n-dimensional coordinate graph"): project
+   * the stored 1024-D content embeddings to a 3D point cloud where nearness ≈
+   * closeness of meaning. Returns a `points` array the graph viewer's Semantic tab
+   * renders directly. Optional `filter` narrows the corpus to a topic.
+   */
+  private async handleSemanticRequest(requestData: any): Promise<any> {
+    const filter: string = (requestData?.filter || requestData?.query || requestData?.q || '').trim();
+    const limit = requestData?.limit;
+    console.log(`🌌 Handling semantic-map request${filter ? ` (filter="${filter.substring(0, 40)}")` : ''}`);
+
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+
+    const proj = await this.webResearch.semanticMap({ filter, limit });
+    return {
+      status: 'success',
+      view: 'semantic',
+      filter: filter || null,
+      dimensions: proj.dimensions,
+      point_count: proj.count,
+      explained_variance: proj.explainedVariance,
+      points: proj.points,
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_history — list past researches (newest first) for a history sidebar.
+   * Paginated; optional level filter + query search.
+   */
+  private async handleHistoryRequest(requestData: any): Promise<any> {
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    const { total, items } = await this.webResearch.listResearch({
+      limit: requestData?.limit,
+      offset: requestData?.offset,
+      type: requestData?.type || requestData?.level,
+      search: requestData?.search || requestData?.q,
+    });
+    return {
+      status: 'success',
+      total,
+      count: items.length,
+      offset: Number(requestData?.offset) || 0,
+      items,
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_get — open one past research by id (full detail). Set with_documents
+   * to also resolve the gathered source documents behind it.
+   */
+  private async handleGetResearchRequest(requestData: any): Promise<any> {
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    const id: string = (requestData?.id || requestData?.research_id || '').trim();
+    if (!id) throw new Error('digim_get requires an "id"');
+    const withDocuments = requestData?.with_documents === true || requestData?.with_documents === 'true';
+    const rec = await this.webResearch.getResearch(id, { withDocuments });
+    if (!rec) return { status: 'not_found', message: `No research found for id "${id}"` };
+    return { status: 'success', research: rec, generated_at: new Date() };
+  }
+
+  /**
+   * digim_node_insight — on-demand: generate a concise grounded insight about a
+   * single clicked entity/node from what DINA already has (graph relationships +
+   * stored sources). Cached per entity; one LLM call; never bulk.
+   */
+  private async handleNodeInsightRequest(requestData: any): Promise<any> {
+    const entity: string = (requestData?.entity || requestData?.query || requestData?.node || requestData?.q || '').trim();
+    console.log(`💡 Handling node-insight request: "${entity.substring(0, 60)}"`);
+
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    if (!entity) {
+      throw new Error('digim_node_insight requires an "entity" (the node/label to explain)');
+    }
+
+    const res = await this.webResearch.nodeInsight({ entity, maxSources: requestData?.max_sources });
+    return {
+      status: 'success',
+      entity: res.entity,
+      insight: res.insight,
+      relationships: res.relationships,
+      sources: res.sources,
+      cached: res.cached,
       generated_at: new Date(),
     };
   }

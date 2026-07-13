@@ -21,6 +21,7 @@ import { createSearchProvider, SearchProvider } from '../gatherers/searchProvide
 import { HttpFetchTool } from '../tools/httpFetchTool';
 import { BrowserTool } from '../tools/browserTool';
 import { FetchToolRegistry } from '../tools/fetchRegistry';
+import { SourceRegistry } from '../sources/sourceRegistry';
 import { ContentExtractor } from '../gatherers/contentExtractor';
 import { QualityScorer } from '../scoring/qualityScorer';
 import { WebResearchStore, toGatheredDocument, StoreContentInput } from '../storage/webResearchStore';
@@ -37,6 +38,7 @@ export class GatheringPipeline {
   private provider: SearchProvider;
   private registry: FetchToolRegistry;
   private browserTool: BrowserTool;
+  private sources: SourceRegistry;
   private extractor: ContentExtractor;
   private scorer: QualityScorer;
   private store: WebResearchStore;
@@ -48,6 +50,10 @@ export class GatheringPipeline {
     // selection; every downstream stage is unchanged (tool-agnostic FetchResult).
     this.browserTool = new BrowserTool(cfg);
     this.registry = new FetchToolRegistry(new HttpFetchTool(cfg), this.browserTool, cfg);
+    // Additional discovery producers (Phase 2.3): RSS feeds + public APIs. They
+    // emit the same SearchResult candidates as the search provider and merge into
+    // the same pipeline — no special downstream handling.
+    this.sources = new SourceRegistry(cfg);
     this.extractor = new ContentExtractor();
     this.scorer = new QualityScorer();
     this.store = new WebResearchStore(cfg);
@@ -60,6 +66,11 @@ export class GatheringPipeline {
   /** True if the configured search provider has what it needs to run. */
   get providerConfigured(): boolean {
     return this.provider.isConfigured();
+  }
+
+  /** Names of the enabled Phase-2.3 discovery sources (rss/wikipedia/hn). */
+  get sourceNames(): string[] {
+    return this.sources.enabledNames;
   }
 
   /** Whether the headless-browser acquisition tool is currently usable. */
@@ -85,12 +96,17 @@ export class GatheringPipeline {
     if (!this.cfg.enabled) return [];
     const q = (query || '').trim();
     if (!q) return [];
+    const n = limit ?? this.cfg.maxSearchResults;
+    let providerResults: SearchResult[] = [];
     try {
-      return await this.provider.search(q, limit ?? this.cfg.maxSearchResults);
+      providerResults = await this.provider.search(q, n);
     } catch (err) {
       console.warn(`⚠️ [gatheringPipeline] search failed: ${(err as Error).message}`);
-      return [];
     }
+    // Merge in Phase-2.3 sources (feeds/wikipedia/hn) so discovery inspection
+    // shows everything DINA would gather, not just the search provider.
+    const sourceResults = await this.sources.collect(q);
+    return dedupeByUrl([...providerResults, ...sourceResults]);
   }
 
   async gather(options: GatherOptions): Promise<GatherResult> {
@@ -121,14 +137,17 @@ export class GatheringPipeline {
       return this.finish(query, [], diagnostics, startedAt, t0);
     }
 
-    // (1) Search + seeds → candidate URLs.
+    // (1) Search + sources + seeds → candidate URLs.
     let searchResults: SearchResult[] = [];
+    let sourceResults: SearchResult[] = [];
     if (query) {
       try {
         searchResults = await this.provider.search(query, this.cfg.maxSearchResults);
       } catch (err) {
         diagnostics.errors.push({ url: '(search)', error: (err as Error).message });
       }
+      // Phase-2.3 discovery sources (feeds/wikipedia/hn), fault-isolated inside.
+      sourceResults = await this.sources.collect(query);
     }
 
     const seeds: SearchResult[] = (options.seedUrls || []).map((u) => ({
@@ -138,7 +157,7 @@ export class GatheringPipeline {
       provider: 'seed',
     }));
 
-    const candidates = dedupeByUrl([...seeds, ...searchResults]);
+    const candidates = dedupeByUrl([...seeds, ...searchResults, ...sourceResults]);
     diagnostics.candidatesFound = candidates.length;
 
     if (candidates.length === 0) {
