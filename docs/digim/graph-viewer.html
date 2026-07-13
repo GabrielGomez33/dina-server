@@ -114,6 +114,10 @@
   @keyframes dots { 0%{content:""} 25%{content:"."} 50%{content:".."} 75%{content:"..."} }
   .insight-err { font: 500 11.5px/1.5 var(--font-ui); color: var(--t-event);
     background: color-mix(in srgb, var(--t-event) 10%, transparent); border-radius: 8px; padding: 10px 11px; }
+  .fetch-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .fetch-row select, .fetch-row input { font: 500 12px/1.4 var(--font-mono); color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 8px 9px; }
+  .fetch-row input { flex: 1; min-width: 140px; }
   .api-row { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; font: 600 11px/1.3 var(--font-mono); color: var(--ink-dim); }
   .api-row span { font-weight: 400; }
   .api-row input { font: 500 12px/1.4 var(--font-mono); color: var(--ink); background: var(--panel-2);
@@ -176,7 +180,18 @@
 <dialog id="modal">
   <div class="modal-h"><h2>Load graph data</h2><button class="btn" id="modal-x" aria-label="Close">✕</button></div>
   <div class="modal-b">
-    <p>Paste the JSON from <code>POST /digim/graph</code> (<code>nodes</code> + <code>edges</code>) for Network/Timeline, or from <code>POST /digim/semantic</code> (<code>points</code>) for the Semantic cloud. It auto-detects which, switches view, and ignores surrounding shell text so you can paste a whole terminal block.</p>
+    <p class="rail-h" style="margin:0 0 8px">Fetch live from the API</p>
+    <div class="fetch-row">
+      <select id="fetch-kind" aria-label="What to fetch">
+        <option value="graph">Graph (nodes + edges)</option>
+        <option value="semantic">Semantic cloud (points)</option>
+      </select>
+      <input id="fetch-q" type="text" spellcheck="false" placeholder="focus / filter — e.g. Iran">
+      <button class="btn primary" id="fetch-btn">Fetch</button>
+    </div>
+    <p style="color:var(--ink-dim);font:500 11px/1.5 var(--font-mono);margin:6px 0 0">Uses the API base below. Needs the page served from your DINA domain (or a reachable API base). The hosted preview blocks live calls — paste there instead.</p>
+    <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    <p>Or paste the JSON from <code>POST /digim/graph</code> (<code>nodes</code> + <code>edges</code>) or <code>POST /digim/semantic</code> (<code>points</code>). It auto-detects which, switches view, and ignores surrounding shell text so you can paste a whole terminal block.</p>
     <p style="color:var(--ink-dim);font:500 11px/1.5 var(--font-mono)">Tip: don't <code>jq</code>-filter the semantic response — the cloud needs the full <code>points</code> array. Use <code>| jq .</code> (or no filter), not <code>| jq '{point_count}'</code>.</p>
     <textarea id="json-in" spellcheck="false" placeholder='{ "nodes": [...], "edges": [...] }  — or —  { "points": [...] }'></textarea>
     <div class="err" id="json-err"></div>
@@ -783,6 +798,31 @@ apiInput.value=(localStorage.getItem("digim_api_base")||"");
 apiInput.addEventListener("input",()=>localStorage.setItem("digim_api_base", apiInput.value.trim()));
 document.getElementById("load-btn").onclick=()=>{ document.getElementById("json-err").textContent=""; modal.showModal(); };
 document.getElementById("modal-x").onclick=()=>modal.close();
+// Fetch live from the API (no copy-paste). Works when the page is served from
+// the DINA domain or an API base is set; the hosted preview blocks this by CSP.
+document.getElementById("fetch-btn").onclick=async ()=>{
+  const err=document.getElementById("json-err"); err.textContent="";
+  const kind=document.getElementById("fetch-kind").value;
+  const q=document.getElementById("fetch-q").value.trim();
+  const btn=document.getElementById("fetch-btn"); const label=btn.textContent;
+  btn.textContent="Fetching…"; btn.disabled=true;
+  try{
+    const base=apiBase(); if(!base) throw new Error("Set an API base first (or serve this page from your DINA domain).");
+    if(kind==="semantic"){
+      const res=await fetch(base+"/digim/semantic",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({filter:q})});
+      if(!res.ok) throw new Error("API returned HTTP "+res.status);
+      const data=await res.json(); if(!Array.isArray(data.points)) throw new Error(data.message||"no points returned");
+      setSemanticData(data); setView("semantic"); buildLegend(); modal.close();
+    } else {
+      if(!q) throw new Error("Enter a focus entity/topic for the graph (e.g. Iran).");
+      const res=await fetch(base+"/digim/graph",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q})});
+      if(!res.ok) throw new Error("API returned HTTP "+res.status);
+      const data=await res.json(); if(!Array.isArray(data.nodes)) throw new Error(data.message||"no graph returned");
+      setData(data); setView(data.suggested_view==="temporal"?"timeline":"network"); buildLegend(); modal.close();
+    }
+  }catch(ex){ err.textContent=String(ex.message||ex); }
+  finally{ btn.textContent=label; btn.disabled=false; }
+};
 document.getElementById("json-sample").onclick=()=>{
   if (view==="semantic") { setSemanticData(SAMPLE_SEM); buildLegend(); }
   else { setData(SAMPLE); buildLegend(); }
