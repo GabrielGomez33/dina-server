@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DIGIM Relationship Graph</title>
+<style>
+  :root {
+    --bg: #f5f7fa; --panel: #ffffff; --panel-2: #eef1f6; --line: #d7dee8;
+    --ink: #17212e; --ink-dim: #5c6b7d; --accent: #0e8ea3; --accent-soft: #d4edf1;
+    --edge: #8aa0b3;
+    --t-person: #2f6ae0; --t-organization: #9a54c9; --t-location: #2aa17e;
+    --t-event: #d0872e; --t-technology: #4a63d6; --t-concept: #6b7b8c; --t-other: #6b7b8c;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --shadow: 0 1px 3px rgba(20,30,45,.08), 0 6px 24px rgba(20,30,45,.06);
+    --fog: 245, 247, 250;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1017; --panel: #131b26; --panel-2: #1a2432; --line: #26313f;
+      --ink: #e6ecf5; --ink-dim: #9aabbe; --accent: #4cc4d6; --accent-soft: #123039;
+      --edge: #37475a;
+      --t-person: #6ea8fe; --t-organization: #c98bdb; --t-location: #57c7a3;
+      --t-event: #e0a458; --t-technology: #8093f0; --t-concept: #8794a4; --t-other: #7c8798;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 30px rgba(0,0,0,.35);
+      --fog: 11, 16, 23;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f7fa; --panel: #ffffff; --panel-2: #eef1f6; --line: #d7dee8;
+    --ink: #17212e; --ink-dim: #5c6b7d; --accent: #0e8ea3; --accent-soft: #d4edf1; --edge: #8aa0b3;
+    --t-person: #2f6ae0; --t-organization: #9a54c9; --t-location: #2aa17e;
+    --t-event: #d0872e; --t-technology: #4a63d6; --t-concept: #6b7b8c; --t-other: #6b7b8c;
+    --shadow: 0 1px 3px rgba(20,30,45,.08), 0 6px 24px rgba(20,30,45,.06); --fog: 245, 247, 250;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b1017; --panel: #131b26; --panel-2: #1a2432; --line: #26313f;
+    --ink: #e6ecf5; --ink-dim: #9aabbe; --accent: #4cc4d6; --accent-soft: #123039; --edge: #37475a;
+    --t-person: #6ea8fe; --t-organization: #c98bdb; --t-location: #57c7a3;
+    --t-event: #e0a458; --t-technology: #8093f0; --t-concept: #8794a4; --t-other: #7c8798;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 30px rgba(0,0,0,.35); --fog: 11, 16, 23;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-ui);
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+  header { display: flex; align-items: center; gap: 18px; padding: 12px 18px;
+    border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  .brand { display: flex; flex-direction: column; gap: 1px; }
+  .brand h1 { font: 600 14px/1.1 var(--font-ui); margin: 0; letter-spacing: .2px; }
+  .brand .sub { font: 500 10.5px/1 var(--font-mono); color: var(--ink-dim); letter-spacing: .12em; text-transform: uppercase; }
+  .tabs { display: flex; gap: 4px; background: var(--panel-2); padding: 3px; border-radius: 9px; }
+  .tab { font: 600 12px/1 var(--font-ui); color: var(--ink-dim); background: transparent; border: 0;
+    padding: 8px 14px; border-radius: 7px; cursor: pointer; }
+  .tab[aria-selected="true"] { background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
+  .tab:focus-visible, .btn:focus-visible, .iconbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .stats { margin-left: auto; display: flex; gap: 18px; align-items: center; }
+  .stat { display: flex; flex-direction: column; align-items: flex-end; }
+  .stat b { font: 600 16px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+  .stat span { font: 500 9.5px/1.4 var(--font-mono); color: var(--ink-dim); letter-spacing: .1em; text-transform: uppercase; }
+  .btn { font: 600 12px/1 var(--font-ui); color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 13px; cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .iconbtn { font-size: 15px; line-height: 1; color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+  .iconbtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  .stage { position: relative; flex: 1; min-width: 0; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  canvas.dragging { cursor: grabbing; }
+  .hint { position: absolute; left: 14px; bottom: 12px; z-index: 2; font: 500 11px/1.5 var(--font-mono);
+    color: var(--ink-dim); background: color-mix(in srgb, var(--panel) 78%, transparent);
+    padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line); pointer-events: none; }
+  .focuswrap { position: absolute; top: 12px; left: 12px; z-index: 3; display: flex; gap: 8px; }
+  .focuswrap input { font: 500 12px/1 var(--font-mono); color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; width: 200px; box-shadow: var(--shadow); }
+  .focuswrap input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+
+  aside { width: 300px; flex: 0 0 300px; border-left: 1px solid var(--line); background: var(--panel);
+    overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 18px; }
+  .rail-h { font: 600 10.5px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-dim); margin: 0 0 10px; }
+  .legend { display: flex; flex-direction: column; gap: 7px; }
+  .legend-row { display: flex; align-items: center; gap: 9px; font: 500 12px/1 var(--font-ui); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+  .legend-note { font: 500 11px/1.5 var(--font-mono); color: var(--ink-dim); margin-top: 4px; }
+  .detail { border-top: 1px solid var(--line); padding-top: 16px; }
+  .detail.empty .dtl-body { color: var(--ink-dim); font: 500 12px/1.6 var(--font-ui); }
+  .dtl-name { font: 600 15px/1.25 var(--font-ui); margin: 0 0 4px; text-wrap: balance; word-break: break-word; }
+  .dtl-type { display: inline-flex; align-items: center; gap: 6px; font: 600 10px/1 var(--font-mono);
+    letter-spacing: .1em; text-transform: uppercase; padding: 4px 8px; border-radius: 6px; background: var(--panel-2); }
+  .dtl-meta { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+  .kv { display: flex; justify-content: space-between; gap: 12px; font: 500 12px/1.4 var(--font-mono); }
+  .kv .k { color: var(--ink-dim); } .kv .v { color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
+  .rels { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+  .rel { font: 500 11.5px/1.45 var(--font-mono); background: var(--panel-2); padding: 8px 9px;
+    border-radius: 7px; border-left: 2px solid var(--accent); }
+  .rel .pred { color: var(--accent); } .rel .other { color: var(--ink-dim); }
+
+  dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--ink);
+    padding: 0; width: min(560px, 92vw); box-shadow: var(--shadow); }
+  dialog::backdrop { background: rgba(6,10,16,.55); }
+  .modal-h { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+  .modal-h h2 { font: 600 14px/1 var(--font-ui); margin: 0; }
+  .modal-b { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  .modal-b p { margin: 0; font: 500 12.5px/1.6 var(--font-ui); color: var(--ink-dim); }
+  .modal-b code { font-family: var(--font-mono); background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; color: var(--ink); }
+  textarea { font: 500 12px/1.5 var(--font-mono); color: var(--ink); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 9px; padding: 11px; min-height: 150px; resize: vertical; width: 100%; }
+  textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .modal-f { display: flex; gap: 10px; justify-content: flex-end; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #06232a; }
+  .err { color: #d9534f; font: 500 11.5px/1.4 var(--font-mono); min-height: 14px; }
+  @media (max-width: 720px) { aside { display: none; } .stats .stat:nth-child(3) { display: none; } }
+</style>
+</head>
+<body>
+
+
+<header>
+  <div class="brand"><h1>DIGIM · Relationship Graph</h1><div class="sub">DINA intelligence · see the relationships</div></div>
+  <div class="tabs" role="tablist" aria-label="View">
+    <button class="tab" role="tab" id="tab-network" aria-selected="true">3D Network</button>
+    <button class="tab" role="tab" id="tab-timeline" aria-selected="false">Timeline</button>
+  </div>
+  <div class="stats">
+    <div class="stat"><b id="s-nodes">0</b><span>Entities</span></div>
+    <div class="stat"><b id="s-edges">0</b><span>Relations</span></div>
+    <button class="iconbtn" id="spin-btn" aria-pressed="true" title="Toggle auto-rotate">⟳</button>
+    <button class="btn" id="load-btn">Load data</button>
+    <button class="iconbtn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme">◑</button>
+  </div>
+</header>
+
+<main>
+  <div class="stage">
+    <div class="focuswrap"><input id="focus" type="search" placeholder="highlight entity…" aria-label="Highlight entity" autocomplete="off" /></div>
+    <canvas id="cv"></canvas>
+    <div class="hint" id="hint">drag to orbit · scroll to zoom · click a node</div>
+  </div>
+  <aside>
+    <div><p class="rail-h">Node type</p><div class="legend" id="legend"></div>
+      <p class="legend-note">size = mentions · edge width = corroboration · depth = 3D</p></div>
+    <div class="detail empty" id="detail"><p class="rail-h">Selected</p>
+      <div class="dtl-body">Click a node to inspect its relationships and provenance.</div></div>
+  </aside>
+</main>
+
+<dialog id="modal">
+  <div class="modal-h"><h2>Load graph data</h2><button class="btn" id="modal-x" aria-label="Close">✕</button></div>
+  <div class="modal-b">
+    <p>Paste the JSON returned by <code>POST /digim/graph</code> (the object with <code>nodes</code> and <code>edges</code>). It replaces the current graph.</p>
+    <textarea id="json-in" spellcheck="false" placeholder='{ "nodes": [...], "edges": [...] }'></textarea>
+    <div class="err" id="json-err"></div>
+    <div class="modal-f"><button class="btn" id="json-sample">Reset to sample</button><button class="btn primary" id="json-load">Load</button></div>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+const SAMPLE = {
+  suggested_view: "network",
+  nodes: [
+    { name: "Iran", type: "location", occurred_at: null, weight: 8 },
+    { name: "United States", type: "organization", occurred_at: null, weight: 4 },
+    { name: "three vessels", type: "event", occurred_at: "2026-07-07T00:00:00.000Z", weight: 1 },
+    { name: "three commercial vessels", type: "event", occurred_at: "2026-07-07T00:00:00.000Z", weight: 1 },
+    { name: "Qatari-flagged vessel al-Rakiyat", type: "other", occurred_at: null, weight: 1 },
+    { name: "a container ship", type: "other", occurred_at: null, weight: 1 }
+  ],
+  edges: [
+    { from: "United States", predicate: "reimposed_sanctions_on_iranian_oil_sales", to: "Iran", corroboration: 1 },
+    { from: "United States", predicate: "launched_strikes_on", to: "Iran", corroboration: 1 },
+    { from: "United States", predicate: "launched_a_series_of_powerful_strikes_against", to: "Iran", corroboration: 1 },
+    { from: "United States", predicate: "revoked_the_ability_to_openly_sell_crude_oil_in_the_world_market", to: "Iran", corroboration: 1 },
+    { from: "Iran", predicate: "struck", to: "Qatari-flagged vessel al-Rakiyat", corroboration: 1 },
+    { from: "Iran", predicate: "fired_a_drone_at_a_ship", to: "a container ship", corroboration: 1 },
+    { from: "Iran", predicate: "fired_on", to: "three commercial vessels", corroboration: 1 },
+    { from: "Iran", predicate: "attacked_commercial_ships_near_the_strait_of_hormuz", to: "three vessels", corroboration: 1 }
+  ]
+};
+const TYPES = ["person","organization","location","event","technology","concept","other"];
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const typeColor = (t) => cssVar("--t-" + (TYPES.includes(t) ? t : "other")) || cssVar("--t-other");
+const pretty = (p) => (p || "").replace(/_/g, " ");
+const clip = (s, n) => s.length > n ? s.slice(0, n-1) + "…" : s;
+
+let G = { nodes: [], edges: [] };
+let view = "network", selected = null, hoverNode = null, focusTerm = "";
+let spin = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+const cam = { rotX: -0.35, rotY: 0.5, zoom: 1, dist: 900 }; // orbit + perspective
+
+function ingest(raw) {
+  const nodesIn = Array.isArray(raw.nodes) ? raw.nodes : [];
+  const edgesIn = Array.isArray(raw.edges) ? raw.edges : [];
+  const byName = new Map();
+  const R = 220;
+  const nodes = nodesIn.map((n, i) => {
+    const node = { name: String(n.name ?? n.id ?? "?"), type: String(n.type ?? "other").toLowerCase(),
+      occurredAt: n.occurred_at ?? n.occurredAt ?? null, weight: Number(n.weight ?? n.mentionCount ?? 1) || 1,
+      x:(Math.random()-0.5)*R, y:(Math.random()-0.5)*R, z:(Math.random()-0.5)*R, vx:0, vy:0, vz:0, deg:0 };
+    byName.set(node.name, node); return node;
+  });
+  const edges = [];
+  for (const e of edgesIn) {
+    const s = byName.get(String(e.from ?? e.subject ?? "")), t = byName.get(String(e.to ?? e.object ?? ""));
+    if (!s || !t || s === t) continue;
+    edges.push({ s, t, predicate: String(e.predicate ?? "related to"),
+      corr: Number(e.corroboration ?? e.corroborationCount ?? 1) || 1, occurredAt: e.occurred_at ?? e.occurredAt ?? null });
+    s.deg++; t.deg++;
+  }
+  return { nodes, edges };
+}
+function setData(raw) {
+  G = ingest(raw); selected = null; renderDetail(); updateStats();
+  document.getElementById("s-nodes").textContent = G.nodes.length;
+  document.getElementById("s-edges").textContent = G.edges.length;
+  alpha = 1;
+}
+function updateStats() {
+  document.getElementById("s-nodes").textContent = G.nodes.length;
+  document.getElementById("s-edges").textContent = G.edges.length;
+}
+
+// ---- 3D force sim ----
+let alpha = 1;
+function tick() {
+  if (view !== "network") return;
+  if (spin && !dragging) cam.rotY += 0.0022;
+  alpha *= 0.99; if (alpha < 0.03) alpha = 0.03;
+  const rep = 6000, spring = 0.02, springLen = 95, center = 0.012, damp = 0.85, N = G.nodes;
+  for (let i = 0; i < N.length; i++) { const a = N[i];
+    for (let j = i+1; j < N.length; j++) { const b = N[j];
+      let dx=a.x-b.x, dy=a.y-b.y, dz=a.z-b.z; let d2=dx*dx+dy*dy+dz*dz||0.01; const d=Math.sqrt(d2);
+      const f=rep/d2, fx=dx/d*f, fy=dy/d*f, fz=dz/d*f;
+      a.vx+=fx;a.vy+=fy;a.vz+=fz; b.vx-=fx;b.vy-=fy;b.vz-=fz; } }
+  for (const e of G.edges) {
+    let dx=e.t.x-e.s.x, dy=e.t.y-e.s.y, dz=e.t.z-e.s.z; const d=Math.sqrt(dx*dx+dy*dy+dz*dz)||0.01;
+    const f=(d-springLen)*spring, fx=dx/d*f, fy=dy/d*f, fz=dz/d*f;
+    e.s.vx+=fx;e.s.vy+=fy;e.s.vz+=fz; e.t.vx-=fx;e.t.vy-=fy;e.t.vz-=fz; }
+  for (const nd of N) { if (nd===dragNode) continue;
+    nd.vx-=nd.x*center; nd.vy-=nd.y*center; nd.vz-=nd.z*center;
+    nd.vx*=damp; nd.vy*=damp; nd.vz*=damp;
+    nd.x+=nd.vx*alpha*1.3; nd.y+=nd.vy*alpha*1.3; nd.z+=nd.vz*alpha*1.3; }
+}
+
+// ---- projection ----
+function rotY(p,a){const c=Math.cos(a),s=Math.sin(a);return{x:p.x*c+p.z*s,y:p.y,z:-p.x*s+p.z*c};}
+function rotX(p,a){const c=Math.cos(a),s=Math.sin(a);return{x:p.x,y:p.y*c-p.z*s,z:p.y*s+p.z*c};}
+function project(nd) {
+  let p = rotY(nd, cam.rotY); p = rotX(p, cam.rotX);
+  const persp = cam.dist / (cam.dist - p.z);
+  const k = persp * cam.zoom;
+  return { x: W/2 + p.x*k, y: H/2 + p.y*k, z: p.z, scale: k };
+}
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const r = cv.getBoundingClientRect(); W = r.width; H = r.height;
+  cv.width = W*DPR; cv.height = H*DPR;
+}
+const nodeR = (nd) => 4.5 + Math.sqrt(nd.weight) * 3.2;
+
+function draw() {
+  ctx.save(); ctx.scale(DPR, DPR); ctx.clearRect(0,0,W,H);
+  view === "network" ? drawNetwork() : drawTimeline();
+  ctx.restore();
+}
+function neighborsOf(name){const s=new Set();for(const e of G.edges){if(e.s.name===name)s.add(e.t.name);if(e.t.name===name)s.add(e.s.name);}return s;}
+
+function drawNetwork() {
+  // project all
+  const P = new Map();
+  for (const nd of G.nodes) P.set(nd, project(nd));
+  const zs = [...P.values()].map(p=>p.z); const zmin=Math.min(...zs), zmax=Math.max(...zs), zspan=(zmax-zmin)||1;
+  const fog = (z) => 0.35 + 0.65*((z - zmin)/zspan);
+  const hi = selected || hoverNode, near = hi ? neighborsOf(hi) : null;
+  const edgeCol = cssVar("--edge"), accent = cssVar("--accent"), ink = cssVar("--ink"), inkDim = cssVar("--ink-dim");
+  // edges sorted by midpoint depth
+  const edges = G.edges.map(e => ({ e, z: (P.get(e.s).z + P.get(e.t).z)/2 })).sort((a,b)=>a.z-b.z);
+  for (const {e} of edges) {
+    const p1 = P.get(e.s), p2 = P.get(e.t);
+    const active = hi && (e.s.name===hi || e.t.name===hi);
+    ctx.strokeStyle = active ? accent : edgeCol;
+    ctx.globalAlpha = (hi ? (active?0.95:0.08) : 0.4) * fog((p1.z+p2.z)/2);
+    ctx.lineWidth = Math.max(1, Math.min(6, e.corr*1.6)) * (active?1.4:1);
+    ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke();
+    if (active && cam.zoom > 0.5) {
+      ctx.globalAlpha = 0.96; ctx.fillStyle = inkDim; ctx.font = "10px " + cssVar("--font-mono");
+      ctx.textAlign = "center"; ctx.fillText(pretty(e.predicate), (p1.x+p2.x)/2, (p1.y+p2.y)/2 - 5);
+    }
+  }
+  // nodes sorted far→near
+  const order = G.nodes.map(nd => ({ nd, p: P.get(nd) })).sort((a,b)=>a.p.z-b.p.z);
+  for (const { nd, p } of order) {
+    const r = nodeR(nd) * p.scale;
+    const dim = hi && nd.name!==hi && near && !near.has(nd.name);
+    const focused = focusTerm && nd.name.toLowerCase().includes(focusTerm);
+    const f = fog(p.z);
+    ctx.globalAlpha = dim ? 0.15 : f;
+    ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(2,r), 0, Math.PI*2);
+    ctx.fillStyle = mix(typeColor(nd.type), cssVar("--fog"), 1 - f); ctx.fill();
+    if (nd.name===selected || focused) { ctx.globalAlpha = 1; ctx.lineWidth = 2.5; ctx.strokeStyle = accent; ctx.stroke(); }
+    else { ctx.lineWidth = 1; ctx.strokeStyle = cssVar("--panel"); ctx.stroke(); }
+    if (cam.zoom*p.scale > 0.62 || nd.weight > 2 || nd.name===hi) {
+      ctx.globalAlpha = dim ? 0.25 : Math.min(1, f + 0.2); ctx.fillStyle = ink;
+      ctx.font = (nd.name===hi ? "600 " : "500 ") + "11px " + cssVar("--font-ui");
+      ctx.textAlign = "center"; ctx.textBaseline = "top";
+      ctx.fillText(clip(nd.name, 24), p.x, p.y + Math.max(2,r) + 3);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+function mix(hex, fogRGB, t) {
+  const c = hex.replace('#',''); const r=parseInt(c.substr(0,2),16), g=parseInt(c.substr(2,2),16), b=parseInt(c.substr(4,2),16);
+  const [fr,fg,fb] = fogRGB.split(',').map(Number);
+  return `rgb(${Math.round(r+(fr-r)*t)},${Math.round(g+(fg-g)*t)},${Math.round(b+(fb-b)*t)})`;
+}
+
+// ---- timeline (2D) ----
+function drawTimeline() {
+  const dated = G.nodes.filter(n=>n.occurredAt).sort((a,b)=>new Date(a.occurredAt)-new Date(b.occurredAt));
+  const inkDim=cssVar("--ink-dim"), ink=cssVar("--ink"), grid=cssVar("--line"), accent=cssVar("--accent");
+  ctx.font = "12px " + cssVar("--font-ui");
+  if (!dated.length) { ctx.fillStyle=inkDim; ctx.textAlign="center";
+    ctx.fillText("No time-stamped events in this graph yet.", W/2, H/2-8);
+    ctx.font="11px "+cssVar("--font-mono");
+    ctx.fillText("Events (nodes with occurred_at) appear here as a cascade.", W/2, H/2+12); return; }
+  const pad=70, y0=90, laneGap=62;
+  const times=dated.map(d=>+new Date(d.occurredAt)); const min=Math.min(...times),max=Math.max(...times),span=(max-min)||1;
+  const xOf=t=>pad+((t-min)/span)*(W-pad*2);
+  ctx.strokeStyle=grid; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(pad,y0); ctx.lineTo(W-pad,y0); ctx.stroke();
+  dated.forEach((nd,i)=>{ const x=xOf(+new Date(nd.occurredAt)); const y=y0+34+(i%4)*laneGap;
+    ctx.strokeStyle=grid; ctx.beginPath(); ctx.moveTo(x,y0); ctx.lineTo(x,y); ctx.stroke();
+    ctx.fillStyle=typeColor(nd.type); ctx.beginPath(); ctx.arc(x,y0,5,0,Math.PI*2); ctx.fill();
+    const label=clip(nd.name,30); ctx.font="500 12px "+cssVar("--font-ui"); const tw=Math.max(ctx.measureText(label).width,90)+20;
+    ctx.fillStyle=cssVar("--panel"); ctx.strokeStyle=(nd.name===selected)?accent:cssVar("--line"); ctx.lineWidth=(nd.name===selected)?2:1;
+    roundRect(x-tw/2,y,tw,40,8); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=ink; ctx.textAlign="center"; ctx.textBaseline="top"; ctx.fillText(label,x,y+7);
+    ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.fillText(new Date(nd.occurredAt).toISOString().slice(0,10),x,y+23);
+    nd._tl={x,y:y0}; });
+  ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.textAlign="left";
+  ctx.fillText(new Date(min).toISOString().slice(0,10),pad,y0-14);
+  ctx.textAlign="right"; ctx.fillText(new Date(max).toISOString().slice(0,10),W-pad,y0-14);
+}
+function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+
+function renderDetail() {
+  const el = document.getElementById("detail");
+  if (!selected) { el.classList.add("empty");
+    el.innerHTML='<p class="rail-h">Selected</p><div class="dtl-body">Click a node to inspect its relationships and provenance.</div>'; return; }
+  const nd = G.nodes.find(n=>n.name===selected); if (!nd) return;
+  el.classList.remove("empty");
+  const outs=G.edges.filter(e=>e.s.name===selected), ins=G.edges.filter(e=>e.t.name===selected);
+  const rel=(e,dir)=>`<div class="rel">${dir==="out"
+    ?`<span class="pred">${pretty(e.predicate)}</span> → <span class="other">${clip(e.t.name,26)}</span>`
+    :`<span class="other">${clip(e.s.name,26)}</span> <span class="pred">${pretty(e.predicate)}</span> →`}</div>`;
+  el.innerHTML=`<p class="rail-h">Selected</p><p class="dtl-name">${nd.name}</p>
+    <span class="dtl-type" style="color:${typeColor(nd.type)}"><span class="dot" style="background:${typeColor(nd.type)}"></span>${nd.type}</span>
+    <div class="dtl-meta"><div class="kv"><span class="k">mentions</span><span class="v">${nd.weight}</span></div>
+      <div class="kv"><span class="k">relations</span><span class="v">${outs.length+ins.length}</span></div>
+      ${nd.occurredAt?`<div class="kv"><span class="k">occurred</span><span class="v">${new Date(nd.occurredAt).toISOString().slice(0,10)}</span></div>`:""}</div>
+    ${outs.length?`<p class="rail-h" style="margin-top:16px">Outgoing</p><div class="rels">${outs.map(e=>rel(e,"out")).join("")}</div>`:""}
+    ${ins.length?`<p class="rail-h" style="margin-top:14px">Incoming</p><div class="rels">${ins.map(e=>rel(e,"in")).join("")}</div>`:""}`;
+}
+function buildLegend() {
+  const present=new Set(G.nodes.map(n=>n.type)); const order=TYPES.filter(t=>present.has(t));
+  document.getElementById("legend").innerHTML=(order.length?order:["other"]).map(t=>
+    `<div class="legend-row"><span class="dot" style="background:${typeColor(t)}"></span>${t}</div>`).join("");
+}
+
+// ---- interaction ----
+let dragNode=null, dragging=false, last=null, moved=false;
+function nodeAt(sx,sy) {
+  if (view==="timeline") { for (const nd of G.nodes){ if(!nd._tl) continue; if(Math.hypot(sx-nd._tl.x,sy-nd._tl.y)<9) return nd; } return null; }
+  let best=null, bd=1e9;
+  for (const nd of G.nodes){ const p=project(nd); const r=Math.max(4,nodeR(nd)*p.scale)+4; const d=Math.hypot(sx-p.x,sy-p.y);
+    if (d<r && p.z<bd*0+1e9) { if (d<bd){bd=d;best=nd;} } }
+  return best;
+}
+cv.addEventListener("pointerdown",(e)=>{ cv.setPointerCapture(e.pointerId);
+  const r=cv.getBoundingClientRect(); const sx=e.clientX-r.left, sy=e.clientY-r.top;
+  moved=false; last={x:e.clientX,y:e.clientY};
+  const nd=nodeAt(sx,sy);
+  if (nd && view==="network"){ dragNode=nd; alpha=Math.max(alpha,0.5); }
+  dragging=true; cv.classList.add("dragging"); });
+cv.addEventListener("pointermove",(e)=>{
+  const r=cv.getBoundingClientRect(); const sx=e.clientX-r.left, sy=e.clientY-r.top;
+  if (!dragging){ const nd=nodeAt(sx,sy); const nm=nd?nd.name:null; if(nm!==hoverNode){hoverNode=nm; cv.style.cursor=nd?"pointer":"grab";} return; }
+  const dx=e.clientX-last.x, dy=e.clientY-last.y; if(Math.abs(dx)+Math.abs(dy)>3) moved=true; last={x:e.clientX,y:e.clientY};
+  if (dragNode && view==="network"){ // move node in the camera's view plane
+    const s = cam.dist/(cam.dist) * cam.zoom;
+    let d = { x: dx/s, y: dy/s, z: 0 };
+    d = rotX(d, -cam.rotX); d = rotY(d, -cam.rotY);
+    dragNode.x+=d.x; dragNode.y+=d.y; dragNode.z+=d.z; dragNode.vx=dragNode.vy=dragNode.vz=0; alpha=Math.max(alpha,0.4);
+  } else if (view==="network"){ cam.rotY += dx*0.01; cam.rotX += dy*0.01; cam.rotX=Math.max(-1.4,Math.min(1.4,cam.rotX)); }
+});
+function endDrag(e){ if (dragging && !moved){ const r=cv.getBoundingClientRect(); const nd=nodeAt(e.clientX-r.left,e.clientY-r.top);
+    selected = nd ? (nd.name===selected?null:nd.name) : null; renderDetail(); }
+  dragging=false; dragNode=null; cv.classList.remove("dragging"); }
+cv.addEventListener("pointerup",endDrag); cv.addEventListener("pointercancel",endDrag);
+cv.addEventListener("wheel",(e)=>{ e.preventDefault(); cam.zoom=Math.max(0.3,Math.min(4,cam.zoom*(e.deltaY<0?1.1:0.909))); },{passive:false});
+document.getElementById("focus").addEventListener("input",(e)=>{ focusTerm=e.target.value.trim().toLowerCase();
+  const hit=focusTerm && G.nodes.find(n=>n.name.toLowerCase().includes(focusTerm)); if(hit){selected=hit.name;renderDetail();} });
+
+function setView(v){ view=v;
+  document.getElementById("tab-network").setAttribute("aria-selected", v==="network");
+  document.getElementById("tab-timeline").setAttribute("aria-selected", v==="timeline");
+  document.getElementById("hint").style.display = v==="network"?"":"none";
+  if (v==="network") alpha=Math.max(alpha,0.5); }
+document.getElementById("tab-network").onclick=()=>setView("network");
+document.getElementById("tab-timeline").onclick=()=>setView("timeline");
+const spinBtn=document.getElementById("spin-btn");
+spinBtn.setAttribute("aria-pressed", String(spin));
+spinBtn.onclick=()=>{ spin=!spin; spinBtn.setAttribute("aria-pressed",String(spin)); };
+
+const modal=document.getElementById("modal");
+document.getElementById("load-btn").onclick=()=>{ document.getElementById("json-err").textContent=""; modal.showModal(); };
+document.getElementById("modal-x").onclick=()=>modal.close();
+document.getElementById("json-sample").onclick=()=>{ setData(SAMPLE); buildLegend(); modal.close(); };
+document.getElementById("json-load").onclick=()=>{ const err=document.getElementById("json-err");
+  try { const raw=JSON.parse(document.getElementById("json-in").value);
+    if(!raw.nodes||!raw.edges) throw new Error("JSON must have 'nodes' and 'edges' arrays.");
+    setData(raw); buildLegend(); if(raw.suggested_view==="temporal") setView("timeline"); modal.close();
+  } catch(ex){ err.textContent=ex.message; } };
+document.getElementById("theme-btn").onclick=()=>{ const cur=document.documentElement.getAttribute("data-theme")
+  || (matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");
+  document.documentElement.setAttribute("data-theme", cur==="dark"?"light":"dark"); };
+
+function frame(){ tick(); draw(); requestAnimationFrame(frame); }
+new ResizeObserver(resize).observe(cv);
+setData(SAMPLE); buildLegend(); resize(); setView("network"); frame();
+</script>
+
+</body>
+</html>

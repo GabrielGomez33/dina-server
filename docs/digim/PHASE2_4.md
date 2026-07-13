@@ -92,9 +92,52 @@ migration (sandbox has no MySQL).
 incl. LLM-failure → `[]`), tsc clean, no regression. Config-gated
 (`DIGIM_WEB_GRAPH_ENABLED=false`).
 
-### 2.4b-3 — Renderers (next)
+### Live verification (production, 2026-07-12)
 
-The interactive network / temporal / semantic views over the populated graph.
+`digim_research` (graph enabled) on the Iran–USA topic → `graph_relationships_added: 8`,
+then `digim_graph {"query":"Iran"}` returned the populated graph:
+- 6 entities, 8 relationships; `Iran` correctly resolved as the most-connected node
+  (`mention_count: 8`, merged from all mentions).
+- Readable edges, e.g. `United States —launched_strikes_on→ Iran`,
+  `Iran —struck→ Qatari-flagged vessel al-Rakiyat`.
+
+Two live-exposed bugs, both fixed & proven in isolation:
+1. **Extraction truncated at the 1200-token synthesis budget** → unterminated JSON →
+   0 triples. Fixed: dedicated `DIGIM_WEB_GRAPH_EXTRACT_MAX_TOKENS` (3000) +
+   truncation-salvage parser.
+2. **`getSubgraph` bound `LIMIT ?`** — mysql2 `pool.execute` (prepared statements)
+   rejects a parameterized LIMIT (`ER_WRONG_ARGUMENTS`); the query threw, caught,
+   returned empty despite stored data. Proven via `execute+LIMIT? FAILS /
+   query+LIMIT? OK`. Fixed: inline the clampInt-validated limit.
+
+End-to-end proven on production: research → entity/relationship extraction →
+alias resolution → provenance storage → queryable subgraph.
+
+### Known extraction-quality items (2.4b-3 polish)
+
+From the live data: near-duplicate/generic entities ("three vessels" vs "three
+commercial vessels", "a container ship") and verbose non-canonical predicates
+("launched_a_series_of_powerful_strikes_against" vs "launched_strikes_on" — same
+edge, corroboration stuck at 1). Fix via a tighter extraction prompt (canonical
+short predicates, skip generic entities, date only real events) + light predicate
+normalization.
+
+### 2.4b-3 — Renderer (v1)
+
+`docs/digim/graph-viewer.html` — a self-contained, dependency-free viewer for the
+`digim_graph` output. Open it in a browser (or serve it from the DINA domain so it
+can hit the live API). Two views:
+
+- **Network** — force-directed graph (drag nodes, scroll to zoom, hover to
+  highlight a node's edges, click for details + provenance). Node colour = entity
+  type, node size = mention weight, edge width = corroboration, arrows = direction.
+- **Timeline** — time-stamped events (`occurred_at`) laid out as a cascade on a
+  date axis.
+
+Seeded with the live Iran–USA graph; use **Load data** to paste a fuller
+`digim_graph` JSON (e.g. after a `digim_investigate`). Theme-aware (light/dark).
+The **semantic** view awaits an embedding export from the graph (nodes carry an
+`embedding_ref` but the query doesn't yet return vectors) — a later increment.
 
 ## Verification
 

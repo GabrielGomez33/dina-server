@@ -19,6 +19,7 @@
 
 import { DigimWebConfig } from '../config/webConfig';
 import { buildFencedSources, INJECTION_SYSTEM_RULE, FenceableSource } from '../security/promptGuard';
+import { isLowValueEntity } from './entityResolution';
 
 export interface ExtractDoc {
   title: string;
@@ -80,9 +81,15 @@ ${INJECTION_SYSTEM_RULE}
 
 RULES:
 - Extract ONLY relationships explicitly stated in the sources. Never invent.
-- subject/object are concrete entities (people, organizations, locations, events, technologies, concepts).
-- predicate is a short verb phrase ("launched", "sanctioned", "retaliated against", "chokepoint for").
-- If an entity is an event with a date, set its type to "event" and include occurredAt (ISO, e.g. 2026-02-28).
+- subject/object must be SPECIFIC NAMED entities (people, organizations, countries,
+  named events/operations, technologies). SKIP generic or indefinite references
+  ("a ship", "three vessels", "the government", "they", "forces") — name the actual entity or omit.
+- predicate must be a SHORT CANONICAL verb phrase of 1–3 words, lower-case, reused
+  consistently: prefer "sanctioned", "struck", "launched strikes on", "blockaded",
+  "attacked", "negotiated with", "chokepoint for". Do NOT write long descriptive
+  clauses — collapse "launched a series of powerful strikes against" to "struck".
+- Set type "event" and occurredAt (ISO, e.g. 2026-02-28) ONLY for a real named,
+  dated event — not for generic objects.
 - Tag each triple with the SOURCE NUMBER it came from.
 - Up to ${maxTriples} triples. Respond with valid JSON ONLY — no markdown, no commentary.
 
@@ -117,6 +124,9 @@ export function parseTriples(raw: string, sourceUrls: string[], max: number): Ex
     const object = str(t?.object);
     if (!subject || !predicate || !object) continue;
     if (subject.toLowerCase() === object.toLowerCase()) continue; // no self-loops
+    // Drop generic/indefinite/pronoun references ("a ship", "three vessels",
+    // "they") — they pollute the graph as one-off nodes that never corroborate.
+    if (isLowValueEntity(subject) || isLowValueEntity(object)) continue;
 
     // Map 1-based source number → URL (fall back to '' when out of range/absent).
     const srcNum = Number(t?.source);
