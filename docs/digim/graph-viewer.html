@@ -99,6 +99,14 @@
   .rel { font: 500 11.5px/1.45 var(--font-mono); background: var(--panel-2); padding: 8px 9px;
     border-radius: 7px; border-left: 2px solid var(--accent); }
   .rel .pred { color: var(--accent); } .rel .other { color: var(--ink-dim); }
+  .rel-meta { color: var(--ink-dim); font: 500 10px/1.4 var(--font-mono); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .rel-src { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 5px; }
+  .rel-src .src { color: var(--accent); font: 500 10px/1.3 var(--font-mono); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+  .rel-src .src:hover { opacity: .8; }
+  .rel a.other { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+  #sample-badge { align-self: center; font: 700 9px/1 var(--font-mono); letter-spacing: .08em;
+    color: var(--t-event); background: color-mix(in srgb, var(--t-event) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--t-event) 45%, transparent); padding: 5px 7px; border-radius: 6px; }
 
   dialog { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--ink);
     padding: 0; width: min(560px, 92vw); box-shadow: var(--shadow); }
@@ -128,6 +136,7 @@
     <button class="tab" role="tab" id="tab-semantic" aria-selected="false">Semantic</button>
   </div>
   <div class="stats">
+    <span id="sample-badge" hidden title="Built-in demo data — click Load data to replace with real digim output">SAMPLE DATA</span>
     <div class="stat"><b id="s-nodes">0</b><span id="s-nodes-lbl">Entities</span></div>
     <div class="stat"><b id="s-edges">0</b><span id="s-edges-lbl">Relations</span></div>
     <button class="iconbtn" id="spin-btn" aria-pressed="true" title="Toggle auto-rotate">⟳</button>
@@ -153,7 +162,8 @@
 <dialog id="modal">
   <div class="modal-h"><h2>Load graph data</h2><button class="btn" id="modal-x" aria-label="Close">✕</button></div>
   <div class="modal-b">
-    <p>Paste the JSON from <code>POST /digim/graph</code> (an object with <code>nodes</code> + <code>edges</code>) for the Network/Timeline views, or from <code>POST /digim/semantic</code> (an object with <code>points</code>) for the Semantic cloud. It replaces the current data and switches to the matching view.</p>
+    <p>Paste the JSON from <code>POST /digim/graph</code> (<code>nodes</code> + <code>edges</code>) for Network/Timeline, or from <code>POST /digim/semantic</code> (<code>points</code>) for the Semantic cloud. It auto-detects which, switches view, and ignores surrounding shell text so you can paste a whole terminal block.</p>
+    <p style="color:var(--ink-dim);font:500 11px/1.5 var(--font-mono)">Tip: don't <code>jq</code>-filter the semantic response — the cloud needs the full <code>points</code> array. Use <code>| jq .</code> (or no filter), not <code>| jq '{point_count}'</code>.</p>
     <textarea id="json-in" spellcheck="false" placeholder='{ "nodes": [...], "edges": [...] }  — or —  { "points": [...] }'></textarea>
     <div class="err" id="json-err"></div>
     <div class="modal-f"><button class="btn" id="json-sample">Reset to sample</button><button class="btn primary" id="json-load">Load</button></div>
@@ -166,7 +176,7 @@
 // ship") are dropped at extraction (isLowValueEntity), and same-meaning predicates
 // collapse so corroboration accumulates instead of splintering into 1-count edges.
 const SAMPLE = {
-  suggested_view: "network",
+  suggested_view: "network", sample: true,
   nodes: [
     { name: "Iran", type: "location", occurred_at: null, weight: 8 },
     { name: "United States", type: "organization", occurred_at: null, weight: 5 },
@@ -198,7 +208,7 @@ const SAMPLE_SEM = (() => {
       points.push({
         id: "s" + j,
         label: s.tag + " · doc " + (i + 1),
-        url: "https://example.org/" + s.provider + "/" + j,
+        url: "",                       // sample data — no fake source URLs
         provider: s.provider,
         x: s.c[0] + Math.sin(j * 1.7) * 0.18,
         y: s.c[1] + Math.cos(j * 2.3) * 0.18,
@@ -206,7 +216,7 @@ const SAMPLE_SEM = (() => {
       });
     }
   }
-  return { view: "semantic", dimensions: 1024, point_count: points.length, explained_variance: [0.41, 0.29, 0.17], points };
+  return { view: "semantic", sample: true, dimensions: 1024, point_count: points.length, explained_variance: [0.41, 0.29, 0.17], points };
 })();
 
 const TYPES = ["person","organization","location","event","technology","concept","other"];
@@ -238,14 +248,24 @@ function ingest(raw) {
   for (const e of edgesIn) {
     const s = byName.get(String(e.from ?? e.subject ?? "")), t = byName.get(String(e.to ?? e.object ?? ""));
     if (!s || !t || s === t) continue;
+    const srcs = Array.isArray(e.sources) ? e.sources.filter(Boolean).map(String) : [];
     edges.push({ s, t, predicate: String(e.predicate ?? "related to"),
-      corr: Number(e.corroboration ?? e.corroborationCount ?? 1) || 1, occurredAt: e.occurred_at ?? e.occurredAt ?? null });
+      corr: Number(e.corroboration ?? e.corroborationCount ?? 1) || 1,
+      confidence: (e.confidence != null ? Number(e.confidence) : null),
+      sources: srcs, occurredAt: e.occurred_at ?? e.occurredAt ?? null });
     s.deg++; t.deg++;
   }
+  // Fan out parallel edges (same unordered pair) so their curves + labels don't stack.
+  const groups = new Map();
+  for (const e of edges) { const k = [e.s.name, e.t.name].sort().join(""); (groups.get(k) || groups.set(k, []).get(k)).push(e); }
+  for (const list of groups.values()) list.forEach((e, i) => { e._pi = i; e._pn = list.length; });
   return { nodes, edges };
 }
+let graphSample = false, semSample = false;
+function refreshSampleBadge(){ const on = view==="semantic" ? semSample : graphSample;
+  const b=document.getElementById("sample-badge"); if(b) b.hidden = !on; }
 function setData(raw) {
-  G = ingest(raw); selected = null; renderDetail(); updateStats();
+  G = ingest(raw); selected = null; graphSample = !!(raw && raw.sample); refreshSampleBadge(); renderDetail(); updateStats();
   document.getElementById("s-nodes").textContent = G.nodes.length;
   document.getElementById("s-edges").textContent = G.edges.length;
   alpha = 1;
@@ -280,7 +300,7 @@ function ingestSemantic(raw) {
     explainedVariance: Array.isArray(raw.explained_variance) ? raw.explained_variance : [] };
 }
 function setSemanticData(raw) {
-  SEM = ingestSemantic(raw); selected = null; renderDetail(); updateStats();
+  SEM = ingestSemantic(raw); selected = null; semSample = !!(raw && raw.sample); refreshSampleBadge(); renderDetail(); updateStats();
 }
 // Stable, evenly-spread colour per provider (golden-angle hue).
 const _provHue = new Map();
@@ -353,18 +373,46 @@ function drawNetwork() {
   const fog = (z) => 0.35 + 0.65*((z - zmin)/zspan);
   const hi = selected || hoverNode, near = hi ? neighborsOf(hi) : null;
   const edgeCol = cssVar("--edge"), accent = cssVar("--accent"), ink = cssVar("--ink"), inkDim = cssVar("--ink-dim");
-  // edges sorted by midpoint depth
+  // edges sorted by midpoint depth. Parallel edges (same pair) are bowed apart by
+  // their _pi index so neither the curves nor their labels overlap.
   const edges = G.edges.map(e => ({ e, z: (P.get(e.s).z + P.get(e.t).z)/2 })).sort((a,b)=>a.z-b.z);
+  const labelSpots = []; // {x,y} of labels already drawn, to nudge collisions apart
   for (const {e} of edges) {
     const p1 = P.get(e.s), p2 = P.get(e.t);
     const active = hi && (e.s.name===hi || e.t.name===hi);
+    // control point: midpoint pushed along the edge normal, spread by parallel index
+    const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2, ex=p2.x-p1.x, ey=p2.y-p1.y, elen=Math.hypot(ex,ey)||1;
+    const nx=-ey/elen, ny=ex/elen;
+    const spread = e._pn>1 ? (e._pi-(e._pn-1)/2) : 0;
+    const bow = spread * Math.min(46, 22+elen*0.06);
+    const cx=mx+nx*bow, cy=my+ny*bow;
     ctx.strokeStyle = active ? accent : edgeCol;
     ctx.globalAlpha = (hi ? (active?0.95:0.08) : 0.4) * fog((p1.z+p2.z)/2);
     ctx.lineWidth = Math.max(1, Math.min(6, e.corr*1.6)) * (active?1.4:1);
-    ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.quadraticCurveTo(cx,cy,p2.x,p2.y); ctx.stroke();
+    // arrowhead at the object end, aimed along the curve's incoming tangent
+    if (active || !hi) {
+      const tx=p2.x-cx, ty=p2.y-cy, tl=Math.hypot(tx,ty)||1, ux=tx/tl, uy=ty/tl;
+      const nr=Math.max(3,nodeR(e.t)*(P.get(e.t).scale))+2, ax=p2.x-ux*nr, ay=p2.y-uy*nr, ah=6;
+      ctx.globalAlpha=(hi?(active?0.95:0.1):0.5)*fog(p2.z);
+      ctx.beginPath(); ctx.moveTo(ax,ay);
+      ctx.lineTo(ax-ux*ah-uy*ah*0.6, ay-uy*ah+ux*ah*0.6);
+      ctx.lineTo(ax-ux*ah+uy*ah*0.6, ay-uy*ah-ux*ah*0.6);
+      ctx.closePath(); ctx.fillStyle=active?accent:edgeCol; ctx.fill();
+    }
+    // label at the curve apex; nudge if it lands on an already-placed label
     if (active && cam.zoom > 0.5) {
-      ctx.globalAlpha = 0.96; ctx.fillStyle = inkDim; ctx.font = "10px " + cssVar("--font-mono");
-      ctx.textAlign = "center"; ctx.fillText(pretty(e.predicate), (p1.x+p2.x)/2, (p1.y+p2.y)/2 - 5);
+      let lx=(mx+cx)/2, ly=(my+cy)/2 - 5;
+      for (let g=0; g<labelSpots.length; g++){ const s=labelSpots[g];
+        if (Math.abs(s.x-lx)<70 && Math.abs(s.y-ly)<12){ ly = s.y - 13; } }
+      labelSpots.push({x:lx,y:ly});
+      const txt = pretty(e.predicate) + (e.corr>1?` ·${e.corr}`:"");
+      ctx.font = "10px " + cssVar("--font-mono"); ctx.textAlign = "center";
+      const tw = ctx.measureText(txt).width;
+      ctx.globalAlpha = 0.9; ctx.fillStyle = cssVar("--panel");
+      ctx.fillRect(lx-tw/2-4, ly-9, tw+8, 13);           // chip so text stays legible over edges
+      ctx.globalAlpha = 0.98; ctx.fillStyle = ink;
+      ctx.textBaseline="middle"; ctx.fillText(txt, lx, ly-2);
     }
   }
   // nodes sorted far→near
@@ -395,30 +443,45 @@ function mix(hex, fogRGB, t) {
 }
 
 // ---- timeline (2D) ----
+// Both time-stamped NODES (events) and time-stamped EDGES (dated relationships)
+// are laid out, so a graph whose dates live on the relationships still populates.
+let timelineItems = [];
 function drawTimeline() {
-  const dated = G.nodes.filter(n=>n.occurredAt).sort((a,b)=>new Date(a.occurredAt)-new Date(b.occurredAt));
   const inkDim=cssVar("--ink-dim"), ink=cssVar("--ink"), grid=cssVar("--line"), accent=cssVar("--accent");
+  const items = [];
+  for (const n of G.nodes) if (n.occurredAt) items.push({ t:+new Date(n.occurredAt), title:n.name, sub:n.type, color:typeColor(n.type), ref:n });
+  for (const e of G.edges) if (e.occurredAt) items.push({ t:+new Date(e.occurredAt), title:pretty(e.predicate), sub:`${e.s.name} → ${e.t.name}`, color:accent, ref:e.s });
+  items.sort((a,b)=>a.t-b.t);
   ctx.font = "12px " + cssVar("--font-ui");
-  if (!dated.length) { ctx.fillStyle=inkDim; ctx.textAlign="center";
-    ctx.fillText("No time-stamped events in this graph yet.", W/2, H/2-8);
+  if (!items.length) { timelineItems=[]; ctx.fillStyle=inkDim; ctx.textAlign="center";
+    ctx.fillText("No time-stamped events or relationships in this graph yet.", W/2, H/2-8);
     ctx.font="11px "+cssVar("--font-mono");
-    ctx.fillText("Events (nodes with occurred_at) appear here as a cascade.", W/2, H/2+12); return; }
-  const pad=70, y0=90, laneGap=62;
-  const times=dated.map(d=>+new Date(d.occurredAt)); const min=Math.min(...times),max=Math.max(...times),span=(max-min)||1;
-  const xOf=t=>pad+((t-min)/span)*(W-pad*2);
+    ctx.fillText("Nodes or edges carrying occurred_at appear here as a cascade.", W/2, H/2+12); return; }
+  const pad=70, y0=90, laneGap=62, lanes=5;
+  const times=items.map(d=>d.t); const min=Math.min(...times),max=Math.max(...times),span=max-min;
+  // When every item shares one instant (span 0), spread evenly by index so they
+  // don't collapse onto a single tick — otherwise position by real time.
+  const xOf=(t,i)=> span>0 ? pad+((t-min)/span)*(W-pad*2) : pad+(items.length>1? i/(items.length-1):0.5)*(W-pad*2);
   ctx.strokeStyle=grid; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(pad,y0); ctx.lineTo(W-pad,y0); ctx.stroke();
-  dated.forEach((nd,i)=>{ const x=xOf(+new Date(nd.occurredAt)); const y=y0+34+(i%4)*laneGap;
-    ctx.strokeStyle=grid; ctx.beginPath(); ctx.moveTo(x,y0); ctx.lineTo(x,y); ctx.stroke();
-    ctx.fillStyle=typeColor(nd.type); ctx.beginPath(); ctx.arc(x,y0,5,0,Math.PI*2); ctx.fill();
-    const label=clip(nd.name,30); ctx.font="500 12px "+cssVar("--font-ui"); const tw=Math.max(ctx.measureText(label).width,90)+20;
-    ctx.fillStyle=cssVar("--panel"); ctx.strokeStyle=(nd.name===selected)?accent:cssVar("--line"); ctx.lineWidth=(nd.name===selected)?2:1;
-    roundRect(x-tw/2,y,tw,40,8); ctx.fill(); ctx.stroke();
-    ctx.fillStyle=ink; ctx.textAlign="center"; ctx.textBaseline="top"; ctx.fillText(label,x,y+7);
-    ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.fillText(new Date(nd.occurredAt).toISOString().slice(0,10),x,y+23);
-    nd._tl={x,y:y0}; });
+  timelineItems = items.map((it,i)=>{ const x=xOf(it.t,i); const y=y0+34+(i%lanes)*laneGap;
+    const sel = selected && it.ref && it.ref.name===selected;
+    ctx.font="600 12px "+cssVar("--font-ui"); const title=clip(it.title,28);
+    const tw=Math.max(ctx.measureText(title).width, ctx.measureText(clip(it.sub,30)).width, 90)+20, h=46;
+    // keep the card fully on-canvas even for first/last ticks; the connector still
+    // runs to the true time position on the axis.
+    const cx=Math.max(pad+tw/2, Math.min(W-pad-tw/2, x));
+    ctx.strokeStyle=grid; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(x,y0); ctx.lineTo(cx,y); ctx.stroke();
+    ctx.fillStyle=it.color; ctx.beginPath(); ctx.arc(x,y0,5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle=cssVar("--panel"); ctx.strokeStyle=sel?accent:cssVar("--line"); ctx.lineWidth=sel?2:1;
+    roundRect(cx-tw/2,y,tw,h,8); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=ink; ctx.textAlign="center"; ctx.textBaseline="top"; ctx.fillText(title,cx,y+6);
+    ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.fillText(clip(it.sub,30),cx,y+21);
+    ctx.fillText(new Date(it.t).toISOString().slice(0,10),cx,y+32);
+    return {...it, box:{x:cx-tw/2,y,w:tw,h}, dot:{x,y:y0}}; });
   ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.textAlign="left";
   ctx.fillText(new Date(min).toISOString().slice(0,10),pad,y0-14);
   ctx.textAlign="right"; ctx.fillText(new Date(max).toISOString().slice(0,10),W-pad,y0-14);
+  if (span===0){ ctx.textAlign="center"; ctx.fillText("all items share one date — spaced evenly", W/2, y0-14); }
 }
 function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
 
@@ -473,21 +536,42 @@ function hslToHex(hsl) {
   return "#"+to(f(0))+to(f(8))+to(f(4));
 }
 
+const esc = (s)=>String(s??"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const host = (u)=>{ try { return new URL(u).hostname.replace(/^www\./,""); } catch { return clip(String(u),40); } };
+const conf = (c)=> c==null ? "" : (Math.round(c*100)+"%");
+// A relationship line with its full provenance: predicate, corroboration,
+// confidence, and every source URL that attests it.
+function relRow(e, dir){
+  const other = dir==="out" ? e.t.name : e.s.name;
+  const head = dir==="out"
+    ? `<span class="pred">${esc(pretty(e.predicate))}</span> → <span class="other">${esc(clip(other,24))}</span>`
+    : `<span class="other">${esc(clip(other,24))}</span> <span class="pred">${esc(pretty(e.predicate))}</span> →`;
+  const meta = [ e.corr>1?`×${e.corr} corrob.`:"", e.confidence!=null?`${conf(e.confidence)} conf`:"",
+    e.occurredAt?new Date(e.occurredAt).toISOString().slice(0,10):"" ].filter(Boolean).join(" · ");
+  const srcs = (e.sources||[]).slice(0,4).map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener" class="src">${esc(host(u))}</a>`).join("");
+  return `<div class="rel">${head}${meta?`<div class="rel-meta">${esc(meta)}</div>`:""}${srcs?`<div class="rel-src">${srcs}</div>`:""}</div>`;
+}
 function renderDetail() {
   const el = document.getElementById("detail");
   if (view === "semantic") {
     if (!selected) { el.classList.add("empty");
-      el.innerHTML='<p class="rail-h">Selected</p><div class="dtl-body">Click a point to inspect its document. Nearby points are semantically similar.</div>'; return; }
+      el.innerHTML='<p class="rail-h">Selected</p><div class="dtl-body">Click a point to inspect its document. Nearby points are semantically similar — the panel lists its closest neighbours.</div>'; return; }
     const pt = SEM.points.find(p=>p.id===selected); if (!pt) return;
     el.classList.remove("empty");
     const col=providerColor(pt.provider);
-    el.innerHTML=`<p class="rail-h">Selected</p><p class="dtl-name">${clip(pt.name,80)}</p>
-      <span class="dtl-type" style="color:${col}"><span class="dot" style="background:${col}"></span>${pt.provider||"unknown"}</span>
+    // nearest neighbours in the 3D projection — "what is this document near, and how close"
+    const near = SEM.points.filter(p=>p.id!==pt.id)
+      .map(p=>({p, d:Math.hypot(p.x-pt.x,p.y-pt.y,p.z-pt.z)/SEM_R})).sort((a,b)=>a.d-b.d).slice(0,5);
+    el.innerHTML=`<p class="rail-h">Selected point</p><p class="dtl-name">${esc(clip(pt.name,80))}</p>
+      <span class="dtl-type" style="color:${col}"><span class="dot" style="background:${col}"></span>${esc(pt.provider||"unknown")}</span>
       <div class="dtl-meta">
-        <div class="kv"><span class="k">x</span><span class="v">${(pt.x/SEM_R).toFixed(3)}</span></div>
-        <div class="kv"><span class="k">y</span><span class="v">${(pt.y/SEM_R).toFixed(3)}</span></div>
-        <div class="kv"><span class="k">z</span><span class="v">${(pt.z/SEM_R).toFixed(3)}</span></div></div>
-      ${pt.url?`<p class="rail-h" style="margin-top:16px">Source</p><div class="rels"><div class="rel"><a href="${pt.url}" target="_blank" rel="noopener" class="other">${clip(pt.url,44)}</a></div></div>`:""}`;
+        <div class="kv"><span class="k">x · PC1</span><span class="v">${(pt.x/SEM_R).toFixed(3)}</span></div>
+        <div class="kv"><span class="k">y · PC2</span><span class="v">${(pt.y/SEM_R).toFixed(3)}</span></div>
+        <div class="kv"><span class="k">z · PC3</span><span class="v">${(pt.z/SEM_R).toFixed(3)}</span></div>
+        <div class="kv"><span class="k">embedding</span><span class="v">${SEM.dimensions||0}-D</span></div></div>
+      ${pt.url?`<p class="rail-h" style="margin-top:16px">Source</p><div class="rels"><div class="rel"><a href="${esc(pt.url)}" target="_blank" rel="noopener" class="other">${esc(clip(pt.url,44))}</a></div></div>`:""}
+      ${near.length?`<p class="rail-h" style="margin-top:16px">Nearest in meaning</p><div class="rels">${
+        near.map(n=>`<div class="rel"><span class="other">${esc(clip(n.p.name,30))}</span><div class="rel-meta">dist ${n.d.toFixed(2)} · ${esc(n.p.provider||"—")}</div></div>`).join("")}</div>`:""}`;
     return;
   }
   if (!selected) { el.classList.add("empty");
@@ -495,16 +579,18 @@ function renderDetail() {
   const nd = G.nodes.find(n=>n.name===selected); if (!nd) return;
   el.classList.remove("empty");
   const outs=G.edges.filter(e=>e.s.name===selected), ins=G.edges.filter(e=>e.t.name===selected);
-  const rel=(e,dir)=>`<div class="rel">${dir==="out"
-    ?`<span class="pred">${pretty(e.predicate)}</span> → <span class="other">${clip(e.t.name,26)}</span>`
-    :`<span class="other">${clip(e.s.name,26)}</span> <span class="pred">${pretty(e.predicate)}</span> →`}</div>`;
-  el.innerHTML=`<p class="rail-h">Selected</p><p class="dtl-name">${nd.name}</p>
-    <span class="dtl-type" style="color:${typeColor(nd.type)}"><span class="dot" style="background:${typeColor(nd.type)}"></span>${nd.type}</span>
-    <div class="dtl-meta"><div class="kv"><span class="k">mentions</span><span class="v">${nd.weight}</span></div>
-      <div class="kv"><span class="k">relations</span><span class="v">${outs.length+ins.length}</span></div>
+  const allSrc = new Set(); [...outs,...ins].forEach(e=>(e.sources||[]).forEach(u=>allSrc.add(u)));
+  el.innerHTML=`<p class="rail-h">Selected entity</p><p class="dtl-name">${esc(nd.name)}</p>
+    <span class="dtl-type" style="color:${typeColor(nd.type)}"><span class="dot" style="background:${typeColor(nd.type)}"></span>${esc(nd.type)}</span>
+    <div class="dtl-meta">
+      <div class="kv"><span class="k">mentions</span><span class="v">${nd.weight}</span></div>
+      <div class="kv"><span class="k">degree</span><span class="v">${outs.length+ins.length}</span></div>
+      <div class="kv"><span class="k">out / in</span><span class="v">${outs.length} / ${ins.length}</span></div>
+      <div class="kv"><span class="k">sources</span><span class="v">${allSrc.size}</span></div>
       ${nd.occurredAt?`<div class="kv"><span class="k">occurred</span><span class="v">${new Date(nd.occurredAt).toISOString().slice(0,10)}</span></div>`:""}</div>
-    ${outs.length?`<p class="rail-h" style="margin-top:16px">Outgoing</p><div class="rels">${outs.map(e=>rel(e,"out")).join("")}</div>`:""}
-    ${ins.length?`<p class="rail-h" style="margin-top:14px">Incoming</p><div class="rels">${ins.map(e=>rel(e,"in")).join("")}</div>`:""}`;
+    ${outs.length?`<p class="rail-h" style="margin-top:16px">Outgoing (${outs.length})</p><div class="rels">${outs.map(e=>relRow(e,"out")).join("")}</div>`:""}
+    ${ins.length?`<p class="rail-h" style="margin-top:14px">Incoming (${ins.length})</p><div class="rels">${ins.map(e=>relRow(e,"in")).join("")}</div>`:""}
+    ${(!outs.length&&!ins.length)?`<div class="dtl-body" style="margin-top:12px">No relationships recorded for this entity.</div>`:""}`;
 }
 function buildLegend() {
   if (view === "semantic") {
@@ -525,7 +611,12 @@ function buildLegend() {
 // ---- interaction ----
 let dragNode=null, dragging=false, last=null, moved=false;
 function nodeAt(sx,sy) {
-  if (view==="timeline") { for (const nd of G.nodes){ if(!nd._tl) continue; if(Math.hypot(sx-nd._tl.x,sy-nd._tl.y)<9) return nd; } return null; }
+  if (view==="timeline") {
+    for (const it of timelineItems){ const b=it.box;
+      if (sx>=b.x && sx<=b.x+b.w && sy>=b.y && sy<=b.y+b.h) return it.ref;
+      if (Math.hypot(sx-it.dot.x, sy-it.dot.y)<9) return it.ref; }
+    return null;
+  }
   if (view==="semantic") {
     let best=null, bd=1e9;
     for (const pt of SEM.points){ const p=project(pt); const r=Math.max(4,5.2*p.scale)+5; const d=Math.hypot(sx-p.x,sy-p.y);
@@ -574,7 +665,7 @@ function setView(v){ const prev=view; view=v;
   // Selection keys differ between the graph views and the semantic cloud — reset
   // when crossing that boundary so a stale key can't mis-highlight.
   if ((prev==="semantic") !== (v==="semantic")) { selected=null; }
-  buildLegend(); updateStats(); renderDetail();
+  buildLegend(); updateStats(); refreshSampleBadge(); renderDetail();
   if (v==="network") alpha=Math.max(alpha,0.5); }
 document.getElementById("tab-network").onclick=()=>setView("network");
 document.getElementById("tab-timeline").onclick=()=>setView("timeline");
@@ -590,17 +681,35 @@ document.getElementById("json-sample").onclick=()=>{
   if (view==="semantic") { setSemanticData(SAMPLE_SEM); buildLegend(); }
   else { setData(SAMPLE); buildLegend(); }
   modal.close(); };
+// Pull the FIRST balanced {…} or […] out of a paste, so a whole terminal
+// transcript (shell prompt, trailing objects, curl echo) still loads cleanly.
+function extractFirstJson(text){
+  const s=String(text||""); const start=s.search(/[{[]/); if(start<0) return null;
+  const open=s[start], close=open==="{"?"}":"]"; let depth=0, inStr=false, esc=false;
+  for(let i=start;i<s.length;i++){ const c=s[i];
+    if(inStr){ if(esc)esc=false; else if(c==="\\")esc=true; else if(c==='"')inStr=false; continue; }
+    if(c==='"')inStr=true; else if(c===open)depth++; else if(c===close){ if(--depth===0) return s.slice(start,i+1); } }
+  return null;
+}
 document.getElementById("json-load").onclick=()=>{ const err=document.getElementById("json-err");
-  try { const raw=JSON.parse(document.getElementById("json-in").value);
+  try {
+    const src=document.getElementById("json-in").value;
+    let raw;
+    try { raw=JSON.parse(src); }
+    catch { const j=extractFirstJson(src); if(!j) throw new Error("No JSON object found in the pasted text.");
+      raw=JSON.parse(j); }
     if (Array.isArray(raw.points)) {                 // digim_semantic → the cloud
       setSemanticData(raw); setView("semantic"); buildLegend(); modal.close(); return;
     }
-    if(!raw.nodes||!raw.edges) throw new Error("JSON must have 'nodes'+'edges' (graph) or 'points' (semantic).");
-    setData(raw);
-    if(raw.suggested_view==="temporal") setView("timeline");
-    else if(raw.suggested_view==="semantic" && Array.isArray(raw.points)) setView("semantic");
-    else setView("network");
-    buildLegend(); modal.close();
+    if (Array.isArray(raw.nodes) && Array.isArray(raw.edges)) {
+      setData(raw);
+      if(raw.suggested_view==="temporal") setView("timeline");
+      else setView("network");
+      buildLegend(); modal.close(); return;
+    }
+    if ("point_count" in raw && !("points" in raw))
+      throw new Error("This looks like a summarised /digim/semantic response (no 'points'). Re-run without the jq filter — see the note below.");
+    throw new Error("JSON must have 'points' (semantic) or 'nodes'+'edges' (graph).");
   } catch(ex){ err.textContent=ex.message; } };
 document.getElementById("theme-btn").onclick=()=>{ const cur=document.documentElement.getAttribute("data-theme")
   || (matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");
