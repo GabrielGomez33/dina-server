@@ -142,6 +142,14 @@ export class DigimClient {
     }, caller);
   }
 
+  /** On-demand insight for a single clicked graph node/entity. */
+  nodeInsight(input: { entity: string; maxSources?: number }, caller?: Partial<DigimCaller>): Promise<any> {
+    return this.dispatch('digim_node_insight', 6, {
+      entity: input.entity,
+      max_sources: input.maxSources,
+    }, caller);
+  }
+
   /** Recall from semantic memory by meaning — no gathering. */
   recall(input: DigimRecallInput, caller?: Partial<DigimCaller>): Promise<any> {
     return this.dispatch('digim_recall', 6, {
