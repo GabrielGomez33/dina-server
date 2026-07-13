@@ -122,9 +122,22 @@ edge, corroboration stuck at 1). Fix via a tighter extraction prompt (canonical
 short predicates, skip generic entities, date only real events) + light predicate
 normalization.
 
-### 2.4b-3 — Renderers (next)
+### 2.4b-3 — Renderer (v1)
 
-The interactive network / temporal / semantic views over the populated graph.
+`docs/digim/graph-viewer.html` — a self-contained, dependency-free viewer for the
+`digim_graph` output. Open it in a browser (or serve it from the DINA domain so it
+can hit the live API). Two views:
+
+- **Network** — force-directed graph (drag nodes, scroll to zoom, hover to
+  highlight a node's edges, click for details + provenance). Node colour = entity
+  type, node size = mention weight, edge width = corroboration, arrows = direction.
+- **Timeline** — time-stamped events (`occurred_at`) laid out as a cascade on a
+  date axis.
+
+Seeded with the live Iran–USA graph; use **Load data** to paste a fuller
+`digim_graph` JSON (e.g. after a `digim_investigate`). Theme-aware (light/dark).
+The **semantic** view awaits an embedding export from the graph (nodes carry an
+`embedding_ref` but the query doesn't yet return vectors) — a later increment.
 
 ## Verification
 
