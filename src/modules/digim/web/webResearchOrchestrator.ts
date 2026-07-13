@@ -444,7 +444,7 @@ export class WebResearchOrchestrator {
     const filter = (opts?.filter || '').trim().toLowerCase();
 
     const embeddings = await redisManager.listEmbeddings(limit);
-    const inputs = embeddings
+    const mapped = embeddings
       .map((e) => {
         const md = e.metadata || {};
         return {
@@ -459,6 +459,18 @@ export class WebResearchOrchestrator {
         if (!filter) return true;
         return (p.label || '').toLowerCase().includes(filter) || (p.url || '').toLowerCase().includes(filter);
       });
+
+    // Collapse duplicate embeddings of the same source URL (content re-gathered
+    // across investigate facets / repeated runs is stored under distinct ids, so
+    // the same page can appear many times). One source → one point.
+    const seenUrl = new Set<string>();
+    const inputs = mapped.filter((p) => {
+      if (!p.url) return true;
+      const key = p.url.toLowerCase().replace(/[#?].*$/, '').replace(/\/$/, '');
+      if (seenUrl.has(key)) return false;
+      seenUrl.add(key);
+      return true;
+    });
 
     return projectEmbeddings(inputs);
   }
