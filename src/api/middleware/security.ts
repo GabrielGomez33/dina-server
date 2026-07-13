@@ -51,6 +51,13 @@ const DEVELOPMENT_ORIGINS = [
   'https://localhost:8445',
   'http://127.0.0.1:3000',
   'https://127.0.0.1:8445',
+  // Vite (React SPA) dev + preview servers, so the DINA frontend can develop
+  // against this API locally. Dev-only — production stays locked to the
+  // PRODUCTION_ORIGINS allowlist above.
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:4173',
+  'http://127.0.0.1:4173',
 ];
 
 function getAllowedOrigins(): string[] {
