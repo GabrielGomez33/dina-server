@@ -291,6 +291,9 @@ async  initialize(): Promise<void> {
       case 'digim_semantic':
         return await this.handleSemanticRequest(requestData);
 
+      case 'digim_node_insight':
+        return await this.handleNodeInsightRequest(requestData);
+
       case 'digim_memory_backfill':
         return await this.handleMemoryBackfillRequest(requestData);
 
@@ -605,6 +608,34 @@ async  initialize(): Promise<void> {
       point_count: proj.count,
       explained_variance: proj.explainedVariance,
       points: proj.points,
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_node_insight — on-demand: generate a concise grounded insight about a
+   * single clicked entity/node from what DINA already has (graph relationships +
+   * stored sources). Cached per entity; one LLM call; never bulk.
+   */
+  private async handleNodeInsightRequest(requestData: any): Promise<any> {
+    const entity: string = (requestData?.entity || requestData?.query || requestData?.node || requestData?.q || '').trim();
+    console.log(`💡 Handling node-insight request: "${entity.substring(0, 60)}"`);
+
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    if (!entity) {
+      throw new Error('digim_node_insight requires an "entity" (the node/label to explain)');
+    }
+
+    const res = await this.webResearch.nodeInsight({ entity, maxSources: requestData?.max_sources });
+    return {
+      status: 'success',
+      entity: res.entity,
+      insight: res.insight,
+      relationships: res.relationships,
+      sources: res.sources,
+      cached: res.cached,
       generated_at: new Date(),
     };
   }
