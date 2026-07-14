@@ -8,7 +8,7 @@ view, behavior is identical — @Dina chat and analysis still return the same pa
 queue briefly behind a heavy visuals render (and interactive chat is prioritized so that wait is
 minimal).
 
-This folder exists so the delivery layout is consistent and ready: **Phase 2 (`dina-visuals`)** is
+This folder exists so the delivery layout is consistent and ready: **Phase 2 (`DINA/SAGA`)** is
 where mirror-server gains real changes — the React/Vite frontend surface (project dashboard, intake
 wizard, generation pages, the live WebSocket progress bar) and its API client. Those will be staged
 here as mirrored-path files when we build that goal, so the separate mirror-server repo can adopt them

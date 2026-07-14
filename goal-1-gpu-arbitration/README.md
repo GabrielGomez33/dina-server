@@ -26,7 +26,7 @@ goal-1-gpu-arbitration/
 
 ## 1. Why this exists — the GPU-contention problem
 
-Goal #1 (from the design conversation) is to build **`dina-visuals`**: a multi-tenant local
+Goal #1 (from the design conversation) is to build **`DINA/SAGA`**: a multi-tenant local
 image/video generation subsystem (ComfyUI + FLUX/SDXL/Wan/HunyuanVideo + Demucs/WhisperX audio +
 LoRA training). It runs on the **same single RTX 3090 Ti (24 GB)** that Ollama already uses for all
 LLM work. The explicit sub-goal — *"analyze all other implementations so we're not pushing the
@@ -176,13 +176,13 @@ timeouts/watchdog/aging), so it runs in milliseconds and cannot flake.
 
 ---
 
-## 5. How this plugs into `dina-visuals` (next phase)
+## 5. How this plugs into `DINA/SAGA` (next phase)
 
 The visuals worker wraps each GPU job in an **exclusive** lease:
 
 ```ts
 await gpuArbiter.run(
-  { label: `visuals.video:${jobId}`, engine: 'comfyui', estVramMb: 22000,
+  { label: `saga.video:${jobId}`, engine: 'comfyui', estVramMb: 22000,
     mode: 'exclusive', priority: 'background', maxHoldMs: 30 * 60_000 },
   async () => comfy.runWorkflow(workflow),   // Ollama is already drained; full card is ours
 );
@@ -202,5 +202,5 @@ LLM calls, in turn, become **shared** leases (see `INTEGRATION.md`) — a one-li
 
 This folder delivers **only** the arbiter (the load-balancing foundation) plus its proofs and wiring
 guide — deliberately, per the "handle one goal, test every edge case, ensure no disruption, then move
-to the next" principle. The `dina-visuals` schema + module scaffold is the **next** goal and builds
+to the next" principle. The `DINA/SAGA` schema + module scaffold is the **next** goal and builds
 directly on this. Nothing here is wired into the live tree until you approve `INTEGRATION.md`.

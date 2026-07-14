@@ -127,7 +127,7 @@ LLM jobs to be able to drain a paused ComfyUI.
 
 ```ts
 await gpuArbiter.run(
-  { label: `visuals.${jobKind}:${jobId}`, engine: 'comfyui', estVramMb: cfg.budgetMb,
+  { label: `saga.${jobKind}:${jobId}`, engine: 'comfyui', estVramMb: cfg.budgetMb,
     mode: 'exclusive', priority: tenantPriority, maxHoldMs: 30 * 60_000 },
   async () => comfy.runWorkflow(workflow),   // Ollama already drained; whole card is ours
 );
