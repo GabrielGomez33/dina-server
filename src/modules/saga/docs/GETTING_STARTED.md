@@ -189,7 +189,7 @@ won't, by design.
 
 ### R. Back up the database FIRST (enterprise rule: no schema change without a restore path)
 ```bash
-mysqldump -u dina_user -p --single-transaction --routines dina \
+mysqldump -u dina_user -p --single-transaction --no-tablespaces --routines dina \
   > "$SAGA_ROOT"/backups/dina-pre-saga-$(date +%Y%m%d-%H%M).sql
 ```
 **Verify:** file exists and is non-trivially sized. *Rollback for step S is this file.*
