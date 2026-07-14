@@ -1,25 +1,18 @@
-# Goal #1 — Single-GPU Load Balancing (GPU Arbiter)
+# GPU Arbiter — Single-GPU Load Balancing (`src/modules/gpu`)
 
-**Branch delivery folder.** Nothing here touches the live `dina-server` source tree. Everything
-is drop-in ready at its mirrored target path, with an explicit, reviewable wiring guide
-(`dina-server/INTEGRATION.md`). This satisfies the "no disruption to the ecosystem" constraint:
-you review, then wire, on your schedule.
+Shared infrastructure module (not a limb): the process-wide VRAM-lease scheduler that lets SAGA's
+image/video renders time-share the RTX 3090 Ti with Ollama's LLM work. Wiring steps are in
+`docs/INTEGRATION.md` (feature-flagged via `DINA_GPU_ARBITER`).
 
 ```
-goal-1-gpu-arbitration/
-├── README.md                          ← this file: analysis, proofs, design
-├── dina-server/
-│   ├── src/modules/gpu/               ← the GPU Arbiter module (drop into src/modules/gpu)
-│   │   ├── types.ts                   ← public type contract (lease/priority/config/snapshot)
-│   │   ├── clock.ts                   ← injectable clock (real + virtual for tests)
-│   │   ├── gpuArbiter.ts              ← the scheduler core (pure logic, singleton export)
-│   │   ├── engines/ollamaEngine.ts    ← Ollama drain/restore adapter
-│   │   └── index.ts                   ← barrel export
-│   ├── test/gpu/gpuArbiterTest.ts     ← hermetic proof harness (43 assertions, all green)
-│   ├── tsconfig.json                  ← scoped config to type-check/run the package standalone
-│   └── INTEGRATION.md                 ← exact non-invasive wiring steps + ComfyUI usage
-└── mirror-server/
-    └── README.md                      ← (phase 1 requires no mirror-server changes — why)
+src/modules/gpu/
+├── index.ts                  ← barrel export
+├── types.ts                  ← public type contract (lease/priority/config/snapshot)
+├── clock.ts                  ← injectable clock (real + virtual for tests)
+├── gpuArbiter.ts             ← the scheduler core (pure logic, singleton export)
+├── engines/ollamaEngine.ts   ← Ollama drain/restore adapter
+├── tests/gpuArbiterTest.ts   ← hermetic proof harness (43 assertions, all green)
+└── docs/                     ← this overview + INTEGRATION.md
 ```
 
 ---
@@ -148,10 +141,10 @@ ComfyUI/other engines register the same way without touching the core.
 ## 4. Proof — run it yourself
 
 ```bash
-cd goal-1-gpu-arbitration/dina-server
+cd dina-server
 # (one-time, if not already present) npm i --no-save typescript ts-node @types/node
 npx tsc --noEmit -p tsconfig.json          # strict type-check — clean
-npx ts-node test/gpu/gpuArbiterTest.ts     # behavioral proof
+npx ts-node src/modules/gpu/tests/gpuArbiterTest.ts     # behavioral proof
 ```
 
 Result on this branch:

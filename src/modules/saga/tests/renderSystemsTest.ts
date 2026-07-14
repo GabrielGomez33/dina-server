@@ -1,4 +1,4 @@
-// File: test/saga/renderSystemsTest.ts
+// File: src/modules/saga/tests/renderSystemsTest.ts
 // ============================================================================
 // DINA SAGA — RENDER-SYSTEMS PROOF HARNESS (phase 2 backend units)
 // ============================================================================
@@ -7,13 +7,13 @@
 // driven through a fake transport (happy path, execution error, timeout,
 // stall, abort). No network, no GPU, no ComfyUI.
 //
-//   run:  npx ts-node test/saga/renderSystemsTest.ts
+//   run:  npx ts-node src/modules/saga/tests/renderSystemsTest.ts
 // ============================================================================
 
-import { bindWorkflow, TEMPLATE_IMAGE_BASIC, WorkflowBindError } from '../../src/modules/saga/systems/workflowTemplates';
-import { ProgressMapper } from '../../src/modules/saga/systems/progressMapper';
-import { EtaEstimator, mergeCalibration } from '../../src/modules/saga/core/etaEstimator';
-import { ComfyClient, ComfyError, ComfyEvent, ComfyTransport } from '../../src/modules/saga/systems/comfyClient';
+import { bindWorkflow, TEMPLATE_IMAGE_BASIC, WorkflowBindError } from '../systems/workflowTemplates';
+import { ProgressMapper } from '../systems/progressMapper';
+import { EtaEstimator, mergeCalibration } from '../core/etaEstimator';
+import { ComfyClient, ComfyError, ComfyEvent, ComfyTransport } from '../systems/comfyClient';
 
 let passed = 0, failed = 0;
 const failures: string[] = [];

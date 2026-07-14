@@ -1,26 +1,30 @@
-# Goal #2 — `dina-saga` Foundation Slice (multi-tenant image/video generation)
+# DINA / SAGA — Module Overview (multi-tenant image/video generation)
 
-**Branch delivery folder — nothing touches the live `dina-server` tree.** Files sit at their mirrored
-target paths, drop-in ready, with a reviewable wiring guide (`dina-server/INTEGRATION.md`). Builds on
-Goal #1 (`/goal-1-gpu-arbitration/`): all GPU work here runs through the proven `gpuArbiter`.
+SAGA lives in the real tree at `src/modules/saga/` — the same limb pattern as `mirror` and `digim`:
+code, docs, tests, and UI assets all inside the module. The one file outside is
+`migrations/003_saga_core.ts`, which must sit in `/migrations/` for the migration runner to discover
+it (identical to digim's 001/002). All GPU work runs through `src/modules/gpu` (the arbiter).
 
 ```
-goal-2-dina-saga/
-├── README.md                                   ← this file
-└── dina-server/
-    ├── migrations/003_saga_core.ts          ← full multi-tenant schema (7 tables, idempotent)
-    ├── src/modules/saga/
-    │   ├── index.ts                            ← SagaModule (DUMP entry, mirror-pattern singleton)
-    │   ├── sagaRoutes.ts                    ← HTTP→DUMP boundary (truthStreamRoutes pattern)
-    │   ├── types/index.ts                      ← full type contract incl. JobProgress schema
-    │   └── core/                               ← PURE logic (each provable in isolation)
-    │       ├── storagePaths.ts                 ← tenant-isolated path resolution (security-critical)
-    │       ├── quota.ts                        ← plan-tier quota admission math
-    │       ├── ttlPolicy.ts                    ← locked lifecycle table + janitor decision fn
-    │       └── methodRegistry.ts               ← DUMP surface + per-method payload validation
-    ├── test/saga/sagaFoundationTest.ts   ← hermetic proofs — 97 assertions, all green
-    ├── tsconfig.json                           ← scoped standalone type-check config
-    └── INTEGRATION.md                          ← exact wiring steps (orchestrator case, routes, migrate)
+src/modules/saga/
+├── index.ts                     ← SagaModule (DUMP entry, mirror-pattern singleton)
+├── sagaRoutes.ts                ← HTTP→DUMP boundary (truthStreamRoutes pattern)
+├── types/index.ts               ← full type contract incl. JobProgress schema
+├── core/                        ← PURE logic (each provable in isolation)
+│   ├── storagePaths.ts          ← tenant-isolated path resolution (security-critical)
+│   ├── quota.ts                 ← plan-tier quota admission math
+│   ├── ttlPolicy.ts             ← locked lifecycle table + janitor decision fn
+│   ├── methodRegistry.ts        ← DUMP surface + per-method payload validation
+│   └── etaEstimator.ts          ← calibration + live EWMA ETA math
+├── systems/                     ← engine I/O (injected transports, hermetically testable)
+│   ├── comfyClient.ts           ← ComfyUI HTTP+WS wrapper (timeout/stall/abort → /interrupt)
+│   ├── workflowTemplates.ts     ← versioned graph templates, injection-safe binding
+│   └── progressMapper.ts        ← ComfyUI events → monotonic weighted JobProgress
+├── tests/                       ← hermetic proof harnesses (97 + 29 assertions, green)
+├── ui/                          ← design tokens + style guide (frontend source of truth)
+└── docs/                        ← this file, INTEGRATION, PHASES, READINESS, preprod, UI system
+
+migrations/003_saga_core.ts      ← multi-tenant schema (7 tables, idempotent) — runner requirement
 ```
 
 ## What this slice is (and deliberately is not)
@@ -54,9 +58,9 @@ Uniform request pipeline (every method, no exceptions):
 Run them yourself:
 
 ```bash
-cd goal-2-dina-saga/dina-server
-npx tsc --noEmit -p tsconfig.json                       # strict type-check — clean
-npx ts-node test/saga/sagaFoundationTest.ts       # RESULTS: 97 passed, 0 failed
+cd /var/www/dina-server
+npm run type-check                                  # strict type-check
+npm run test:saga                                   # RESULTS: 97 passed, 0 failed
 ```
 
 What the 97 assertions prove (hermetic — no DB/GPU/network/fs; fakes injected through the same ports
@@ -108,4 +112,4 @@ snapshot for reconnecting clients). Idempotent `CREATE TABLE IF NOT EXISTS`, FK-
    re-emission (phase-weighted `JobProgress` → WS), preview frames.
 2. **Janitor system** — nightly sweep consuming `pruneDecision()` (already proven), byte reclamation.
 3. **Audio sidecar contract** — Demucs/WhisperX/beats job, `ShotPlan` merge (types already defined).
-4. **mirror-server frontend** — staged under `goal-2-dina-saga/mirror-server/` when we get there.
+4. **mirror-server frontend** — built from `src/modules/saga/ui/` tokens when we get there.

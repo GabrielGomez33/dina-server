@@ -118,5 +118,5 @@ observing it once, deliberately, validates the whole design.
 - [ ] One anime image generated manually; `ollama ps` coexistence behaviour recorded
 - [ ] First timing datapoint noted (seeds Phase 2 calibration)
 
-**Then Phase 1** = the two INTEGRATION.md guides on this branch, in order: goal-1 (arbiter) then
-goal-2 (module + migration 003), each with its verification section.
+**Then Phase 1** = the two INTEGRATION guides, in order: `src/modules/gpu/docs/INTEGRATION.md` (arbiter) then
+`src/modules/saga/docs/INTEGRATION.md` (module + migration 003), each with its verification section.

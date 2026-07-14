@@ -1,7 +1,7 @@
 # dina-saga — UI Design System (locked)
 
 The visual contract for the workstation frontend (mirror-server, React/Vite). Tokens live in
-`goal-2-dina-saga/mirror-server/ui/tokens.css` — the single source of truth; components style
+`src/modules/saga/ui/tokens.css` — the single source of truth; components style
 against `var(--*)` only, never raw hex. A live style-guide preview accompanies this doc.
 
 ## 1. Direction (from the reference set)

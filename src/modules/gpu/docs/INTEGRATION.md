@@ -11,8 +11,8 @@ Apply in order; each is independently safe.
 
 ## Step 0 — copy the module
 
-Copy `goal-1-gpu-arbitration/dina-server/src/modules/gpu/` → `src/modules/gpu/`
-and `.../test/gpu/gpuArbiterTest.ts` → `test/gpu/gpuArbiterTest.ts`.
+Copy `src/modules/gpu/` → `src/modules/gpu/`
+and `.../src/modules/gpu/tests/gpuArbiterTest.ts` → `src/modules/gpu/tests/gpuArbiterTest.ts`.
 
 The module has **zero new dependencies** (only Node built-ins + `crypto.randomUUID`-free id counter).
 It compiles under the existing root `tsconfig.json` once it lives under `src/`.
@@ -20,7 +20,7 @@ It compiles under the existing root `tsconfig.json` once it lives under `src/`.
 Add a test script to `package.json` (matches the existing `test:*` convention):
 
 ```json
-"test:gpu": "ts-node test/gpu/gpuArbiterTest.ts",
+"test:gpu": "ts-node src/modules/gpu/tests/gpuArbiterTest.ts",
 ```
 
 ---

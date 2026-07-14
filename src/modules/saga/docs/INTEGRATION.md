@@ -7,13 +7,13 @@ All steps are additive; existing modules and routes are untouched. Apply in orde
 ```
 migrations/003_saga_core.ts            → migrations/003_saga_core.ts
 src/modules/saga/**                    → src/modules/saga/**
-test/saga/sagaFoundationTest.ts     → test/saga/sagaFoundationTest.ts
+src/modules/saga/tests/sagaFoundationTest.ts     → src/modules/saga/tests/sagaFoundationTest.ts
 ```
 
 Add to `package.json` scripts (matches the `test:*` convention):
 
 ```json
-"test:saga": "ts-node test/saga/sagaFoundationTest.ts",
+"test:saga": "ts-node src/modules/saga/tests/sagaFoundationTest.ts",
 ```
 
 ## Step 1 — run the migration

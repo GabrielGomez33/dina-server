@@ -1,4 +1,4 @@
-// File: test/gpu/gpuArbiterTest.ts
+// File: src/modules/gpu/tests/gpuArbiterTest.ts
 // ============================================================================
 // DINA GPU ARBITER — HERMETIC PROOF HARNESS
 // ============================================================================
@@ -8,7 +8,7 @@
 // time with a VirtualClock, so every timeout/watchdog/aging path is exercised
 // in microseconds with zero flakiness.
 //
-//   run:  npx ts-node test/gpu/gpuArbiterTest.ts
+//   run:  npx ts-node src/modules/gpu/tests/gpuArbiterTest.ts
 //
 // Each ▶ section asserts one safety property from gpuArbiter.ts's header:
 //   1. budget never over-subscribed        5. no starvation (aging)
@@ -17,10 +17,10 @@
 //   4. drain + restore around exclusive    8. auto-promotion, run() safety, shutdown
 // ============================================================================
 
-import { GpuArbiter } from '../../src/modules/gpu/gpuArbiter';
-import { GpuAcquireTimeoutError, GpuAbortError, GpuArbiterShutdownError } from '../../src/modules/gpu/gpuArbiter';
-import { VirtualClock } from '../../src/modules/gpu/clock';
-import { EngineAdapter, Lease, LeaseRequest } from '../../src/modules/gpu/types';
+import { GpuArbiter } from '../gpuArbiter';
+import { GpuAcquireTimeoutError, GpuAbortError, GpuArbiterShutdownError } from '../gpuArbiter';
+import { VirtualClock } from '../clock';
+import { EngineAdapter, Lease, LeaseRequest } from '../types';
 
 // ----------------------------------------------------------------------------
 // Tiny assertion framework (matches test/digim/* style)
