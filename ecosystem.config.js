@@ -47,10 +47,19 @@ module.exports = {
       log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS',
 
       // Environment
+      // SAGA / GPU-arbiter variables are documented in
+      // src/modules/saga/docs/ENVIRONMENT.md (the canonical registry).
       env: {
         NODE_ENV: 'production',
         NODE_OPTIONS: '--enable-source-maps',
         CUDA_VISIBLE_DEVICES: '0',
+        // ---- SAGA (image/video generation limb) ----
+        SAGA_ROOT: '/mnt/nvme_tugrrstorage2/Dina/SAGA',
+        // ---- GPU arbiter (cross-engine VRAM scheduler) ----
+        // 'off' = dark launch: registered, zero request-path change.
+        // Flip to 'on' at runbook step W; flipping back is the instant rollback.
+        DINA_GPU_ARBITER: 'off',
+        DINA_GPU_RESERVE_MB: '512',
       },
 
       // Graceful shutdown
