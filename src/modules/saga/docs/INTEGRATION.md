@@ -76,9 +76,9 @@ Endpoints appear under the existing `/dina` base:
 ## Step 5 — storage root
 
 ```bash
-sudo mkdir -p /mnt/nvme_tugrrstorage2/Dina/SAGA/{tenants,tmp,models}
+sudo mkdir -p "$SAGA_ROOT"/{tenants,tmp,models}
 # ensure the dina-server user owns it
-export SAGA_ROOT=/mnt/nvme_tugrrstorage2/Dina/SAGA   # add to the PM2 env block
+export SAGA_ROOT="$SAGA_ROOT"   # add to the PM2 env block
 ```
 
 ## Verification
@@ -89,7 +89,7 @@ export SAGA_ROOT=/mnt/nvme_tugrrstorage2/Dina/SAGA   # add to the PM2 env block
    `POST /dina/saga/tenants {"name":"Gabriel","slug":"gabriel"}` → tenantId; the caller is
    auto-owner.
    `POST /dina/saga/<tenantId>/projects {"slug":"first-project"}` → projectId + storageRoot
-   inside `/mnt/nvme_tugrrstorage2/Dina/SAGA/tenants/<tenantId>/…`.
+   inside `"$SAGA_ROOT"/tenants/<tenantId>/…`.
    `GET /dina/saga/status` → module version + full method list.
 4. Negative smoke: repeat step 3 with a second (non-member) user → `403 FORBIDDEN`; malformed body →
    `400 INVALID_REQUEST`.
