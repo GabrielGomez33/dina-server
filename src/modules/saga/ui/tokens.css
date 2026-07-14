@@ -1,0 +1,101 @@
+/* File: src/modules/saga/ui/tokens.css
+ * ============================================================================
+ * DINA SAGA — DESIGN TOKENS (single source of truth for the frontend)
+ * ============================================================================
+ * Dual theme, token-level. Components style against var(--*) only — never
+ * against raw hex — so theming stays a swap of this block, and the light/dark
+ * pair can never drift apart structurally.
+ *
+ * Aesthetic contract (locked in docs/UI_DESIGN_SYSTEM.md):
+ *   layered blacks · grey hierarchy · one warm-gold accent · pastel semantics
+ *   spacious 8px grid · rounded corners · hairline borders · soft shadows
+ *   GLOW = LIVE GPU ACTIVITY ONLY (a glowing element always means "working")
+ * ============================================================================ */
+
+:root {
+  /* ---- LIGHT (paper) ---- */
+  --bg:            #F4F4F6;  /* warm-grey paper, never pure white page ground */
+  --surface:       #FFFFFF;  /* cards */
+  --surface-2:     #FAFAFC;  /* nested panels, table stripes */
+  --surface-3:     #EFEFF2;  /* hover */
+  --ink:           #1A1A1F;  /* primary text — the dark theme's elevated black */
+  --ink-2:         #5E5E68;  /* secondary text */
+  --ink-3:         #8E8E99;  /* tertiary/disabled */
+  --line:          #E3E3E8;  /* hairline borders */
+  --line-strong:   #C9C9D2;
+
+  --accent:        #B8813C;  /* warm gold, deepened for light-ground contrast */
+  --accent-ink:    #FFFFFF;  /* text on accent */
+  --accent-soft:   #B8813C22;
+
+  /* pastel semantics (state, never decoration) */
+  --ok:            #3E9E6E;  --ok-soft:    #8FD9B033;
+  --info:          #4A7FB5;  --info-soft:  #93BFE633;
+  --warn:          #B58A3E;  --warn-soft:  #E6C89333;
+  --err:           #C05E5E;  --err-soft:   #E39A9A33;
+  --special:       #7E68B5;  --special-soft:#B9A8E333;
+
+  --shadow-1: 0 1px 3px rgba(20,20,30,.07), 0 1px 2px rgba(20,20,30,.05);
+  --shadow-2: 0 6px 24px rgba(20,20,30,.09);
+  --glow-live: 0 0 0 1px var(--accent), 0 0 18px -2px #B8813C66; /* live GPU only */
+
+  --r-sm: 8px;  --r-md: 14px;  --r-lg: 20px;  --r-pill: 999px;
+  --sp-1: 8px;  --sp-2: 16px;  --sp-3: 24px;  --sp-4: 40px;  --sp-5: 64px;
+
+  --font-body: -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: var(--font-body); /* heavy weight + tight tracking does the work */
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* ---- DARK (studio) — the primary working environment ---- */
+    --bg:            #0B0B0D;  /* base black */
+    --surface:       #131316;  /* card */
+    --surface-2:     #1A1A1F;  /* elevated / nested */
+    --surface-3:     #232329;  /* hover */
+    --ink:           #F2F2F5;  /* white-on-black primary */
+    --ink-2:         #9B9BA6;
+    --ink-3:         #6A6A75;
+    --line:          #2A2A31;
+    --line-strong:   #3A3A44;
+
+    --accent:        #D9A662;  /* the reference gold, full warmth on dark */
+    --accent-ink:    #14100A;
+    --accent-soft:   #D9A6621F;
+
+    --ok:            #8FD9B0;  --ok-soft:    #8FD9B01F;
+    --info:          #93BFE6;  --info-soft:  #93BFE61F;
+    --warn:          #E6C893;  --warn-soft:  #E6C8931F;
+    --err:           #E39A9A;  --err-soft:   #E39A9A1F;
+    --special:       #B9A8E3;  --special-soft:#B9A8E31F;
+
+    --shadow-1: 0 1px 3px rgba(0,0,0,.5), 0 1px 2px rgba(0,0,0,.4);
+    --shadow-2: 0 10px 32px rgba(0,0,0,.55);
+    --glow-live: 0 0 0 1px var(--accent), 0 0 22px -2px #D9A66259;
+  }
+}
+
+/* Explicit user toggle wins over OS preference, both directions. */
+:root[data-theme="dark"] {
+  --bg:#0B0B0D; --surface:#131316; --surface-2:#1A1A1F; --surface-3:#232329;
+  --ink:#F2F2F5; --ink-2:#9B9BA6; --ink-3:#6A6A75; --line:#2A2A31; --line-strong:#3A3A44;
+  --accent:#D9A662; --accent-ink:#14100A; --accent-soft:#D9A6621F;
+  --ok:#8FD9B0; --ok-soft:#8FD9B01F; --info:#93BFE6; --info-soft:#93BFE61F;
+  --warn:#E6C893; --warn-soft:#E6C8931F; --err:#E39A9A; --err-soft:#E39A9A1F;
+  --special:#B9A8E3; --special-soft:#B9A8E31F;
+  --shadow-1: 0 1px 3px rgba(0,0,0,.5), 0 1px 2px rgba(0,0,0,.4);
+  --shadow-2: 0 10px 32px rgba(0,0,0,.55);
+  --glow-live: 0 0 0 1px var(--accent), 0 0 22px -2px #D9A66259;
+}
+:root[data-theme="light"] {
+  --bg:#F4F4F6; --surface:#FFFFFF; --surface-2:#FAFAFC; --surface-3:#EFEFF2;
+  --ink:#1A1A1F; --ink-2:#5E5E68; --ink-3:#8E8E99; --line:#E3E3E8; --line-strong:#C9C9D2;
+  --accent:#B8813C; --accent-ink:#FFFFFF; --accent-soft:#B8813C22;
+  --ok:#3E9E6E; --ok-soft:#8FD9B033; --info:#4A7FB5; --info-soft:#93BFE633;
+  --warn:#B58A3E; --warn-soft:#E6C89333; --err:#C05E5E; --err-soft:#E39A9A33;
+  --special:#7E68B5; --special-soft:#B9A8E333;
+  --shadow-1: 0 1px 3px rgba(20,20,30,.07), 0 1px 2px rgba(20,20,30,.05);
+  --shadow-2: 0 6px 24px rgba(20,20,30,.09);
+  --glow-live: 0 0 0 1px var(--accent), 0 0 18px -2px #B8813C66;
+}
