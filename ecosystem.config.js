@@ -47,12 +47,11 @@ module.exports = {
       log_date_format: 'YYYY-MM-DD HH:mm:ss.SSS',
 
       // Environment
-      // Only generic, non-infrastructure values belong here (this file is
-      // committed). Deployment-specific configuration — SAGA_ROOT,
-      // DINA_GPU_ARBITER, DINA_GPU_RESERVE_MB, DB creds, TLS paths — lives in
-      // the untracked .env (loaded by dotenv in src/index.ts). Registry of
-      // every variable: src/modules/saga/docs/ENVIRONMENT.md; template:
-      // .env.example.
+      // Committed file → generic values only. All SAGA/arbiter configuration
+      // (SAGA_ROOT, DINA_GPU_ARBITER, DINA_GPU_RESERVE_MB) lives in the
+      // untracked .env, loaded by dotenv in src/index.ts — same as DB creds
+      // and TLS paths. Registry: src/modules/saga/docs/ENVIRONMENT.md;
+      // template: .env.example.
       env: {
         NODE_ENV: 'production',
         NODE_OPTIONS: '--enable-source-maps',
