@@ -19,15 +19,24 @@ categorically ControlNet's job. Chasing structural bugs with prompts is the trap
 
 ## The three laws (all subject-agnostic)
 
-### Law 1 — Neutral prompting
-When a reference supplies identity, the prompt describes **only framing, mood, and quality —
-never the subject**. Every subject word competes with the reference and induces drift. Enforced
-in code by `assembleReferencePrompt()`, whose type has **no subject slot** — the rule cannot be
-violated by accident.
+### Law 1 — Anchor on what the base model KNOWS; neutrality is conditional
+Whether to name the subject depends entirely on whether the checkpoint already knows it:
+
+- **Known character** (a danbooru tag the model was trained on, e.g. `exodia`): **KEEP the tag.**
+  It is a strong, correct anchor. Dropping it forces IP-Adapter to carry identity alone, which at
+  practical weights (~0.7) it cannot — the result drifts to generic. **Proven the hard way:**
+  removing `exodia, yu-gi-oh!` sent renders to generic anime warriors and even flipped gender.
+- **Original / unknown subject** (your own character): neutral prompting (framing + mood + quality,
+  no subject) is correct — but *only* once structure is pinned by **ControlNet**. Without ControlNet
+  an unknown subject also drifts.
+
+So neutral prompting is a *conditional* technique, not a universal law. `assembleReferencePrompt()`
+(no subject slot) exists for the unknown-subject + ControlNet case; for a **known** character use
+`assemblePrompt()` with the character tag as the subject anchor.
 
 ```
-❌ "exodia, golden bandaged giant, masked face, full body, dark, ominous"   ← subject words fight the ref
-✅ "full body, standing, dark, chiaroscuro, rim light, ominous, cinematic"  ← reference IS the subject
+known subject:   "exodia, yu-gi-oh!, 1boy, solo, full body, dark, ominous, cinematic"  ← keep the anchor
+unknown + CNet:  "full body, standing, dark, chiaroscuro, rim light, ominous"          ← reference + geometry carry it
 ```
 
 ### Law 2 — Reference preprocessing
