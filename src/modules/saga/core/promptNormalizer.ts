@@ -95,3 +95,31 @@ export function assemblePrompt(parts: PromptParts): string {
     .join(', ');
   return normalizePrompt(joined);
 }
+
+export interface ReferencePromptParts {
+  /** Camera / composition only, e.g. "full body, standing", "close-up bust". */
+  framing?: string;
+  /** Lighting and atmosphere only, e.g. "dark, chiaroscuro, rim light, ominous". */
+  mood?: string;
+  /** Model-appropriate quality scaffold. */
+  quality?: string;
+}
+
+/**
+ * Assemble a prompt for REFERENCE-CONDITIONED generation. This is subject-agnostic
+ * by construction: there is deliberately NO subject/identity slot. When an image
+ * reference supplies identity, naming the subject in text gives the sampler a
+ * competing source of truth and induces drift/hallucination (a mask bar rendered
+ * as a tongue, proportions wandering). The reference IS the subject; the prompt
+ * only frames and lights it.
+ *
+ * The rule is enforced by the TYPE, not by discipline — a caller literally cannot
+ * pass a subject here. Holds for every future character, not just the test one.
+ */
+export function assembleReferencePrompt(parts: ReferencePromptParts): string {
+  const joined = [parts.framing, parts.mood, parts.quality]
+    .map((s) => (s ?? '').trim())
+    .filter((s) => s.length > 0)
+    .join(', ');
+  return normalizePrompt(joined);
+}

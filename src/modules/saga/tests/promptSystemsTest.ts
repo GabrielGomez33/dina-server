@@ -9,7 +9,7 @@
 //   run:  npx ts-node src/modules/saga/tests/promptSystemsTest.ts
 // ============================================================================
 
-import { normalizeTag, splitTags, normalizePrompt, assemblePrompt } from '../core/promptNormalizer';
+import { normalizeTag, splitTags, normalizePrompt, assemblePrompt, assembleReferencePrompt } from '../core/promptNormalizer';
 import { bindWorkflow, TEMPLATE_IMAGE_REFERENCE, getTemplate, WorkflowBindError } from '../systems/workflowTemplates';
 
 let passed = 0, failed = 0;
@@ -104,6 +104,21 @@ async function main(): Promise<void> {
     );
     eq(g['5'].inputs.model[0], '10', 'KSampler consumes the IP-Adapter-modified model, not the raw checkpoint');
     eq(g['2'].inputs.text, 'exodia, (dark:1.4)', 'prompt text lands verbatim (weights preserved)');
+    // Reference preprocessing sits between LoadImage and IP-Adapter (general fidelity).
+    eq(g['14'].class_type, 'PrepImageForClipVision', 'reference is preprocessed for CLIP vision');
+    eq(g['14'].inputs.image[0], '8', 'preprocessor reads the LoadImage output');
+    eq(g['10'].inputs.image[0], '14', 'IP-Adapter consumes the PREPROCESSED reference, not the raw LoadImage');
+  });
+
+  await section('9b. assembleReferencePrompt — subject-agnostic by construction (fidelity law #1)', () => {
+    // The type has NO subject slot — the reference supplies identity; the prompt
+    // only frames and lights. This is the generalizable fix, not an Exodia patch.
+    const p = assembleReferencePrompt({ framing: 'full body, standing', mood: 'dark, chiaroscuro, rim light, ominous', quality: 'masterpiece, absurdres' });
+    eq(p, 'full body, standing, dark, chiaroscuro, rim light, ominous, masterpiece, absurdres', 'framing → mood → quality, normalized');
+    ok(!/exodia|subject|character/i.test(p), 'no subject identity can appear (there is no slot for it)');
+    eq(assembleReferencePrompt({ mood: 'dark' }), 'dark', 'partial parts compose cleanly');
+    eq(assembleReferencePrompt({}), '', 'empty → empty (a reference render with a blank prompt is valid)');
+    eq(assembleReferencePrompt({ framing: 'bust, bust', mood: 'dark' }), 'bust, dark', 'de-dupe/normalize still applies');
   });
 
   await section('10. reference template — weight clamps to 0..1 and defaults apply', () => {

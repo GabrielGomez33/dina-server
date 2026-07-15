@@ -189,11 +189,15 @@ export const TEMPLATE_IMAGE_REFERENCE: WorkflowTemplate = {
     '3': { class_type: 'CLIPTextEncode', inputs: { text: '${negative}', clip: ['1', 1] } },
     '4': { class_type: 'EmptyLatentImage', inputs: { width: '${width}', height: '${height}', batch_size: 1 } },
     '8': { class_type: 'LoadImage', inputs: { image: '${referenceImage}' } },
+    // Preprocess the reference for the CLIP vision encoder (center-crop + clean
+    // resample). General fidelity win — better features in, better identity out —
+    // and subject-agnostic (helps every reference, not just one subject).
+    '14': { class_type: 'PrepImageForClipVision', inputs: { image: ['8', 0], interpolation: 'LANCZOS', crop_position: 'center', sharpening: 0 } },
     '9': { class_type: 'IPAdapterUnifiedLoader', inputs: { model: ['1', 0], preset: 'PLUS (high strength)' } },
     '10': {
       class_type: 'IPAdapterAdvanced',
       inputs: {
-        model: ['9', 0], ipadapter: ['9', 1], image: ['8', 0],
+        model: ['9', 0], ipadapter: ['9', 1], image: ['14', 0],
         weight: '${ipAdapterWeight}', weight_type: 'linear', combine_embeds: 'concat',
         start_at: 0, end_at: 1, embeds_scaling: 'V only',
       },
