@@ -151,8 +151,8 @@ const PROFILES: ModelProfile[] = [
     leaseMode: 'exclusive',
     defaults: { steps: 30, cfg: 5, length: 49, fps: 24, width: 1280, height: 704 },
     isDefaultFor: 'video_gen',
-    provisional: true,
-    notes: 'Wan 2.2 TI2V-5B image→video 720p. HEAVY → exclusive GPU lease. Graph provisional pending live render.',
+    provisional: false, // graph verified live 2026-07-15 (rendered end-to-end → mp4)
+    notes: 'Wan 2.2 TI2V-5B image→video 720p. HEAVY → exclusive GPU lease. Prefer landscape 1280x704 (portrait tiles the subject).',
   },
 ];
 

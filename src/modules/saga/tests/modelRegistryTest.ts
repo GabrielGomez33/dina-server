@@ -109,8 +109,8 @@ async function main(): Promise<void> {
     }
   });
 
-  await section('8. provisional flag surfaces (Wan graph is not trusted until live-verified)', () => {
-    eq(resolveProfile({ id: 'wan2.2-ti2v-5b' }).provisional, true, 'Wan profile is flagged provisional');
+  await section('8. provisional flags reflect live verification status', () => {
+    ok(!resolveProfile({ id: 'wan2.2-ti2v-5b' }).provisional, 'Wan graph verified live (no longer provisional)');
     ok(!resolveProfile({ id: 'animagine-xl-4' }).provisional, 'proven image profile is not provisional');
   });
 
