@@ -148,7 +148,72 @@ export const TEMPLATE_IMAGE_BASIC: WorkflowTemplate = {
   }),
 };
 
-const REGISTRY = new Map<string, WorkflowTemplate>([[TEMPLATE_IMAGE_BASIC.id, TEMPLATE_IMAGE_BASIC]]);
+// ----------------------------------------------------------------------------
+// REFERENCE-CONDITIONED IMAGE (IP-Adapter) — SAGA's consistency workhorse.
+//
+// Text prompts are a probability distribution, not a specification: they cannot
+// pin a subject's identity or count (this is why "solo" fails to stop a second
+// figure appearing). IP-Adapter feeds a REFERENCE IMAGE as an image-prompt so
+// the model emulates that subject/style, weightable 0..1. This is the first rung
+// of the consistency stack and the foundation every downstream video frame will
+// lean on for character coherence.
+//
+// Requires (installed on the engine box, exposed via extra_model_paths.yaml):
+//   • custom node  ComfyUI_IPAdapter_plus
+//   • models/ipadapter/ip-adapter-plus_sdxl_vit-h.safetensors
+//   • models/clip_vision/CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors
+// The reference file named by ${referenceImage} must live in ComfyUI's input/
+// dir (the worker uploads it via POST /upload/image before submitting).
+//
+// UnifiedLoader auto-resolves the ipadapter + clip_vision models from the preset,
+// so the graph stays free of absolute paths.
+// ----------------------------------------------------------------------------
+export const TEMPLATE_IMAGE_REFERENCE: WorkflowTemplate = {
+  id: 'image-reference@1',
+  jobKind: 'image_gen',
+  inputs: [
+    { name: 'prompt', type: 'string', required: true },
+    { name: 'negative', type: 'string', required: false, default: '' },
+    { name: 'checkpoint', type: 'string', required: true },
+    { name: 'referenceImage', type: 'string', required: true }, // filename in ComfyUI input/
+    { name: 'ipAdapterWeight', type: 'number', required: false, default: 0.6, min: 0, max: 1 },
+    { name: 'seed', type: 'integer', required: false, default: 0, min: 0 },
+    { name: 'steps', type: 'integer', required: false, default: 28, min: 1, max: 150 },
+    { name: 'width', type: 'integer', required: false, default: 1024, min: 256, max: 2048 },
+    { name: 'height', type: 'integer', required: false, default: 1024, min: 256, max: 2048 },
+    { name: 'cfg', type: 'number', required: false, default: 5.5, min: 1, max: 30 },
+  ],
+  graphJson: JSON.stringify({
+    '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: '${checkpoint}' } },
+    '2': { class_type: 'CLIPTextEncode', inputs: { text: '${prompt}', clip: ['1', 1] } },
+    '3': { class_type: 'CLIPTextEncode', inputs: { text: '${negative}', clip: ['1', 1] } },
+    '4': { class_type: 'EmptyLatentImage', inputs: { width: '${width}', height: '${height}', batch_size: 1 } },
+    '8': { class_type: 'LoadImage', inputs: { image: '${referenceImage}' } },
+    '9': { class_type: 'IPAdapterUnifiedLoader', inputs: { model: ['1', 0], preset: 'PLUS (high strength)' } },
+    '10': {
+      class_type: 'IPAdapterAdvanced',
+      inputs: {
+        model: ['9', 0], ipadapter: ['9', 1], image: ['8', 0],
+        weight: '${ipAdapterWeight}', weight_type: 'standard', combine_embeds: 'concat',
+        start_at: 0, end_at: 1, embeds_scaling: 'V only',
+      },
+    },
+    '5': {
+      class_type: 'KSampler',
+      inputs: {
+        seed: '${seed}', steps: '${steps}', cfg: '${cfg}', sampler_name: 'euler',
+        scheduler: 'normal', denoise: 1, model: ['10', 0], positive: ['2', 0], negative: ['3', 0], latent_image: ['4', 0],
+      },
+    },
+    '6': { class_type: 'VAEDecode', inputs: { samples: ['5', 0], vae: ['1', 2] } },
+    '7': { class_type: 'SaveImage', inputs: { filename_prefix: 'dina_ref', images: ['6', 0] } },
+  }),
+};
+
+const REGISTRY = new Map<string, WorkflowTemplate>([
+  [TEMPLATE_IMAGE_BASIC.id, TEMPLATE_IMAGE_BASIC],
+  [TEMPLATE_IMAGE_REFERENCE.id, TEMPLATE_IMAGE_REFERENCE],
+]);
 
 export function getTemplate(id: string): WorkflowTemplate | undefined {
   return REGISTRY.get(id);
