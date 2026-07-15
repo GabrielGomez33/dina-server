@@ -1,7 +1,7 @@
 # DINA / SAGA — Phase Plan
 
 **SAGA** — *Synchronized Audio-visual Generation Architecture* (a saga is a long story; this is the
-machine that tells yours). Storage root: `/mnt/nvme_tugrrstorage2/Dina/SAGA` — configured via
+machine that tells yours). Storage root: `"$SAGA_ROOT"` — configured via
 `SAGA_ROOT`; no code change required (StoragePaths is root-agnostic and traversal-proofed).
 
 | Phase | Name | Delivers | Gate to next |
@@ -22,14 +22,14 @@ Everything here is host setup; nothing touches the running Dina ecosystem. Order
 ### 0.1 — Storage tree on the 4TB NVMe
 
 ```bash
-sudo mkdir -p /mnt/nvme_tugrrstorage2/Dina/SAGA/{models/{checkpoints,vae,clip,upscale,interpolation,lipsync,audio,loras},tenants,tmp,engine,backups}
-sudo chown -R dina:dina /mnt/nvme_tugrrstorage2/Dina/SAGA
+sudo mkdir -p "$SAGA_ROOT"/{models/{checkpoints,vae,clip,upscale,interpolation,lipsync,audio,loras},tenants,tmp,engine,backups}
+sudo chown -R dina:dina "$SAGA_ROOT"
 # Sanity: the volume is the big one and writable
-df -h /mnt/nvme_tugrrstorage2 && touch /mnt/nvme_tugrrstorage2/Dina/SAGA/tmp/.writetest && rm /mnt/nvme_tugrrstorage2/Dina/SAGA/tmp/.writetest
+df -h "$SAGA_ROOT" && touch "$SAGA_ROOT/tmp/.writetest" && rm "$SAGA_ROOT/tmp/.writetest"
 ```
 
 Add to the PM2 env block (ecosystem.config.js) for later phases:
-`SAGA_ROOT: '/mnt/nvme_tugrrstorage2/Dina/SAGA'`
+`SAGA_ROOT: '"$SAGA_ROOT"'`
 
 ### 0.2 — GPU hygiene (one-time, prevents the documented outage class)
 
@@ -45,7 +45,7 @@ systemctl cat ollama | grep -E "OLLAMA_(KEEP_ALIVE|MAX_LOADED_MODELS|NUM_PARALLE
 ### 0.3 — ComfyUI as a pinned, localhost-only service
 
 ```bash
-cd /mnt/nvme_tugrrstorage2/Dina/SAGA/engine
+cd "$SAGA_ROOT"/engine
 git clone https://github.com/comfyanonymous/ComfyUI && cd ComfyUI
 git checkout <latest-release-tag>           # PIN the tag — record it in ops notes
 python3 -m venv venv && source venv/bin/activate
@@ -58,7 +58,7 @@ Point ComfyUI at SAGA's model tree — `extra_model_paths.yaml` in the ComfyUI d
 
 ```yaml
 saga:
-  base_path: /mnt/nvme_tugrrstorage2/Dina/SAGA/models
+  base_path: "$SAGA_ROOT"/models
   checkpoints: checkpoints
   vae: vae
   clip: clip
@@ -87,7 +87,7 @@ Keep Phase 0 small — ~20 GB, all commercial-safe licenses:
 | 4x-UltraSharp or RealESRGAN-anime | upscale | free | upscale/ |
 | RIFE | interpolation (Phase 3, cheap to stage now) | MIT | interpolation/ |
 
-For EVERY download record into `/mnt/nvme_tugrrstorage2/Dina/SAGA/models/MANIFEST.txt`:
+For EVERY download record into `"$SAGA_ROOT"/models/MANIFEST.txt`:
 `sha256sum <file>` + source URL + license. (This file seeds the saga_models registry in Phase 2.)
 Deliberately deferred: FLUX dev (non-commercial license — decide with eyes open), Wan/Hunyuan
 (Phase 3, ~80 GB), TTS models (Phase 4).

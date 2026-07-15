@@ -81,9 +81,15 @@ function assertSafeFilename(value: string): void {
 export class StoragePaths {
   private readonly root: string;
 
-  constructor(root: string = process.env.SAGA_ROOT || '/mnt/nvme_tugrrstorage2/Dina/SAGA') {
+  constructor(root: string | undefined = process.env.SAGA_ROOT) {
+    // SAGA_ROOT is REQUIRED configuration (like DB credentials): it names host
+    // infrastructure, so it lives only in the untracked .env — never baked into
+    // committed code. Missing/relative values fail fast with a pointer.
     if (!root || !path.isAbsolute(root)) {
-      throw new SagaPathError(`SAGA_ROOT must be an absolute path (got ${JSON.stringify(root)})`);
+      throw new SagaPathError(
+        `SAGA_ROOT is not set or not an absolute path (got ${JSON.stringify(root ?? null)}). ` +
+          `Add SAGA_ROOT=/absolute/path to your .env — see src/modules/saga/docs/ENVIRONMENT.md`,
+      );
     }
     this.root = path.resolve(root);
   }

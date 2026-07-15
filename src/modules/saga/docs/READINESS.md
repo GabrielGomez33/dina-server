@@ -21,7 +21,9 @@ rendered output is *re-rollable* and needs no backup. The irreplaceable set is s
 | trained LoRAs, promoted exports | previews, tmp |
 
 **Build items**
-- `backup.sh` + runbook: mysqldump + rsync of the must-back-up set; restore drill documented.
+- `backup.sh` + runbook: mysqldump (`--single-transaction --no-tablespaces --routines`; the
+  `--no-tablespaces` flag avoids the global `PROCESS` privilege the app-scoped `dina_user` correctly
+  lacks) + rsync of the must-back-up set; restore drill documented.
 - Boot recovery: jobs in state `running` at startup → `failed` (reason `crash_recovery`) + policy-based
   re-enqueue. Idempotent job execution (output dir per gen id; partial output overwritten on retry).
 - Janitor reconciliation sweep: filesystem scan vs `bytes_used` (drift repair) + orphan-file

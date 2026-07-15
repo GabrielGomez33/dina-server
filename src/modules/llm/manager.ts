@@ -19,6 +19,20 @@ import {
   fitsBudget,
 } from './llmConfig';
 import { gpuMonitor } from './gpuMonitor';
+import { gpuArbiter } from '../gpu';
+import { LeasePriority } from '../gpu/types';
+
+// ============================================================================
+// GPU ARBITER GATE (dark-launch flag)
+// ============================================================================
+// When DINA_GPU_ARBITER=on, every Ollama call below runs inside a SHARED
+// arbiter lease so LLM work queues fairly against exclusive SAGA renders
+// (which drain the warm set first). When 'off' (the shipping default) every
+// call passes straight through — byte-for-byte the pre-arbiter behaviour.
+// One helper, read per-call, so the flag can be flipped with a pm2 reload.
+function arbiterEnabled(): boolean {
+  return (process.env.DINA_GPU_ARBITER || 'off').trim().toLowerCase() === 'on';
+}
 
 interface OllamaResponse {
   model: string;
@@ -57,6 +71,8 @@ interface OllamaGenerateOptions {
   numCtx?: number;
   /** Override keep_alive (defaults to llmConfig.keepAlive). */
   keepAlive?: string;
+  /** GPU-arbiter scheduling urgency (default 'normal'; chat paths pass 'interactive'). */
+  priority?: 'interactive' | 'normal' | 'background';
 }
 
 export class OllamaClient {
@@ -99,6 +115,20 @@ export class OllamaClient {
    *           this does not trigger a CPU split.
    */
   async generate(prompt: string, model: string, opts?: OllamaGenerateOptions): Promise<OllamaResponse> {
+    if (!arbiterEnabled()) return this._generate(prompt, model, opts);
+    return gpuArbiter.run(
+      {
+        label: `llm.generate:${model}`,
+        engine: 'ollama',
+        estVramMb: estimateTotalVramMb(model),
+        mode: 'shared',
+        priority: (opts?.priority ?? 'normal') as LeasePriority,
+      },
+      () => this._generate(prompt, model, opts),
+    );
+  }
+
+  private async _generate(prompt: string, model: string, opts?: OllamaGenerateOptions): Promise<OllamaResponse> {
     const cfg = getLlmConfig();
     const hasSystem = opts?.system && opts.system.trim().length > 0;
     console.log(`📡 Sending request to Ollama for model ${model}, prompt: "${prompt.substring(0, 50)}..."`);
@@ -222,6 +252,36 @@ export class OllamaClient {
     numGpu?: number;
     numCtx?: number;
     keepAlive?: string;
+    priority?: 'interactive' | 'normal' | 'background';
+  }): AsyncGenerator<{ content: string; done: boolean }> {
+    if (!arbiterEnabled()) {
+      yield* this._generateStream(prompt, model, options);
+      return;
+    }
+    // Streaming holds its lease for the WHOLE stream (a human is reading it) —
+    // acquire/try/finally rather than run(), since the generator outlives the call.
+    const lease = await gpuArbiter.acquire({
+      label: `llm.stream:${model}`,
+      engine: 'ollama',
+      estVramMb: estimateTotalVramMb(model),
+      mode: 'shared',
+      priority: (options?.priority ?? 'interactive') as LeasePriority,
+    });
+    try {
+      yield* this._generateStream(prompt, model, options);
+    } finally {
+      lease.release();
+    }
+  }
+
+  private async *_generateStream(prompt: string, model: string = 'mistral:7b', options?: {
+    maxTokens?: number;
+    temperature?: number;
+    system?: string;
+    numGpu?: number;
+    numCtx?: number;
+    keepAlive?: string;
+    priority?: 'interactive' | 'normal' | 'background';
   }): AsyncGenerator<{ content: string; done: boolean }> {
     const cfg = getLlmConfig();
     console.log(`📡 Starting streaming generation for model ${model}`);
@@ -312,6 +372,21 @@ export class OllamaClient {
   }
 
   async embed(input: string, model?: string): Promise<OllamaEmbeddingResponse> {
+    if (!arbiterEnabled()) return this._embed(input, model);
+    const embedModelName = model || getLlmConfig().embedModel;
+    return gpuArbiter.run(
+      {
+        label: `llm.embed:${embedModelName}`,
+        engine: 'ollama',
+        estVramMb: estimateTotalVramMb(embedModelName),
+        mode: 'shared',
+        priority: 'background', // embeddings are pipeline work — never block chat
+      },
+      () => this._embed(input, model),
+    );
+  }
+
+  private async _embed(input: string, model?: string): Promise<OllamaEmbeddingResponse> {
     const cfg = getLlmConfig();
     const embedModel = model || cfg.embedModel;
     console.log(`📡 Generating embedding for input: "${input.substring(0, 50)}..." using ${embedModel}`);
@@ -668,6 +743,11 @@ export class DinaLLMManager {
       ollamaOpts.temperature = options.temperature;
     }
 
+    // GPU-arbiter urgency: chat paths pass 'interactive'; pipelines 'background'.
+    if (options?.priority) {
+      ollamaOpts.priority = options.priority;
+    }
+
     const ollamaResponse = await this.ollama.generate(query, model, ollamaOpts);
 
     const response: LLMResponse = {
@@ -904,6 +984,9 @@ public async embed(text: string, options?: any): Promise<LLMResponse> {
         numGpu: cfg.numGpu,
         keepAlive: cfg.keepAlive,
       },
+      // Live lease/queue/budget view of the cross-engine GPU arbiter (SAGA
+      // renders vs LLM). enforcement=off means dark launch: registered, not gating.
+      gpuArbiter: { enforcement: arbiterEnabled() ? 'on' : 'off', ...gpuArbiter.snapshot() },
       advisories: this.buildAdvisories(gpu, warmMissing),
     };
   }

@@ -12,6 +12,8 @@ import { digiMOrchestrator } from '../../modules/digim';
 import { isDigiMMethod } from '../../modules/digim/types';
 import { registerTruthStreamRoutes } from '../../modules/mirror/truthStreamRoutes';
 import { registerPersonalAnalysisRoutes } from '../../modules/mirror/personalAnalysisRoutes';
+import { registerSagaRoutes } from '../../modules/saga/sagaRoutes';
+import { gpuArbiter } from '../../modules/gpu';
 
 // FIXED: Add helper function to map trust levels to security clearances
 function mapTrustLevelToSecurityLevel(trustLevel: string): SecurityLevel {
@@ -1927,7 +1929,10 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
 
       console.log(`🔍 DEBUG: Testing model ${testModel} with prompt: "${testPrompt}"`);
 
-      const generateResponse = await fetch('http://localhost:11434/api/generate', {
+      // GPU-arbiter gate: this raw fetch bypasses DinaLLMManager, so it takes
+      // its own shared lease when enforcement is on (never collides with an
+      // exclusive SAGA render). Flag off = plain fetch, exactly as before.
+      const rawOllamaCall = () => fetch('http://localhost:11434/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1936,6 +1941,12 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
           stream: false
         })
       });
+      const generateResponse = (process.env.DINA_GPU_ARBITER || 'off').trim().toLowerCase() === 'on'
+        ? await gpuArbiter.run(
+            { label: 'debug.ollama-raw', engine: 'ollama', estVramMb: 7000, mode: 'shared', priority: 'normal' },
+            rawOllamaCall,
+          )
+        : await rawOllamaCall();
 
       const generateText = await generateResponse.text();
       console.log(`🔍 DEBUG: Generate response status: ${generateResponse.status}`);
@@ -1994,13 +2005,18 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   registerPersonalAnalysisRoutes(apiRouter, dina, createDinaMessage, mapTrustLevelToSecurityLevel);
 
   // ================================
+  // SAGA ROUTES (Image/Video Generation - DUMP Protocol)
+  // ================================
+  registerSagaRoutes(apiRouter, dina, createDinaMessage, mapTrustLevelToSecurityLevel);
+
+  // ================================
   // INTEGRATION COMPLETION
   // ================================
 
   // Mount the router
   app.use(apiPath, apiRouter);
 
-console.log(`   📡 API mounted at ${apiPath} (Mirror, DIGIM, LLM, Admin, TruthStream, PersonalAnalysis)`);
+console.log(`   📡 API mounted at ${apiPath} (Mirror, DIGIM, LLM, Admin, TruthStream, PersonalAnalysis, SAGA)`);
 
   // Optional: Add a routes listing endpoint
   apiRouter.get('/routes', (req: AuthenticatedRequest, res: Response) => {

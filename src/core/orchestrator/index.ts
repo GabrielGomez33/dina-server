@@ -16,6 +16,10 @@ import { ModelType, performanceOptimizer } from '../../modules/llm/intelligence'
 import { digiMOrchestrator} from '../../modules/digim';
 import { isDigiMMessage } from '../../modules/digim/types';
 import { mirrorModule } from '../../modules/mirror';
+import { gpuArbiter, OllamaEngineAdapter } from '../../modules/gpu';
+import { getLlmConfig } from '../../modules/llm/llmConfig';
+import { sagaModule } from '../../modules/saga';
+import { StubJobQueue } from '../../modules/saga/systems/jobQueue';
 import { v4 as uuidv4 } from 'uuid';
 import { performance } from 'perf_hooks';
 
@@ -209,25 +213,51 @@ export class DinaCore {
 
       try {
         // ── Phase 1: Database ──────────────────────────────────────
-        console.log('📦 Phase 1/4 — Database & Auth');
+        console.log('📦 Phase 1/5 — Database & Auth');
         await database.initialize();
 
         // ── Phase 2: LLM System ────────────────────────────────────
-        console.log('🤖 Phase 2/4 — Multi-Model LLM System');
+        console.log('🤖 Phase 2/5 — Multi-Model LLM System');
         await this.llmManager.initialize();
         console.log('   ✅ LLM System ready');
 
+        // GPU Arbiter: register Ollama's drain/restore behaviour so exclusive
+        // SAGA renders can time-share the card. Registration alone changes NO
+        // request path — call wrapping is gated behind DINA_GPU_ARBITER=on
+        // (see modules/llm/manager.ts + src/modules/gpu/docs/INTEGRATION.md).
+        const llmCfg = getLlmConfig();
+        gpuArbiter.configure({
+          budgetMb: llmCfg.vramBudgetMb,
+          reserveMb: parseInt(process.env.DINA_GPU_RESERVE_MB || '512', 10),
+        });
+        gpuArbiter.registerEngine(new OllamaEngineAdapter({ baseUrl: llmCfg.ollamaBaseUrl }));
+        console.log(`   🛡️ GPU Arbiter registered (enforcement: ${(process.env.DINA_GPU_ARBITER || 'off').toLowerCase() === 'on' ? 'ON' : 'off — dark launch'})`);
+
         // ── Phase 3: DIGIM Intelligence ────────────────────────────
-        console.log('🧠 Phase 3/4 — DIGIM Intelligence Module');
+        console.log('🧠 Phase 3/5 — DIGIM Intelligence Module');
         await digiMOrchestrator.initialize();
         const digiMStatus = digiMOrchestrator.moduleStatus;
         console.log(`   ${digiMStatus === 'healthy' ? '✅' : '⚠️'} DIGIM ${digiMStatus} — ${digiMOrchestrator.getActiveSources().length} sources`);
 
         // ── Phase 4: Mirror Module ─────────────────────────────────
-        console.log('🪞 Phase 4/4 — Mirror Module');
+        console.log('🪞 Phase 4/5 — Mirror Module');
         await mirrorModule.initialize();
         const mirrorStatus = mirrorModule.isInitialized;
         console.log(`   ${mirrorStatus ? '✅' : '⚠️'} Mirror ${mirrorStatus ? 'ready' : 'degraded'}`);
+
+        // ── Phase 5: SAGA Module ───────────────────────────────────
+        // Image/video generation limb. Phase 1 wiring: full DUMP surface +
+        // tenancy/quota live; jobs are RECORDED (saga_jobs) but not executed —
+        // the StubJobQueue below is replaced by the Phase 2 generation worker
+        // behind the same JobQueuePort. Errors here degrade SAGA only, never
+        // the rest of the ecosystem (module isolation, same as mirror/digim).
+        console.log('🎬 Phase 5/5 — SAGA Module');
+        try {
+          await sagaModule.initialize({ db: database, jobs: new StubJobQueue() });
+          console.log(`   ${sagaModule.isInitialized ? '✅' : '⚠️'} SAGA ${sagaModule.isInitialized ? 'ready (execution engine: Phase 2)' : 'degraded'}`);
+        } catch (sagaErr) {
+          console.error(`   ⚠️ SAGA initialization failed (isolated, non-fatal): ${(sagaErr as Error).message}`);
+        }
 
         // ── Queue Processors ───────────────────────────────────────
         this.initialized = true;
@@ -429,8 +459,18 @@ private startQueueProcessors(): void {
          	 responsePayload = await this.processMirrorRequest(sanitizedMessage);
         	 break;
 
+          case 'saga': {
+            console.log('🎬 Processing SAGA request');
+            const sagaSession = {
+              userId: sanitizedMessage.security.user_id || 'anonymous',
+              sessionId: sanitizedMessage.security.session_id || 'default',
+            };
+            responsePayload = await sagaModule.handleSagaMessage(sanitizedMessage as any, sagaSession);
+            break;
+          }
+
           default:
-            const availableModules = ['core', 'llm', 'database', 'system', 'digim', 'mirror'];
+            const availableModules = ['core', 'llm', 'database', 'system', 'digim', 'mirror', 'saga'];
             throw new Error(
               `Unknown target module: "${targetModule}". ` +
               `Available modules: ${availableModules.join(', ')}`
@@ -838,7 +878,8 @@ private async processLLMRequest(message: DinaUniversalMessage): Promise<any> {
         streaming: streaming,
         max_tokens: 1000,
         temperature: 0.7,
-        system_prompt: systemPrompt
+        system_prompt: systemPrompt,
+        priority: 'interactive' // a human is waiting — beats queued renders/pipelines
       });
 
       const processingTime = performance.now() - startTime;
@@ -1020,6 +1061,10 @@ GUIDELINES:
 
 	  await mirrorModule.shutdown();
 	  console.log('✅ Mirror shutdown complete');
+
+      await sagaModule.shutdown();
+      gpuArbiter.shutdown();
+      console.log('✅ SAGA + GPU arbiter shutdown complete');
 
       await redisManager.shutdown();
       await database.close();

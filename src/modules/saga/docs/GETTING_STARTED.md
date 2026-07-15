@@ -56,21 +56,41 @@ npm run migrate:status
 
 ## PART II — Phase 0: host environment (no dina-server changes)
 
-### G. Create the SAGA storage tree on the 4TB NVMe
-```bash
-sudo mkdir -p /mnt/nvme_tugrrstorage2/Dina/SAGA/{models/{checkpoints,vae,clip,upscale,interpolation,lipsync,audio,loras},tenants,tmp,engine,backups}
-sudo chown -R dina:dina /mnt/nvme_tugrrstorage2/Dina/SAGA
-```
-**Verify:** `df -h /mnt/nvme_tugrrstorage2` shows the 4TB volume;
-`touch /mnt/nvme_tugrrstorage2/Dina/SAGA/tmp/.w && rm $_` succeeds as the dina user.
+> **Define your storage root once, privately.** Pick the SAGA root on your 4TB SSD and export it in
+> your shell for the commands below; the same value goes into `.env` at step H. The path is
+> deployment configuration — it never appears in committed files.
+> ```bash
+> export SAGA_ROOT=/absolute/path/on/your/4tb/ssd    # e.g. under your NVMe mount
+> ```
 
-### H. Stage the env var (takes effect at the Part III deploy)
-In `ecosystem.config.js` → `env:` block, add:
-```js
-SAGA_ROOT: '/mnt/nvme_tugrrstorage2/Dina/SAGA',
-DINA_GPU_ARBITER: 'off',        // arbiter ships dark; turned on at step W
+### G. Create the SAGA storage tree on the 4TB NVMe (group-based permissions)
+```bash
+sudo mkdir -p "$SAGA_ROOT"/{models/{checkpoints,vae,clip,upscale,interpolation,lipsync,audio,loras},tenants,tmp,engine,backups}
+# Durable access model: dedicated group + setgid, so the dina user AND the
+# pm2-managed processes can read/write, and NEW files inherit the group forever.
+sudo groupadd -f saga
+sudo usermod -aG saga dina        # re-login (or `newgrp saga`) to activate
+sudo chown -R dina:saga "$SAGA_ROOT"
+sudo find "$SAGA_ROOT" -type d -exec chmod 2775 {} +
 ```
-**Verify:** `node -e "console.log(require('./ecosystem.config.js').apps[0].env)"` prints both.
+**Verify:** `df -h "$SAGA_ROOT"` shows the 4TB volume; `id | grep saga` shows membership;
+`touch "$SAGA_ROOT"/tmp/.w && rm $_` succeeds as the dina user;
+`ls -ld "$SAGA_ROOT"` shows `drwxrwsr-x ... dina saga` (note the `s`).
+Full permission model + rationale: `docs/ENVIRONMENT.md`.
+
+### H. Set the environment variables in .env (untracked — like DB credentials)
+Infrastructure values live only in the untracked `.env` (dotenv loads it in `src/index.ts`, same as
+`DB_PASSWORD`). Template: `.env.example`; registry: `docs/ENVIRONMENT.md`.
+```bash
+{
+  echo "SAGA_ROOT=$SAGA_ROOT"
+  echo "DINA_GPU_ARBITER=off"
+  echo "DINA_GPU_RESERVE_MB=512"
+} >> /var/www/dina-server/.env
+```
+**Verify:** `grep -c "SAGA_ROOT\|DINA_GPU" .env` → 3, and `git check-ignore .env` confirms it can
+never be committed. Without `SAGA_ROOT`, the saga module degrades at startup with a clear error
+(isolated — the rest of Dina is unaffected).
 
 ### I. GPU hygiene (prevents the documented outage class)
 ```bash
@@ -90,7 +110,7 @@ file's header, `systemctl daemon-reload && systemctl restart ollama`, then re-ru
 
 ### K. Install ComfyUI — pinned, venv'd, localhost-only
 ```bash
-cd /mnt/nvme_tugrrstorage2/Dina/SAGA/engine
+cd "$SAGA_ROOT"/engine
 git clone https://github.com/comfyanonymous/ComfyUI && cd ComfyUI
 git tag --sort=-creatordate | head -3        # pick the newest release tag
 git checkout <that-tag>                      # PIN it — write the tag down
@@ -106,7 +126,7 @@ deactivate
 Create `extra_model_paths.yaml` in the ComfyUI directory:
 ```yaml
 saga:
-  base_path: /mnt/nvme_tugrrstorage2/Dina/SAGA/models
+  base_path: "$SAGA_ROOT"/models
   checkpoints: checkpoints
   vae: vae
   clip: clip
@@ -116,7 +136,7 @@ saga:
 
 ### M. Run ComfyUI under PM2, bound to localhost
 ```bash
-cd /mnt/nvme_tugrrstorage2/Dina/SAGA/engine/ComfyUI
+cd "$SAGA_ROOT"/engine/ComfyUI
 pm2 start "venv/bin/python main.py --listen 127.0.0.1 --port 8188" --name saga-comfyui
 pm2 save
 ```
@@ -131,8 +151,8 @@ Into `SAGA/models/`: FLUX.1 **schnell** fp8 (Apache 2.0) → `checkpoints/`; one
 (check its license page) → `checkpoints/`; RealESRGAN-anime or 4x-UltraSharp → `upscale/`; RIFE →
 `interpolation/`. For **every** file:
 ```bash
-sha256sum <file> >> /mnt/nvme_tugrrstorage2/Dina/SAGA/models/MANIFEST.txt
-echo "  source: <url>  license: <license>" >> /mnt/nvme_tugrrstorage2/Dina/SAGA/models/MANIFEST.txt
+sha256sum <file> >> "$SAGA_ROOT"/models/MANIFEST.txt
+echo "  source: <url>  license: <license>" >> "$SAGA_ROOT"/models/MANIFEST.txt
 ```
 **Deliberately deferred:** FLUX dev (non-commercial license), Wan/Hunyuan (Phase 3), TTS (Phase 4).
 **Verify:** MANIFEST.txt has hash+source+license for every model on disk.
@@ -154,7 +174,7 @@ Record what you see. If Ollama got split/evicted, you have witnessed the exact f
 won't, by design.
 
 ### Q. Phase 0 exit checklist
-- [ ] SAGA tree on the 4TB NVMe, dina-owned; `SAGA_ROOT` + `DINA_GPU_ARBITER=off` staged in PM2 env
+- [ ] SAGA tree on the 4TB NVMe with `saga` group + setgid perms (dina user verified read/write); env vars confirmed via step H (committed in ecosystem.config.js, registry in docs/ENVIRONMENT.md)
 - [ ] GPU: verify-gpu healthy, driver pinned, persistence on, power cap set
 - [ ] ComfyUI: pinned tag, locked venv, PM2-managed, localhost-only, sees the 3090 Ti
 - [ ] Models hashed + licensed in MANIFEST.txt
@@ -169,8 +189,8 @@ won't, by design.
 
 ### R. Back up the database FIRST (enterprise rule: no schema change without a restore path)
 ```bash
-mysqldump -u dina_user -p --single-transaction --routines dina \
-  > /mnt/nvme_tugrrstorage2/Dina/SAGA/backups/dina-pre-saga-$(date +%Y%m%d-%H%M).sql
+mysqldump -u dina_user -p --single-transaction --no-tablespaces --routines dina \
+  > "$SAGA_ROOT"/backups/dina-pre-saga-$(date +%Y%m%d-%H%M).sql
 ```
 **Verify:** file exists and is non-trivially sized. *Rollback for step S is this file.*
 
@@ -185,24 +205,20 @@ mysql -u dina_user -p dina -e "SHOW TABLES LIKE 'saga_%';"
 saga_audio_tracks, saga_generations, saga_jobs. **Rollback:** `npm run migrate:down` (drops them,
 FK-ordered — safe now, before any data).
 
-### T. Wire the GPU arbiter — registration only, flag OFF
-Follow `src/modules/gpu/docs/INTEGRATION.md` **Steps 1–2 only** (register `OllamaEngineAdapter` +
-expose `gpuArbiter.snapshot()` in diagnostics). The flag is `off`, so no request path changes.
+### T + U. Deploy the wiring (ALREADY IMPLEMENTED on this branch — no manual edits)
+The arbiter registration, SAGA Phase-5 init (with StubJobQueue), orchestrator `case 'saga'`, route
+mounting, and the flag-gated call wrapping are all committed code. Your step is only:
 ```bash
-npm run build && npm run deploy    # zero-downtime pm2 reload
+git pull && npm install && npm run build
+npm run test:gpu && npm run test:saga && npm run test:saga:render   # green before deploy
+npm run deploy                                                       # zero-downtime pm2 reload
 ```
-**Verify:** logs show normal startup; @Dina chat works exactly as before; diagnostics payload now
-contains a `gpuArbiter` block with `queueDepth: 0`. **Rollback:** revert the two edits, redeploy.
-
-### U. Wire the SAGA module — init + orchestrator case + routes
-Follow `src/modules/saga/docs/INTEGRATION.md` Steps 2–4: `sagaModule.initialize({db: database,
-jobs: <stub queue>})` as Phase 5 in `DinaCore.initialize()`, the additive `case 'saga'` in the
-orchestrator switch, and `registerSagaRoutes(...)` next to `registerTruthStreamRoutes(...)`.
-```bash
-npm run build && npm run deploy
-```
-**Verify:** startup logs show `🎬 Saga Module v0.1.0 initialized`; all existing endpoints unaffected.
-**Rollback:** comment out the three additive blocks, redeploy.
+**Verify in `pm2 logs dina-server`:**
+- `🛡️ GPU Arbiter registered (enforcement: off — dark launch)`
+- `🎬 Phase 5/5 — SAGA Module` → `✅ SAGA ready (execution engine: Phase 2)`
+- @Dina chat behaves exactly as before (flag is off — byte-identical path).
+**Rollback:** `git revert` the wiring commit, redeploy. (The wiring is additive + flag-gated, so the
+practical rollback for behaviour is the flag itself — see W.)
 
 ### V. Smoke-test the SAGA surface (positive AND negative)
 ```bash
@@ -210,19 +226,19 @@ npm run build && npm run deploy
 curl -s https://theundergroundrailroad.world/dina/saga/status -H "Authorization: Bearer <token>"
 # create your tenant → returns tenantId; caller becomes owner
 curl -s -X POST .../dina/saga/tenants -d '{"name":"Gabriel","slug":"gabriel","plan":"admin"}' ...
-# create the first project → returns projectId + storageRoot under /mnt/nvme_tugrrstorage2/Dina/SAGA/tenants/...
+# create the first project → returns projectId + storageRoot under "$SAGA_ROOT"/tenants/...
 curl -s -X POST .../dina/saga/<tenantId>/projects -d '{"slug":"the-story"}' ...
 ```
 **Negative smokes (must fail correctly):** unauthenticated → 401 · a second user on your tenant →
 403 FORBIDDEN · malformed body → 400 INVALID_REQUEST · traversal slug → rejected.
 **Verify in DB:** rows in saga_tenants / saga_memberships (role=owner) / saga_projects.
 
-### W. Turn the arbiter ON (the load-balancing go-live)
-Apply `src/modules/gpu/docs/INTEGRATION.md` **Steps 3–4** (wrap the three `OllamaClient` methods +
-the raw debug route), set `DINA_GPU_ARBITER: 'on'`, `npm run build && npm run deploy`.
+### W. Turn the arbiter ON (the load-balancing go-live — one env flip)
+The call wrapping is already committed (flag-gated). Go-live is only:
+`ecosystem.config.js` → `DINA_GPU_ARBITER: 'on'` → `npm run deploy`.
 **Verify:** @Dina chat latency unchanged (shared leases admit instantly on an idle card);
-diagnostics `gpuArbiter.totals.granted` climbs with each chat. **Rollback:** flip the env to `off`,
-`pm2 reload` — behavior byte-identical to before.
+diagnostics `gpuArbiter` block shows `enforcement: 'on'` and `totals.granted` climbing with each
+chat. **Rollback:** flip back to `'off'`, `npm run deploy` — behavior byte-identical to before.
 
 ### X. The arbitration drill (prove the whole thesis on real hardware)
 In `node` REPL against the built dist (or a temporary admin route):
