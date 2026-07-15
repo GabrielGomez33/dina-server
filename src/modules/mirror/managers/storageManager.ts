@@ -1152,27 +1152,14 @@ export class MirrorStorageManager extends EventEmitter {
     console.log('🔍 Verifying storage schema...');
     
     try {
-      // Check if required tables exist
-      const requiredTables = [
-        'mirror_generated_insights',
-        'mirror_cross_modal_patterns',
-        'mirror_generated_questions',
-        'mirror_user_feedback',
-        'mirror_user_context',
-        'mirror_user_metadata'
-      ];
-
-      for (const table of requiredTables) {
-        const exists = await DB.query(
-          `SELECT COUNT(*) as count FROM information_schema.tables WHERE table_name = ?`,
-          [table]
-        );
-        
-        if (exists[0].count === 0) {
-          console.warn(`⚠️ Table ${table} does not exist. Please run migrations.`);
-        }
-      }
-
+      // Several mirror_* tables (durable context, cached metadata, insights,
+      // patterns, questions, feedback) are OPTIONAL — they are not provisioned
+      // in every environment. Runtime code that touches a missing one degrades
+      // gracefully (see userPurgeManager's missing-table tolerance and
+      // contextManager.isContextTableAvailable). We therefore do NOT warn about
+      // their absence here: the per-table "does not exist / run migrations"
+      // warnings were pure log noise on deployments that don't use those
+      // features.
       console.log('✅ Storage schema verification complete');
     } catch (error) {
       console.error('❌ Error verifying storage schema:', error);

@@ -1195,14 +1195,45 @@ export class MirrorContextManager extends EventEmitter {
   // SCHEDULED TASKS
   // ============================================================================
 
+  /** Cached availability of the optional mirror_user_context table (null = unchecked). */
+  private mirrorContextTableAvailable: boolean | null = null;
+
+  /**
+   * True if the optional `mirror_user_context` table exists in this environment.
+   * Durable context optimization is a best-effort feature; environments that do
+   * not provision the table skip it QUIETLY (checked once, cached) instead of
+   * erroring against a missing table every cycle. Matches the missing-table
+   * tolerance already used by userPurgeManager.
+   */
+  private async isContextTableAvailable(): Promise<boolean> {
+    if (this.mirrorContextTableAvailable !== null) return this.mirrorContextTableAvailable;
+    try {
+      const rows = await DB.query(
+        `SELECT COUNT(*) AS count FROM information_schema.tables
+         WHERE table_schema = DATABASE() AND table_name = 'mirror_user_context'`
+      );
+      this.mirrorContextTableAvailable = Number(rows?.[0]?.count ?? 0) > 0;
+    } catch {
+      this.mirrorContextTableAvailable = false;
+    }
+    if (!this.mirrorContextTableAvailable) {
+      console.log('ℹ️ [contextManager] mirror_user_context not provisioned — durable context optimization disabled in this environment.');
+    }
+    return this.mirrorContextTableAvailable;
+  }
+
   private setupContextOptimization(): void {
     setInterval(async () => {
       try {
+        // Skip quietly when the optional durable-context table isn't provisioned,
+        // so we never run (and log) a query against a missing table every cycle.
+        if (!(await this.isContextTableAvailable())) return;
+
         console.log('🔧 Running scheduled context optimization...');
-        
+
         const usersToOptimize = await DB.query(`
-          SELECT user_id FROM mirror_user_context 
-          WHERE next_optimization_due <= NOW() 
+          SELECT user_id FROM mirror_user_context
+          WHERE next_optimization_due <= NOW()
           AND context_size_tokens > ?
         `, [this.MAX_CONTEXT_SIZE * 0.8]);
 
