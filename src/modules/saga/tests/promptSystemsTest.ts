@@ -95,6 +95,13 @@ async function main(): Promise<void> {
     eq(g['8'].inputs.image, 'exodia_ref.png', 'reference image filename bound into LoadImage');
     eq(g['10'].inputs.weight, 0.7, 'IP-Adapter weight bound as a NUMBER, not a string');
     eq(g['10'].class_type, 'IPAdapterAdvanced', 'IP-Adapter node present in the graph');
+    // weight_type must be a value the installed IPAdapterAdvanced accepts. 'standard'
+    // was rejected live (value_not_in_list); 'linear' is the valid general-purpose type.
+    ok(
+      ['linear', 'ease in', 'ease out', 'ease in-out', 'style transfer', 'composition']
+        .includes(g['10'].inputs.weight_type),
+      'weight_type is a value the node accepts (regression guard for the live rejection)',
+    );
     eq(g['5'].inputs.model[0], '10', 'KSampler consumes the IP-Adapter-modified model, not the raw checkpoint');
     eq(g['2'].inputs.text, 'exodia, (dark:1.4)', 'prompt text lands verbatim (weights preserved)');
   });

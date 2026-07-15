@@ -194,7 +194,7 @@ export const TEMPLATE_IMAGE_REFERENCE: WorkflowTemplate = {
       class_type: 'IPAdapterAdvanced',
       inputs: {
         model: ['9', 0], ipadapter: ['9', 1], image: ['8', 0],
-        weight: '${ipAdapterWeight}', weight_type: 'standard', combine_embeds: 'concat',
+        weight: '${ipAdapterWeight}', weight_type: 'linear', combine_embeds: 'concat',
         start_at: 0, end_at: 1, embeds_scaling: 'V only',
       },
     },
