@@ -62,21 +62,44 @@ function safeJsonResponse(res: Response, statusCode: number, body: Record<string
   }
 }
 
-/** Unwrap the orchestrator's DUMP double-wrap (documented in truthStreamRoutes). */
-function extractDumpResponseData(response: any): { data: any; error: any } {
-  const inner = response?.payload?.data;
-  if (inner?.status === 'success') {
-    const payloadData = inner.payload?.data;
-    return { data: payloadData?.data ?? payloadData, error: null };
+export interface SagaResult {
+  success: boolean;
+  data?: any;
+  error?: { code: string; message: string };
+}
+
+/**
+ * Extract the SagaHandlerResult the module returned from the orchestrator's
+ * envelope.
+ *
+ * IMPORTANT — SAGA differs from the mirror pattern: mirror handlers return a
+ * full `createDinaResponse` (so the value carries a `.status`), which the
+ * orchestrator then wraps a SECOND time. SAGA handlers instead return a plain
+ * `{ success, data|error }` (`SagaHandlerResult`), which the orchestrator wraps
+ * ONCE — so it lands verbatim at `response.payload.data`. This function reads
+ * that single-wrap shape (the old copy-from-mirror version looked for
+ * `inner.status` and mis-classified every SAGA response as an error → HTTP 500).
+ */
+export function extractSagaResult(response: any): SagaResult {
+  // Orchestrator-level failure (protocol invalid, handler threw past its own
+  // try/catch, recursion guard, …): handleIncomingMessage sets status:'error'.
+  if (response?.status === 'error') {
+    return {
+      success: false,
+      error: { code: 'PROCESSING_ERROR', message: response?.error?.message || 'Processing error' },
+    };
   }
-  return {
-    data: null,
-    error: inner?.error || response?.error || { code: 'UNKNOWN', message: 'Unknown error' },
-  };
+  const inner = response?.payload?.data;
+  // Normal path: inner IS the SagaHandlerResult the module returned.
+  if (inner && typeof inner.success === 'boolean') {
+    return inner as SagaResult;
+  }
+  // Defensive: an envelope shape we don't recognise is a server-side fault.
+  return { success: false, error: { code: 'INTERNAL', message: 'Unexpected response shape from orchestrator' } };
 }
 
 /** Map a saga handler error code to an HTTP status (uniform, predictable API). */
-function httpStatusFor(code: string): number {
+export function httpStatusFor(code: string): number {
   switch (code) {
     case 'INVALID_REQUEST':
       return 400;
@@ -129,22 +152,18 @@ export function registerSagaRoutes(
       });
 
       const response = await dina.handleIncomingMessage(message);
-      const { data: result, error } = extractDumpResponseData(response);
+      const result = extractSagaResult(response);
 
-      if (error) {
-        safeJsonResponse(res, httpStatusFor(error.code), { success: false, error: error.message, code: error.code });
-        return;
-      }
-      // Handlers return SagaHandlerResult; surface its error codes as HTTP.
-      if (result && result.success === false && result.error) {
-        safeJsonResponse(res, httpStatusFor(result.error.code), {
+      if (!result.success) {
+        const code = result.error?.code || 'INTERNAL';
+        safeJsonResponse(res, httpStatusFor(code), {
           success: false,
-          error: result.error.message,
-          code: result.error.code,
+          error: result.error?.message || 'Request failed',
+          code,
         });
         return;
       }
-      safeJsonResponse(res, 200, { success: true, ...(result?.data !== undefined ? { data: result.data } : { data: result }) });
+      safeJsonResponse(res, 200, { success: true, data: result.data });
     } catch (e: any) {
       console.error(`[Saga] ${method} route error:`, e.message);
       safeJsonResponse(res, 500, { success: false, error: 'Internal error', code: 'INTERNAL' });

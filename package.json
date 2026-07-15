@@ -27,6 +27,7 @@
     "test:gpu": "ts-node src/modules/gpu/tests/gpuArbiterTest.ts",
     "test:saga": "ts-node src/modules/saga/tests/sagaFoundationTest.ts",
     "test:saga:render": "ts-node src/modules/saga/tests/renderSystemsTest.ts",
+    "test:saga:routes": "ts-node src/modules/saga/tests/routeContractTest.ts",
     "test:migration": "ts-node test/digim/migrationTest.ts",
     "test:memory": "ts-node test/digim/memoryTest.ts",
     "test:tools": "ts-node test/digim/toolTest.ts",
