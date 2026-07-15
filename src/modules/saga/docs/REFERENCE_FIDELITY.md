@@ -51,6 +51,22 @@ constrain generation to it. This is what makes the mask *stay* a mask. Applied a
 weighted layer in the reference workflow (`controlnet_strength` 0..1) so callers trade
 faithfulness against creative freedom — the same dial philosophy as IP-Adapter weight.
 
+## The fidelity dial (0–10) — one control, coordinated knobs
+
+Users never touch raw weights. They set a single **fidelity level 0–10** and
+`core/fidelity.ts` maps it onto every reference-adherence knob at once, monotonically:
+
+| Level | Meaning | ipAdapterWeight | controlnetStrength | denoise |
+|---|---|---|---|---|
+| 0 | free drawing | 0.25 | 0.00 (off) | 1.00 |
+| 5 | balanced | 0.575 | 0.50 | 0.725 |
+| 10 | near-copy | 0.90 | 1.00 | 0.45 |
+
+How it fits the "built character" workflow: a trained **LoRA** holds *identity*
+permanently, **ControlNet** supplies *pose*, and this dial sets *how faithfully* the
+render tracks the reference. Styling stays put; position varies. The mapping is pure and
+proven (`tests/fidelityTest.ts`: endpoints, monotonicity, bounds, clamping).
+
 ## Calibrated defaults (policy, not per-subject)
 
 - **IP-Adapter weight:** 0.6–0.8. Below 0.5 loses identity; above 0.8 the reference overpowers
