@@ -38,5 +38,39 @@ unit tests alone were insufficient.
   rollback is the same flip back to `off`.
 - **Pre-existing mirror debt** — `mirror_user_context` / `mirror_user_metadata` tables missing on this
   box (a mirror migration never run here; errors predate SAGA). Unrelated to SAGA; fix on its own.
-- **Phase 0 engine** — ComfyUI + starter models (runbook steps K–P) still to be installed before
-  Phase 2 can render for real.
+- **Phase 0 engine** — ✅ now live and proven; see the section below.
+
+## Phase 0 — Engine live (ComfyUI + render pipeline) — ✅ SIGNED OFF 2026-07-15
+
+**Engine:** ComfyUI (pinned tag) running under pm2 as `saga-comfyui`, bound localhost-only
+(`--listen 127.0.0.1 --port 8188`). GPU-backed (CUDA available). Triton JIT resolved
+(`python3.12-dev` provided `Python.h`).
+
+**Model tree consolidation:** collapsed the two competing model roots into ONE canonical tree
+(the managed SAGA storage tree); ComfyUI's built-in `models/` is now a symlink to it, and the
+redundant `extra_model_paths.yaml` indirection was retired. Single source of truth — no model can
+be "in the wrong root" again. Starter checkpoints in place: an anime SDXL model and a general
+FLUX model, each provenance-hashed in the tree's `MANIFEST.txt`.
+
+**Proven live (all passed):**
+
+| Check | Result |
+|---|---|
+| Base text→image render | ✅ SDXL 1024², 28 steps, ~9 s warm |
+| **GPU coexistence (the core Goal-#1 question)** | ✅ Ollama held 2 models **100% GPU (not evicted)** while a full SDXL render ran alongside — peak ≈ 13 GB of 23 GB. The single-GPU contention fear does **not** materialize for the SDXL-class path; it space-shares cleanly. (Arbiter *exclusive drain* is reserved for the heavy video models that genuinely can't fit next to Ollama.) |
+| Prompt control | ✅ mood fully steerable — weighted tags `(dark:1.4)`, `(black background:1.3)`, `(glowing red eyes:1.3)` pulled the model out of its bright-heroic prior into a dark/ominous result |
+| Single-subject control | ✅ the model's "giant + tiny onlooker" scale-prior (a spurious 2nd figure) suppressed via negative `(2boys:1.4), multiple people, extra person`. Note: this is a *prompt* mitigation; ControlNet is the eventual *structural* guarantee |
+| **Reference conditioning (IP-Adapter)** | ✅ `IPAdapterUnifiedLoader` + `IPAdapterAdvanced` with `ip-adapter-plus_sdxl_vit-h` + CLIP-ViT-H. A classic reference image transferred subject identity onto the generation while the prompt kept mood. Weight dial characterized live: **0.5–0.7 = identity locked + coherent; ≥0.8 = reference overpowers structure (forms melt).** This is the first rung of the consistency stack, working. |
+
+**Bug found & fixed live:** `IPAdapterAdvanced` rejected `weight_type:'standard'` (an older node
+label) — `value_not_in_list`. Corrected to `linear` in both the box script and the repo template
+(`image-reference@1`), with a regression-guard assertion. Commit `07f73c5`.
+
+**Known follow-ups from Phase 0 (next work):**
+- **Hands** — universal diffusion weakness (seen: merged/miscounted fingers when hands are in
+  frame). Fix is Stage 3 refinement: a detailer pass (Impact-Pack + `hand_yolov8`), not an
+  embedding. Tracked in `TOOLCHAIN.md`.
+- **`saga-comfyui` runs as root** under pm2 — outputs land root-owned. Housekeeping: relaunch as
+  `dina`. Non-blocking.
+- **Arbiter still dark** — flip to `on` once the heavy (video) stages that need exclusive turns
+  come online.
