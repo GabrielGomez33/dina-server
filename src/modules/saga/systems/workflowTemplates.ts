@@ -210,9 +210,69 @@ export const TEMPLATE_IMAGE_REFERENCE: WorkflowTemplate = {
   }),
 };
 
+// ----------------------------------------------------------------------------
+// VIDEO — Wan 2.2 TI2V (image→video). The motion half of the relay:
+// Animagine+IP-Adapter produce the keyframe, Wan animates it. Wan 5B at ~18 GB
+// is a HEAVY model — it takes an EXCLUSIVE GPU lease (drains Ollama) via the
+// arbiter; the model registry enforces that pairing.
+//
+// ⚠️ PROVISIONAL GRAPH: Wan node class names / socket order are verified against
+// the LIVE ComfyUI during Phase 2 wiring (same "template in repo → verify live →
+// fix" loop that corrected IP-Adapter's weight_type). The BINDING LOGIC below is
+// what the harness proves; ComfyUI-node correctness is a separate live gate,
+// tracked in VERIFICATION.md. Do not mark this non-provisional until it renders.
+// ----------------------------------------------------------------------------
+export const TEMPLATE_VIDEO_I2V_WAN: WorkflowTemplate = {
+  id: 'video-i2v-wan@1',
+  jobKind: 'video_gen',
+  inputs: [
+    { name: 'diffusionModel', type: 'string', required: true },
+    { name: 'textEncoder', type: 'string', required: true },
+    { name: 'vae', type: 'string', required: true },
+    { name: 'prompt', type: 'string', required: true },
+    { name: 'negative', type: 'string', required: false, default: '' },
+    { name: 'referenceImage', type: 'string', required: true }, // start frame, in ComfyUI input/
+    { name: 'width', type: 'integer', required: false, default: 1280, min: 256, max: 1280 },
+    { name: 'height', type: 'integer', required: false, default: 704, min: 256, max: 1280 },
+    { name: 'length', type: 'integer', required: false, default: 49, min: 8, max: 161 }, // frames
+    { name: 'fps', type: 'integer', required: false, default: 24, min: 8, max: 60 },
+    { name: 'seed', type: 'integer', required: false, default: 0, min: 0 },
+    { name: 'steps', type: 'integer', required: false, default: 30, min: 1, max: 100 },
+    { name: 'cfg', type: 'number', required: false, default: 5, min: 1, max: 20 },
+  ],
+  graphJson: JSON.stringify({
+    '1': { class_type: 'UNETLoader', inputs: { unet_name: '${diffusionModel}', weight_dtype: 'fp8_e4m3fn' } },
+    '2': { class_type: 'CLIPLoader', inputs: { clip_name: '${textEncoder}', type: 'wan' } },
+    '3': { class_type: 'VAELoader', inputs: { vae_name: '${vae}' } },
+    '4': { class_type: 'CLIPTextEncode', inputs: { text: '${prompt}', clip: ['2', 0] } },
+    '5': { class_type: 'CLIPTextEncode', inputs: { text: '${negative}', clip: ['2', 0] } },
+    '6': { class_type: 'LoadImage', inputs: { image: '${referenceImage}' } },
+    '7': {
+      class_type: 'WanImageToVideo',
+      inputs: {
+        positive: ['4', 0], negative: ['5', 0], vae: ['3', 0], start_image: ['6', 0],
+        width: '${width}', height: '${height}', length: '${length}', batch_size: 1,
+      },
+    },
+    '8': {
+      class_type: 'KSampler',
+      inputs: {
+        seed: '${seed}', steps: '${steps}', cfg: '${cfg}', sampler_name: 'uni_pc', scheduler: 'simple',
+        denoise: 1, model: ['1', 0], positive: ['7', 0], negative: ['7', 1], latent_image: ['7', 2],
+      },
+    },
+    '9': { class_type: 'VAEDecode', inputs: { samples: ['8', 0], vae: ['3', 0] } },
+    '10': {
+      class_type: 'VHS_VideoCombine',
+      inputs: { images: ['9', 0], frame_rate: '${fps}', filename_prefix: 'saga_video', format: 'video/h264-mp4' },
+    },
+  }),
+};
+
 const REGISTRY = new Map<string, WorkflowTemplate>([
   [TEMPLATE_IMAGE_BASIC.id, TEMPLATE_IMAGE_BASIC],
   [TEMPLATE_IMAGE_REFERENCE.id, TEMPLATE_IMAGE_REFERENCE],
+  [TEMPLATE_VIDEO_I2V_WAN.id, TEMPLATE_VIDEO_I2V_WAN],
 ]);
 
 export function getTemplate(id: string): WorkflowTemplate | undefined {
