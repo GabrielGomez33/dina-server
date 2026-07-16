@@ -31,6 +31,7 @@
     "test:saga:prompt": "ts-node src/modules/saga/tests/promptSystemsTest.ts",
     "test:saga:models": "ts-node src/modules/saga/tests/modelRegistryTest.ts",
     "test:saga:fidelity": "ts-node src/modules/saga/tests/fidelityTest.ts",
+    "test:saga:worker": "ts-node src/modules/saga/tests/generationWorkerTest.ts",
     "test:migration": "ts-node test/digim/migrationTest.ts",
     "test:memory": "ts-node test/digim/memoryTest.ts",
     "test:tools": "ts-node test/digim/toolTest.ts",
