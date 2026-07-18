@@ -79,7 +79,7 @@ fi
 CID="sagaflf-$$-$RANDOM"
 upload(){ local f="$1"; [ -f "$f" ] || die "file not found: $f"; curl -sf -F "image=@${f}" -F "overwrite=true" "$COMFY/upload/image" | jq -r '.name' || die "upload failed: $f"; }
 submit(){ curl -sf -X POST "$COMFY/prompt" --data "$(jq -nc --slurpfile g "$1" --arg c "$CID" '{prompt:$g[0], client_id:$c}')" | jq -r '.prompt_id' || die "submit rejected — check node errors"; }
-wait_done(){ local id="$1" t=0 h st; while :; do h=$(curl -sf "$COMFY/history/$id"); if [ "$(jq -r --arg i "$id" 'has($i)' <<<"$h")" = "true" ]; then st=$(jq -r --arg i "$id" '.[$i].status.status_str // "ok"' <<<"$h"); [ "$st" = "error" ] && die "execution error for $id"; echo "$h"; return 0; fi; t=$((t+3)); [ "$t" -gt 1800 ] && die "timeout waiting for $id"; sleep 3; done; }
+wait_done(){ local id="$1" t=0 h st; while :; do h=$(curl -sf "$COMFY/history/$id"); if [ "$(jq -r --arg i "$id" 'has($i)' <<<"$h")" = "true" ]; then st=$(jq -r --arg i "$id" '.[$i].status.status_str // "ok"' <<<"$h"); if [ "$st" = "error" ]; then jq -r --arg i "$id" '.[$i].status.messages[]? | select(.[0]=="execution_error") | .[1] | "  ⤷ node \(.node_id) (\(.node_type)): \(.exception_type): \(.exception_message)"' <<<"$h" >&2; die "execution error for $id"; fi; echo "$h"; return 0; fi; t=$((t+3)); [ "$t" -gt 1800 ] && die "timeout waiting for $id"; sleep 3; done; }
 fetch_first(){ # tries HTTP /view, then disk (script is local to the box)
   local h="$1" id="$2" dest="$3" line fn sf ty code base sub src
   line=$(jq -r --arg i "$id" '.[$i].outputs[] | ((.gifs // .images // [])[0]) | select(.!=null) | "\(.filename)\t\(.subfolder)\t\(.type)"' <<<"$h" | head -n1)
@@ -116,9 +116,10 @@ cat > "$GRAPH" <<JSON
  "10":{"class_type":"LoadImage","inputs":{"image":"$A"}},
  "19":{"class_type":"LoadImage","inputs":{"image":"$B"}},
  "11":{"class_type":"CLIPVisionEncode","inputs":{"clip_vision":["9",0],"image":["10",0],"crop":"center"}},
+ "20":{"class_type":"CLIPVisionEncode","inputs":{"clip_vision":["9",0],"image":["19",0],"crop":"center"}},
  "12":{"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$PROMPT" '$s'),"clip":["7",0]}},
  "13":{"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$NEG" '$s'),"clip":["7",0]}},
- "14":{"class_type":"WanFirstLastFrameToVideo","inputs":{"positive":["12",0],"negative":["13",0],"vae":["8",0],"clip_vision_output":["11",0],"start_image":["10",0],"end_image":["19",0],"width":$W,"height":$H,"length":$LEN,"batch_size":1}},
+ "14":{"class_type":"WanFirstLastFrameToVideo","inputs":{"positive":["12",0],"negative":["13",0],"vae":["8",0],"clip_vision_start_image":["11",0],"clip_vision_end_image":["20",0],"start_image":["10",0],"end_image":["19",0],"width":$W,"height":$H,"length":$LEN,"batch_size":1}},
  "15":{"class_type":"KSamplerAdvanced","inputs":{"add_noise":"enable","noise_seed":$SEED,"steps":4,"cfg":1.0,"sampler_name":"euler","scheduler":"simple","start_at_step":0,"end_at_step":2,"return_with_leftover_noise":"enable","model":["5",0],"positive":["14",0],"negative":["14",1],"latent_image":["14",2]}},
  "16":{"class_type":"KSamplerAdvanced","inputs":{"add_noise":"disable","noise_seed":$SEED,"steps":4,"cfg":1.0,"sampler_name":"euler","scheduler":"simple","start_at_step":2,"end_at_step":10000,"return_with_leftover_noise":"disable","model":["6",0],"positive":["14",0],"negative":["14",1],"latent_image":["15",0]}},
  "17":{"class_type":"VAEDecode","inputs":{"samples":["16",0],"vae":["8",0]}},

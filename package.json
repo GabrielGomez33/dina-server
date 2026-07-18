@@ -33,6 +33,7 @@
     "test:saga:fidelity": "ts-node src/modules/saga/tests/fidelityTest.ts",
     "test:saga:worker": "ts-node src/modules/saga/tests/generationWorkerTest.ts",
     "test:saga:lora": "ts-node src/modules/saga/tests/loraTrainingTest.ts",
+    "test:saga:loradata": "ts-node src/modules/saga/tests/loraDatasetTest.ts",
     "test:saga:framerate": "ts-node src/modules/saga/tests/framerateTest.ts",
     "test:saga:cine": "ts-node src/modules/saga/tests/cinematographyTest.ts",
     "test:saga:timeline": "ts-node src/modules/saga/tests/timelineTest.ts",
