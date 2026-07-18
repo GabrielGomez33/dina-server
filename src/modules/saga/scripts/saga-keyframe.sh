@@ -23,8 +23,11 @@
 #   --ip-weight F              IP-Adapter weight 0..1 (default 0.65)
 # Pose:
 #   -c/--control IMG           control image (a cropped seal)
-#   --control-pre MODE         none|dwpose|openpose   (default dwpose)
+#   --control-pre MODE         canny|none|dwpose|openpose   (default canny — right
+#                              for line-art seal crops; dwpose is for photos of people)
 #   --control-strength F       ControlNet strength 0..1 (default 0.8)
+#   --union-type T             SetUnionControlNetType for Union Promax (default auto;
+#                              "none" skips the type node for non-union controlnets)
 #   --steps N (default 28)   --cfg F (default 5.5)
 #
 # Env (override model filenames if yours differ):
@@ -45,7 +48,7 @@ CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"
 
 OUT="saga_kf"; SEED=0; W=1280; H=704; STEPS=28; CFG=5.5
 PROMPT=""; NEG="lowres, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, worst quality, blurry, multiple people, 2boys"
-REF=""; CONTROL=""; CPRE="dwpose"; CSTR=0.8; IPW=0.65
+REF=""; CONTROL=""; CPRE="canny"; CSTR=0.8; IPW=0.65; UTYPE="auto"
 LORA=""; LORAW=0.85; TRIGGER=""
 
 die(){ echo "❌ $*" >&2; exit 1; }
@@ -62,6 +65,7 @@ while [ $# -gt 0 ]; do case "$1" in
   -c|--control) CONTROL="$2"; shift 2;;
   --control-pre) CPRE="$2"; shift 2;;
   --control-strength) CSTR="$2"; shift 2;;
+  --union-type) UTYPE="$2"; shift 2;;
   --ip-weight) IPW="$2"; shift 2;;
   --lora) LORA="$2"; shift 2;;
   --lora-weight) LORAW="$2"; shift 2;;
@@ -162,20 +166,24 @@ else
 fi
 
 if [ -n "$CTRL_NAME" ]; then
-  # preprocessor selection (confirmed nodes: DWPreprocessor / OpenposePreprocessor)
+  # preprocessor: canny (line-art seal crops) is default; dwpose/openpose are for
+  # photographed people; none = feed the control image raw.
   case "$CPRE" in
     none)     PRE_SRC='["20",0]';;
+    canny)    echo ' "21":{"class_type":"Canny","inputs":{"image":["20",0],"low_threshold":0.2,"high_threshold":0.5}},'; PRE_SRC='["21",0]';;
     openpose) echo ' "21":{"class_type":"OpenposePreprocessor","inputs":{"image":["20",0],"detect_hand":"enable","detect_body":"enable","detect_face":"disable","resolution":768}},'; PRE_SRC='["21",0]';;
     *)        echo ' "21":{"class_type":"DWPreprocessor","inputs":{"image":["20",0],"detect_hand":"enable","detect_body":"enable","detect_face":"disable","resolution":768}},'; PRE_SRC='["21",0]';;
   esac
+  # Union Promax needs its control TYPE set. --union-type auto lets it self-detect
+  # (canny edges → canny/lineart); "none" skips the node for plain controlnets.
+  if [ "$UTYPE" = "none" ]; then CNSRC='["22",0]'; else
+    echo " \"24\":{\"class_type\":\"SetUnionControlNetType\",\"inputs\":{\"control_net\":[\"22\",0],\"type\":\"$UTYPE\"}},"; CNSRC='["24",0]'
+  fi
 cat <<JSON
  "20":{"class_type":"LoadImage","inputs":{"image":"$CTRL_NAME"}},
  "22":{"class_type":"ControlNetLoader","inputs":{"control_net_name":"$CN"}},
- "23":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["2",0],"negative":["3",0],"control_net":["22",0],"image":$PRE_SRC,"strength":$CSTR,"start_percent":0.0,"end_percent":0.9,"vae":["1",2]}},
+ "23":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["2",0],"negative":["3",0],"control_net":$CNSRC,"image":$PRE_SRC,"strength":$CSTR,"start_percent":0.0,"end_percent":0.9,"vae":["1",2]}},
 JSON
-  # NOTE: if Union Promax is rejected without a type, insert between 22 and 23:
-  #   "24":{"class_type":"SetUnionControlNetType","inputs":{"control_net":["22",0],"type":"openpose"}}
-  #   then point 23.control_net to ["24",0].
   POS='["23",0]'; NEGC='["23",1]'
 else
   POS='["2",0]'; NEGC='["3",0]'
