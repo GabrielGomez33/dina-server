@@ -105,54 +105,53 @@ echo "✅ preflight passed"
 
 # ── STEP 1 — KEYFRAMES ──────────────────────────────────────────────────────
 CUR=1; step 1 "keyframes (8 pose stills)"
-gen_kf(){ # <name> <prompt-extra> [control]
+# helpers do the work + log to the run; they DON'T echo the path (callers use the
+# deterministic out path), so no stdout capture and `fail` halts the whole script.
+gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.png
   local name="$1" extra="$2" ctrl="${3:-}" out="$SAGA_ROOT/tmp/${1}.png"
-  if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse $name (exists; --force to redo)"; echo "$out"; return; fi
+  if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse $name (exists; --force to redo)"; return 0; fi
   local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" -r "$REF" -p "$BASE, $extra")
   [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre dwpose --control-strength 0.85)
   log "  gen $name ${ctrl:+(control: $(basename "$ctrl"))}"
-  "$KF" "${args[@]}" >/dev/null || fail "keyframe $name failed"
-  echo "$out"
+  "$KF" "${args[@]}" || fail "keyframe $name failed"
 }
-K1=$(gen_kf jutsu_k1 "both hands forming a ninja hand seal, fingers interlocked, tiger seal, intense focus" "$SEAL1"); verify_out "$K1"
-K2=$(gen_kf jutsu_k2 "both hands forming a ninja hand seal, serpent seal, hands clasped" "$SEAL2"); verify_out "$K2"
-K3=$(gen_kf jutsu_k3 "both hands forming a ninja hand seal, dragon seal" "$SEAL3"); verify_out "$K3"
-K4=$(gen_kf jutsu_k4 "both hands forming a ninja hand seal, ram seal, index fingers up" "$SEAL4"); verify_out "$K4"
-K5=$(gen_kf jutsu_k5 "both hands forming a ninja hand seal, boar seal, fists together" "$SEAL5"); verify_out "$K5"
-K6=$(gen_kf jutsu_k6 "both hands pressed flat together in prayer position at center, gathering purple energy, faint glow between the palms"); verify_out "$K6"
-K7=$(gen_kf jutsu_k7 "hands slightly apart, a small swirling purple energy orb forming between the palms, rasengan, glowing"); verify_out "$K7"
-K8=$(gen_kf jutsu_k8 "hands held wide apart, a large swirling purple energy sphere between the palms, rasengan, crackling purple lightning, energy flowing, radiant glow"); verify_out "$K8"
+gen_kf jutsu_k1 "both hands forming a ninja hand seal, fingers interlocked, tiger seal, intense focus" "$SEAL1"; K1="$SAGA_ROOT/tmp/jutsu_k1.png"; verify_out "$K1"
+gen_kf jutsu_k2 "both hands forming a ninja hand seal, serpent seal, hands clasped" "$SEAL2"; K2="$SAGA_ROOT/tmp/jutsu_k2.png"; verify_out "$K2"
+gen_kf jutsu_k3 "both hands forming a ninja hand seal, dragon seal" "$SEAL3"; K3="$SAGA_ROOT/tmp/jutsu_k3.png"; verify_out "$K3"
+gen_kf jutsu_k4 "both hands forming a ninja hand seal, ram seal, index fingers up" "$SEAL4"; K4="$SAGA_ROOT/tmp/jutsu_k4.png"; verify_out "$K4"
+gen_kf jutsu_k5 "both hands forming a ninja hand seal, boar seal, fists together" "$SEAL5"; K5="$SAGA_ROOT/tmp/jutsu_k5.png"; verify_out "$K5"
+gen_kf jutsu_k6 "both hands pressed flat together in prayer position at center, gathering purple energy, faint glow between the palms"; K6="$SAGA_ROOT/tmp/jutsu_k6.png"; verify_out "$K6"
+gen_kf jutsu_k7 "hands slightly apart, a small swirling purple energy orb forming between the palms, rasengan, glowing"; K7="$SAGA_ROOT/tmp/jutsu_k7.png"; verify_out "$K7"
+gen_kf jutsu_k8 "hands held wide apart, a large swirling purple energy sphere between the palms, rasengan, crackling purple lightning, energy flowing, radiant glow"; K8="$SAGA_ROOT/tmp/jutsu_k8.png"; verify_out "$K8"
 echo "✅ 8 keyframes ready"
 
 # ── STEP 2 — MOTION (holds + FLF transitions) ───────────────────────────────
 CUR=2; step 2 "motion (3 holds + 7 FLF transitions = 320f/20s)"
 hold(){ # <still> <frames> <out>
   local png="$1" n="$2" out="$3"
-  if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse hold $(basename "$out")"; echo "$out"; return; fi
+  if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse hold $(basename "$out")"; return 0; fi
   log "  hold $(basename "$png") × ${n}f"
   ffmpeg -y -loop 1 -i "$png" -t "$(awk -v n="$n" -v f="$FPS" 'BEGIN{printf "%.4f", n/f}')" \
     -r "$FPS" -s "${W}x${H}" -c:v libx264 -pix_fmt yuv420p "$out" >/dev/null 2>&1 || fail "hold render failed: $out"
-  echo "$out"
 }
-flf(){ # <name> <first> <last> <frames> <motion-prompt>
+flf(){ # <name> <first> <last> <frames> <motion-prompt>  → writes $SAGA_ROOT/tmp/<name>.mp4
   local name="$1" a="$2" b="$3" n="$4" mp="$5" out="$SAGA_ROOT/tmp/${1}.mp4"
-  if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse flf $name"; echo "$out"; return; fi
+  if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse flf $name"; return 0; fi
   log "  flf $name  ${n}f  ($(basename "$a") → $(basename "$b"))"
-  "$FLF" -o "$name" -a "$a" -b "$b" -L "$n" --fps "$FPS" -W "$W" -H "$H" -s "$SEED" -p "$mp" >/dev/null || fail "flf $name failed"
-  echo "$out"
+  "$FLF" -o "$name" -a "$a" -b "$b" -L "$n" --fps "$FPS" -W "$W" -H "$H" -s "$SEED" -p "$mp" || fail "flf $name failed"
 }
 SEAL_MOTION="both hands smoothly change to the next ninja hand seal, precise finger movement"
 declare -a CLIPS
-CLIPS+=( "$(hold "$K1" 8  "$WORK/s00_hold1.mp4")" )
-CLIPS+=( "$(flf s01 "$K1" "$K2" 40 "$SEAL_MOTION")" )
-CLIPS+=( "$(flf s02 "$K2" "$K3" 40 "$SEAL_MOTION")" )
-CLIPS+=( "$(flf s03 "$K3" "$K4" 40 "$SEAL_MOTION")" )
-CLIPS+=( "$(flf s04 "$K4" "$K5" 40 "$SEAL_MOTION")" )
-CLIPS+=( "$(flf s05 "$K5" "$K6" 40 "both hands come together into prayer position, energy gathering at the center")" )
-CLIPS+=( "$(hold "$K6" 16 "$WORK/s06_hold6.mp4")" )
-CLIPS+=( "$(flf s07 "$K6" "$K7" 40 "the hands separate, a purple energy orb forms and swirls between the palms")" )
-CLIPS+=( "$(flf s08 "$K7" "$K8" 48 "the purple energy orb grows larger, swirling and flowing with crackling energy, radiant")" )
-CLIPS+=( "$(hold "$K8" 8  "$WORK/s09_hold8.mp4")" )
+hold "$K1" 8  "$WORK/s00_hold1.mp4";                                              CLIPS+=( "$WORK/s00_hold1.mp4" )
+flf s01 "$K1" "$K2" 40 "$SEAL_MOTION";                                            CLIPS+=( "$SAGA_ROOT/tmp/s01.mp4" )
+flf s02 "$K2" "$K3" 40 "$SEAL_MOTION";                                            CLIPS+=( "$SAGA_ROOT/tmp/s02.mp4" )
+flf s03 "$K3" "$K4" 40 "$SEAL_MOTION";                                            CLIPS+=( "$SAGA_ROOT/tmp/s03.mp4" )
+flf s04 "$K4" "$K5" 40 "$SEAL_MOTION";                                            CLIPS+=( "$SAGA_ROOT/tmp/s04.mp4" )
+flf s05 "$K5" "$K6" 40 "both hands come together into prayer position, energy gathering at the center"; CLIPS+=( "$SAGA_ROOT/tmp/s05.mp4" )
+hold "$K6" 16 "$WORK/s06_hold6.mp4";                                              CLIPS+=( "$WORK/s06_hold6.mp4" )
+flf s07 "$K6" "$K7" 40 "the hands separate, a purple energy orb forms and swirls between the palms"; CLIPS+=( "$SAGA_ROOT/tmp/s07.mp4" )
+flf s08 "$K7" "$K8" 48 "the purple energy orb grows larger, swirling and flowing with crackling energy, radiant"; CLIPS+=( "$SAGA_ROOT/tmp/s08.mp4" )
+hold "$K8" 8  "$WORK/s09_hold8.mp4";                                              CLIPS+=( "$WORK/s09_hold8.mp4" )
 TOT=0
 for c in "${CLIPS[@]}"; do verify_out "$c"; f=$(frames_of "$c"); [ "$f" != "?" ] && TOT=$((TOT+f)); done
 log "total frames (measured): ${TOT:-?} (expected 320 = 20.0s @ ${FPS}fps)"

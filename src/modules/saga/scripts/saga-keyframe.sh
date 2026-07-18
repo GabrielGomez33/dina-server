@@ -89,16 +89,21 @@ wait_done(){ # <prompt_id>
     sleep 2
   done
 }
-fetch_first(){ # <history-json> <prompt_id> <dest>
-  local h="$1" id="$2" dest="$3"
-  local line; line=$(jq -r --arg i "$id" '
-    .[$i].outputs[] | ((.images // .gifs // [])[0]) | select(.!=null)
-    | "\(.filename)\t\(.subfolder)\t\(.type)"' <<<"$h" | head -n1)
+fetch_first(){ # <history-json> <prompt_id> <dest>   [tries HTTP /view, then disk]
+  local h="$1" id="$2" dest="$3" line fn sf ty code base sub src
+  line=$(jq -r --arg i "$id" '.[$i].outputs[] | ((.images // .gifs // [])[0]) | select(.!=null) | "\(.filename)\t\(.subfolder)\t\(.type)"' <<<"$h" | head -n1)
   [ -n "$line" ] || die "no output image in history for $id"
-  local fn sf ty; IFS=$'\t' read -r fn sf ty <<<"$line"
-  curl -sf "$COMFY/view?filename=$(jq -rn --arg s "$fn" '$s|@uri')&subfolder=$(jq -rn --arg s "$sf" '$s|@uri')&type=$ty" -o "$dest" \
-    || die "download failed for $fn"
-  echo "$dest"
+  IFS=$'\t' read -r fn sf ty <<<"$line"
+  code=$(curl -s -o "$dest" -w '%{http_code}' "$COMFY/view?filename=$(jq -rn --arg s "$fn" '$s|@uri')&subfolder=$(jq -rn --arg s "$sf" '$s|@uri')&type=${ty:-output}")
+  { [ "$code" = "200" ] && [ -s "$dest" ]; } && { echo "$dest"; return 0; }
+  rm -f "$dest"
+  for base in "${COMFY_OUT:-}" "$SAGA_ROOT/engine/ComfyUI/output" "$SAGA_ROOT/engine/ComfyUI/temp"; do
+    [ -n "$base" ] || continue; sub="$base${sf:+/$sf}"
+    [ -f "$sub/$fn" ] && { cp -f "$sub/$fn" "$dest" && { echo "$dest"; return 0; }; }
+  done
+  src=$(find "$SAGA_ROOT/engine" -name "$fn" -print -quit 2>/dev/null)
+  [ -n "$src" ] && { cp -f "$src" "$dest" && { echo "$dest"; return 0; }; }
+  die "could not retrieve $fn (view http=$code; not found on disk). Set COMFY_OUT to your ComfyUI output dir."
 }
 
 echo "▶ keyframe: '$OUT'  seed=$SEED  ${W}x${H}  ip=$IPW  control=${CONTROL:-none}/$CPRE@$CSTR"

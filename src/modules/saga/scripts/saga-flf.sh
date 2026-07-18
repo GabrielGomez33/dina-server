@@ -80,7 +80,22 @@ CID="sagaflf-$$-$RANDOM"
 upload(){ local f="$1"; [ -f "$f" ] || die "file not found: $f"; curl -sf -F "image=@${f}" -F "overwrite=true" "$COMFY/upload/image" | jq -r '.name' || die "upload failed: $f"; }
 submit(){ curl -sf -X POST "$COMFY/prompt" --data "$(jq -nc --slurpfile g "$1" --arg c "$CID" '{prompt:$g[0], client_id:$c}')" | jq -r '.prompt_id' || die "submit rejected — check node errors"; }
 wait_done(){ local id="$1" t=0 h st; while :; do h=$(curl -sf "$COMFY/history/$id"); if [ "$(jq -r --arg i "$id" 'has($i)' <<<"$h")" = "true" ]; then st=$(jq -r --arg i "$id" '.[$i].status.status_str // "ok"' <<<"$h"); [ "$st" = "error" ] && die "execution error for $id"; echo "$h"; return 0; fi; t=$((t+3)); [ "$t" -gt 1800 ] && die "timeout waiting for $id"; sleep 3; done; }
-fetch_first(){ local h="$1" id="$2" dest="$3" line fn sf ty; line=$(jq -r --arg i "$id" '.[$i].outputs[] | ((.gifs // .images // [])[0]) | select(.!=null) | "\(.filename)\t\(.subfolder)\t\(.type)"' <<<"$h" | head -n1); [ -n "$line" ] || die "no output video in history for $id"; IFS=$'\t' read -r fn sf ty <<<"$line"; curl -sf "$COMFY/view?filename=$(jq -rn --arg s "$fn" '$s|@uri')&subfolder=$(jq -rn --arg s "$sf" '$s|@uri')&type=$ty" -o "$dest" || die "download failed for $fn"; echo "$dest"; }
+fetch_first(){ # tries HTTP /view, then disk (script is local to the box)
+  local h="$1" id="$2" dest="$3" line fn sf ty code base sub src
+  line=$(jq -r --arg i "$id" '.[$i].outputs[] | ((.gifs // .images // [])[0]) | select(.!=null) | "\(.filename)\t\(.subfolder)\t\(.type)"' <<<"$h" | head -n1)
+  [ -n "$line" ] || die "no output video in history for $id"
+  IFS=$'\t' read -r fn sf ty <<<"$line"
+  code=$(curl -s -o "$dest" -w '%{http_code}' "$COMFY/view?filename=$(jq -rn --arg s "$fn" '$s|@uri')&subfolder=$(jq -rn --arg s "$sf" '$s|@uri')&type=${ty:-output}")
+  { [ "$code" = "200" ] && [ -s "$dest" ]; } && { echo "$dest"; return 0; }
+  rm -f "$dest"
+  for base in "${COMFY_OUT:-}" "$SAGA_ROOT/engine/ComfyUI/output" "$SAGA_ROOT/engine/ComfyUI/temp"; do
+    [ -n "$base" ] || continue; sub="$base${sf:+/$sf}"
+    [ -f "$sub/$fn" ] && { cp -f "$sub/$fn" "$dest" && { echo "$dest"; return 0; }; }
+  done
+  src=$(find "$SAGA_ROOT/engine" -name "$fn" -print -quit 2>/dev/null)
+  [ -n "$src" ] && { cp -f "$src" "$dest" && { echo "$dest"; return 0; }; }
+  die "could not retrieve $fn (view http=$code; not found on disk). Set COMFY_OUT to your ComfyUI output dir."
+}
 
 echo "▶ flf: '$OUT'  ${W}x${H}  length=${LEN}f @ ${FPS}fps ($(awk -v l="$LEN" -v f="$FPS" 'BEGIN{printf "%.2f", l/f}')s)  seed=$SEED"
 A=$(upload "$FIRST"); echo "  first: $A"

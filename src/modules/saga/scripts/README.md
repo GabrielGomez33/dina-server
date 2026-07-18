@@ -13,6 +13,10 @@ from anywhere with `SAGA_ROOT` set) and `chmod +x`.
 
 ## Prereqs on the box
 - `saga-comfyui` up (localhost:8188), `jq` + `ffmpeg` installed.
+- Result retrieval tries ComfyUI's HTTP `/view`, then falls back to reading the
+  output file straight off disk (the scripts run locally). If your ComfyUI output
+  dir isn't `$SAGA_ROOT/engine/ComfyUI/output`, set `COMFY_OUT` to it (find it:
+  `find "$SAGA_ROOT" -maxdepth 5 -type d -name output 2>/dev/null | grep -i comfy`).
 - Model filenames default to the audited set (2026-07-18). Override via env if
   yours differ — **`FLF_T5` must be set to your umt5 text-encoder filename**
   (find it: `curl -sf http://127.0.0.1:8188/object_info/CLIPLoader | jq -r '.CLIPLoader.input.required.clip_name[0][]'`).
