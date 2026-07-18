@@ -91,7 +91,8 @@ OI=$(mktemp); curl -sf "$COMFY/object_info" -o "$OI" || fail "cannot fetch /obje
 KEYS=$(jq -r 'keys[]' "$OI"); rm -f "$OI"
 need_node(){ grep -qx "$1" <<<"$KEYS" || fail "required ComfyUI node MISSING: $1"; }
 NODES="CheckpointLoaderSimple LoraLoader UnetLoaderGGUF CLIPLoader WanFirstLastFrameToVideo VHS_VideoCombine"
-[ "$USE_CONTROL" -eq 1 ] && NODES="$NODES ControlNetLoader ControlNetApplyAdvanced DWPreprocessor"
+[ "$USE_CONTROL" -eq 1 ] && NODES="$NODES ControlNetLoader ControlNetApplyAdvanced Canny"
+[ "$USE_CONTROL" -eq 1 ] && [ "${UNION_TYPE:-auto}" != "none" ] && NODES="$NODES SetUnionControlNetType"
 for n in $NODES; do need_node "$n"; done
 log "nodes ok (incl. LoraLoader, WanFirstLastFrameToVideo)"
 
@@ -124,7 +125,7 @@ gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.pn
   if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse $name (exists; --force to redo)"; return 0; fi
   # identity via the trained LoRA + trigger (no IP-Adapter pose prior)
   local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -p "$BASE, $extra")
-  [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre dwpose --control-strength 0.85)
+  [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre canny --control-strength 0.85 --union-type "${UNION_TYPE:-auto}")
   log "  gen $name ${ctrl:+${USE_CONTROL:+(control: $(basename "$ctrl"))}}"
   "$KF" "${args[@]}" || fail "keyframe $name failed"
 }
