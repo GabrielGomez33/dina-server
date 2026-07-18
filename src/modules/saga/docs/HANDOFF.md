@@ -115,7 +115,11 @@ Legend: ✅ done & proven · 🟡 in progress · ⬜ not started
 - ✅ **Cinematography vocabulary**: `cinematography.ts` routes friendly terms to the right mechanism
   (prompt tag / video-prompt / ffmpeg post). Tested (61 → now with timeline, see below).
 - ✅ **Timeline / NLE model**: `timeline.ts` — Sequence/Track/Clip, multi-track audio, validation,
-  export plan. Tested (68). **← most recent module (commit `72f0dc1`).**
+  export plan. Tested (68). Commit `72f0dc1`.
+- ✅ **Keyframe / FLF choreography (directed motion)**: `keyframeChoreography.ts` — pins poses as
+  still keyframes and plans first-last-frame (FLF2V) transitions between them; the fix for the
+  jutsu render's improvised action. Tested (42). Provisional FLF template `video-flf-wan-a14b@1`
+  (needs box verification). **← most recent module (commit `d37aee0`).**
 - 🟡 **LoRA subsystem**: **plan-gate only** (`loraTraining.ts`, `resolveLoraPlan`, tested 25). The
   actual trainer (kohya_ss install + dataset builder + training worker + registration) is NOT built.
 - ⬜ **Audio subsystem** (multi-track): TTS, AI SFX (text-to-audio + video-to-audio foley), music
@@ -147,6 +151,7 @@ orchestration. **tests/** = proof harnesses. Run any via `npm run test:saga:<nam
 | `core/loraTraining.ts` | LoRA training-request validation gate | lora (25) | `fc0d30d` |
 | `core/cinematography.ts` | route cine terms → prompt/camera/ffmpeg | cine (61) | `7dbde6c` |
 | `core/timeline.ts` | NLE sequence/track/clip + validation + export plan | timeline (68) | `72f0dc1` |
+| `core/keyframeChoreography.ts` | FLF (first-last-frame) directed-motion planner | keyframe (42) | `d37aee0` |
 | `systems/generationWorker.ts` | orchestrate a generation job (ports injected) | worker (38) | `80b65c2` |
 | `systems/workflowTemplates.ts` | ComfyUI node-graph templates (image/ref/video) | render (29) | multiple |
 | `systems/comfyClient.ts`, `jobQueue.ts`, `progressMapper.ts` | transport / queue / progress | render/foundation | Phase 1–2 |
@@ -299,11 +304,14 @@ trigger **exclusive drain** (stop Ollama → render → re-warm) once the arbite
 
 ## 9. In-flight / immediately pending
 
-- 🟡 **20s jutsu A–Z render** (`saga-jutsu.sh`): Exodia performing hand-signs → beam of light, gen →
-  RIFE smooth → ESRGAN 2K upscale. It renders as **two chained ~10 s segments** (Wan's ~81-frame
-  window): gen seg1 (hand-signs) → extract last frame → gen seg2 (beam from that frame) → concat →
-  interpolate → upscale. Was running on the box (~25–35 min). **Awaiting the user to scp the final
-  mp4 + extract frames** for review. This is the end-to-end proof of the whole visual pipeline.
+- ✅ **20s jutsu A–Z render** (`saga-jutsu.sh`): DONE. **Quality + length + character consistency all
+  held** (cel-shaded Exodia, consistent across two chained ~10s segments, smooth, upscaled — the
+  end-to-end visual pipeline works). The ONE gap: the model **improvised the action** (generic
+  fists / a stray purple void) instead of performing the exact seals → prayer → contained sphere.
+  Root cause: single-prompt text can't choreograph discrete poses. Two notes: the chain did NOT run
+  the hand-detailer pass (and it wouldn't have helped — detailer cleans, it can't choreograph a
+  seal); ESRGAN sharpened the malformed fingers. **→ built the FLF/keyframe path as the fix** (see
+  the module above). Next: author the seal/prayer/sphere keyframes and verify FLF2V on the box.
 
 ## 10. Next steps (in the user's locked order)
 
