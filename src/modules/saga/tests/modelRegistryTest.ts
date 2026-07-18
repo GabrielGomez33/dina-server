@@ -80,7 +80,7 @@ async function main(): Promise<void> {
   await section('5. resolveProfile — by id, by kind, and the failure modes', () => {
     eq(resolveProfile({ id: 'animagine-xl-4' }).templateId, 'image-basic@1', 'resolve by id');
     eq(resolveProfile({ jobKind: 'image_gen' }).id, 'animagine-xl-4', 'resolve by kind returns the kind default');
-    eq(resolveProfile({ jobKind: 'video_gen' }).id, 'wan2.2-ti2v-5b', 'video default is the Wan profile');
+    eq(resolveProfile({ jobKind: 'video_gen' }).id, 'wan2.2-i2v-a14b-lightning', 'video default is the A14B lightning profile (5B is fallback)');
     throws(() => resolveProfile({ id: 'nope' }), 'unknown id throws (never returns undefined)');
     throws(() => resolveProfile({ id: 'animagine-xl-4', jobKind: 'video_gen' }), 'id/kind mismatch throws');
     throws(() => resolveProfile({}), 'empty ref throws');
@@ -110,8 +110,16 @@ async function main(): Promise<void> {
   });
 
   await section('8. provisional flags reflect live verification status', () => {
-    ok(!resolveProfile({ id: 'wan2.2-ti2v-5b' }).provisional, 'Wan graph verified live (no longer provisional)');
+    ok(!resolveProfile({ id: 'wan2.2-i2v-a14b-lightning' }).provisional, 'A14B lightning graph verified live (126s)');
+    ok(!resolveProfile({ id: 'wan2.2-ti2v-5b' }).provisional, 'Wan 5B fallback verified live');
     ok(!resolveProfile({ id: 'animagine-xl-4' }).provisional, 'proven image profile is not provisional');
+  });
+
+  await section('9. A14B primary video profile — heavy/exclusive + binds its 18-node template', () => {
+    const p = resolveProfile({ id: 'wan2.2-i2v-a14b-lightning' });
+    eq(p.vramClass, 'heavy', 'A14B is heavy');
+    eq(p.leaseMode, 'exclusive', 'A14B takes an exclusive lease (cannot share with Ollama)');
+    ok(Object.keys(p.files).length === 7, 'carries all 7 model files (2 experts + 2 loras + tenc + vae + clip-vision)');
   });
 
   console.log('\n════════════════════════════════════════════════');

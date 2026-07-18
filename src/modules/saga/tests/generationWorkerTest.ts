@@ -91,7 +91,7 @@ async function main(): Promise<void> {
     const r = await worker.run({ generationId: 'v1', jobKind: 'video_gen', inputs: { prompt: 'run', referenceImage: 'x.png' } });
     eq(r.ok, true, 'video succeeds');
     eq(r.leaseMode, 'exclusive', 'heavy video model → EXCLUSIVE lease');
-    eq(gpu.calls[0]?.vramMb, 18000, 'exclusive lease carries the heavy footprint');
+    eq(gpu.calls[0]?.vramMb, 17000, 'exclusive lease carries the A14B heavy footprint (the video default)');
     eq((r.files ?? [])[0], 'saga_video_0001.mp4', 'mp4 extracted from VHS gifs[] output');
   });
 

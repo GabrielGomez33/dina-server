@@ -87,6 +87,27 @@ de-flagged from provisional.
 - **Not anime / not-exact-Exodia:** prompt lacked style/identity tokens; Wan's default aesthetic is
   semi-realistic. Add style tokens; anime video needs an anime-tuned approach.
 
+## Phase 0.6 — Primary anime video (Wan I2V-A14B + lightning) — ✅ VERIFIED 2026-07-17
+
+**The anime video target, hit — fast.** Wan 2.2 **I2V-A14B GGUF Q6_K** (MoE: high + low noise
+experts) + the two **4-step LightX2V lightning LoRAs**, two-stage KSampler handoff, 4 steps / CFG 1.
+The 18-node graph was **accepted on the first submit** (no node/socket errors).
+
+| Metric | Result |
+|---|---|
+| Render | **126 s** @ 1280×704 × 33 frames, 4 steps (vs 373 s for the 5B at 20 steps) |
+| Style | **flat 2D cel-shaded anime** achieved (`anime, 2d, cel shaded` tokens + A14B) — the look the 5B could not hit |
+| Coherence | single figure, clean; no tiling |
+| VRAM | Q6_K expert (~11 GB) stays **resident** (the headroom bet paid off — no offload penalty) |
+
+**Decision:** A14B-lightning is now the **primary `video_gen` profile** (`video-i2v-wan-a14b@1`);
+the 5B is demoted to a lighter fallback. Both are `heavy → exclusive` (drain Ollama). Registry +
+templates + tests updated (registry 31, worker 38, prompt 45, render 29 green). Model provenance
+manifest regenerated (17 files hashed).
+
+**Open (params, not graph):** motion smoothness at 4 steps (→ RIFE interpolation if steppy);
+optional anime-style LoRA to push styling further; expert step-split (currently 2/2 of 4) untuned.
+
 **Known follow-ups from Phase 0 (next work):**
 - **Hands** — universal diffusion weakness (seen: merged/miscounted fingers when hands are in
   frame). Fix is Stage 3 refinement: a detailer pass (Impact-Pack + `hand_yolov8`), not an

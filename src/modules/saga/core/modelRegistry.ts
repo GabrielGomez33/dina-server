@@ -137,6 +137,28 @@ const PROFILES: ModelProfile[] = [
     notes: 'Anime SDXL + IP-Adapter reference conditioning (identity lock).',
   },
   {
+    id: 'wan2.2-i2v-a14b-lightning',
+    jobKind: 'video_gen',
+    engine: 'comfyui',
+    templateId: 'video-i2v-wan-a14b@1',
+    files: {
+      highNoiseUnet: 'Wan2.2-I2V-A14B-HighNoise-Q6_K.gguf',
+      lowNoiseUnet: 'Wan2.2-I2V-A14B-LowNoise-Q6_K.gguf',
+      highLora: 'wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors',
+      lowLora: 'wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors',
+      textEncoder: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
+      vae: 'wan_2.1_vae.safetensors',
+      clipVision: 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors',
+    },
+    estVramMb: 17000, // Q6_K expert (~11GB) + latents; experts load sequentially. HEAVY → exclusive.
+    vramClass: 'heavy',
+    leaseMode: 'exclusive',
+    defaults: { length: 33, fps: 16, width: 1280, height: 704, shift: 5 },
+    isDefaultFor: 'video_gen',
+    provisional: false, // verified live 2026-07-17: 126s end-to-end → saga_a14b_00001.mp4
+    notes: 'PRIMARY anime video. Wan 2.2 I2V-A14B Q6_K MoE + dual 4-step LightX2V LoRAs. 4 steps/CFG1. ~126s @1280x704x33.',
+  },
+  {
     id: 'wan2.2-ti2v-5b',
     jobKind: 'video_gen',
     engine: 'comfyui',
@@ -150,9 +172,9 @@ const PROFILES: ModelProfile[] = [
     vramClass: 'heavy',
     leaseMode: 'exclusive',
     defaults: { steps: 30, cfg: 5, length: 49, fps: 24, width: 1280, height: 704 },
-    isDefaultFor: 'video_gen',
+    // FALLBACK: lighter single-model path; semi-realistic look, slower (no lightning).
     provisional: false, // graph verified live 2026-07-15 (rendered end-to-end → mp4)
-    notes: 'Wan 2.2 TI2V-5B image→video 720p. HEAVY → exclusive GPU lease. Prefer landscape 1280x704 (portrait tiles the subject).',
+    notes: 'FALLBACK video. Wan 2.2 TI2V-5B single-model, semi-realistic, ~373s. Use when A14B is unavailable.',
   },
 ];
 
