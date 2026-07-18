@@ -136,6 +136,11 @@ async function main(): Promise<void> {
     eq(graph['14'].class_type, 'WanFirstLastFrameToVideo', 'motion node is the FLF node');
     ok(Array.isArray(graph['14'].inputs.start_image), 'start_image socket present');
     ok(Array.isArray(graph['14'].inputs.end_image), 'end_image socket present');
+    // FLF uses SEPARATE start/end clip-vision inputs, NOT the I2V node's single
+    // clip_vision_output (the live-corrected bug — passing clip_vision_output errored)
+    ok(Array.isArray(graph['14'].inputs.clip_vision_start_image), 'clip_vision_start_image socket present');
+    ok(Array.isArray(graph['14'].inputs.clip_vision_end_image), 'clip_vision_end_image socket present');
+    eq(graph['14'].inputs.clip_vision_output, undefined, 'no clip_vision_output (that is the I2V node input)');
     eq(graph['14'].inputs.length, 33, 'frame count bound into the graph');
   });
 

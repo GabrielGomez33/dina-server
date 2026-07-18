@@ -82,7 +82,10 @@ wait_done(){ # <prompt_id>
     local h; h=$(curl -sf "$COMFY/history/$id")
     if [ "$(jq -r --arg i "$id" 'has($i)' <<<"$h")" = "true" ]; then
       local st; st=$(jq -r --arg i "$id" '.[$i].status.status_str // "ok"' <<<"$h")
-      [ "$st" = "error" ] && die "ComfyUI reported an execution error for $id"
+      if [ "$st" = "error" ]; then
+        jq -r --arg i "$id" '.[$i].status.messages[]? | select(.[0]=="execution_error") | .[1] | "  ⤷ node \(.node_id) (\(.node_type)): \(.exception_type): \(.exception_message)"' <<<"$h" >&2
+        die "ComfyUI reported an execution error for $id"
+      fi
       echo "$h"; return 0
     fi
     t=$((t+2)); [ "$t" -gt 900 ] && die "timeout waiting for $id"

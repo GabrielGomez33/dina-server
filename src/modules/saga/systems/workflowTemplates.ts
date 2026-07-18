@@ -390,11 +390,14 @@ export const TEMPLATE_VIDEO_FLF_WAN_A14B: WorkflowTemplate = {
     '10': { class_type: 'LoadImage', inputs: { image: '${referenceImage}' } },
     '19': { class_type: 'LoadImage', inputs: { image: '${endImage}' } },
     '11': { class_type: 'CLIPVisionEncode', inputs: { clip_vision: ['9', 0], image: ['10', 0], crop: 'center' } },
+    '20': { class_type: 'CLIPVisionEncode', inputs: { clip_vision: ['9', 0], image: ['19', 0], crop: 'center' } },
     '12': { class_type: 'CLIPTextEncode', inputs: { text: '${prompt}', clip: ['7', 0] } },
     '13': { class_type: 'CLIPTextEncode', inputs: { text: '${negative}', clip: ['7', 0] } },
     '14': {
+      // FLF node takes SEPARATE start/end clip-vision inputs (not the I2V node's
+      // single clip_vision_output) — corrected live 2026-07-18 (execution error).
       class_type: 'WanFirstLastFrameToVideo',
-      inputs: { positive: ['12', 0], negative: ['13', 0], vae: ['8', 0], clip_vision_output: ['11', 0], start_image: ['10', 0], end_image: ['19', 0], width: '${width}', height: '${height}', length: '${length}', batch_size: 1 },
+      inputs: { positive: ['12', 0], negative: ['13', 0], vae: ['8', 0], clip_vision_start_image: ['11', 0], clip_vision_end_image: ['20', 0], start_image: ['10', 0], end_image: ['19', 0], width: '${width}', height: '${height}', length: '${length}', batch_size: 1 },
     },
     '15': {
       class_type: 'KSamplerAdvanced',
