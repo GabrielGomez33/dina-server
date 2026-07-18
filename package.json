@@ -36,6 +36,7 @@
     "test:saga:framerate": "ts-node src/modules/saga/tests/framerateTest.ts",
     "test:saga:cine": "ts-node src/modules/saga/tests/cinematographyTest.ts",
     "test:saga:timeline": "ts-node src/modules/saga/tests/timelineTest.ts",
+    "test:saga:keyframe": "ts-node src/modules/saga/tests/keyframeChoreographyTest.ts",
     "test:migration": "ts-node test/digim/migrationTest.ts",
     "test:memory": "ts-node test/digim/memoryTest.ts",
     "test:tools": "ts-node test/digim/toolTest.ts",
