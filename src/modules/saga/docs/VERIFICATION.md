@@ -108,6 +108,26 @@ manifest regenerated (17 files hashed).
 **Open (params, not graph):** motion smoothness at 4 steps (→ RIFE interpolation if steppy);
 optional anime-style LoRA to push styling further; expert step-split (currently 2/2 of 4) untuned.
 
+## Phase 0.7 — Polish stage proven + upscaler decision — ✅ 2026-07-17
+
+All three polish passes verified live on the box, and templated intent recorded:
+- **Detailer** (FaceDetailer + `hand_yolov8`): fixes faces/generic hands; **denoise 0.3**
+  preserves designed props (chains) while cleaning — 0.5 re-invents. Design-specific hands are a
+  LoRA job, not the detailer's.
+- **Interpolation** (RIFE VFI): smooths the 4-step lightning steppiness; wired to the framerate
+  policy (render low fps → interpolate up). `dtype` must be `float32` (not `fp32`).
+- **Upscale — decision made by A/B on the box:** **anime-ESRGAN `4x-AnimeSharp` is the default**
+  (stills + video) — crisp cel lines preserved, ~1-3s/frame, temporally stable. **SUPIR** softened
+  the flat anime into a painterly look at ~90s/frame → kept only as an optional "photoreal detail"
+  mode. Research had flagged SUPIR; the live A/B corrected it for our anime target.
+
+**Directed motion:** a single-prompt Wan I2V executed a real two-beat sequence (hands together →
+apart → dark energy beam) over 81 frames with the character fully consistent and chains preserved.
+Precise beat-timing still wants the keyframe (first/last-frame) path — tracked, not yet built.
+
+**Efficiency strategy adopted:** generate low-res (≈480p) → ESRGAN upscale to 2K (video gen scales
+with pixels; upscale is the delivery step). SUPIR/upscale never run on previews or thumbnails.
+
 **Known follow-ups from Phase 0 (next work):**
 - **Hands** — universal diffusion weakness (seen: merged/miscounted fingers when hands are in
   frame). Fix is Stage 3 refinement: a detailer pass (Impact-Pack + `hand_yolov8`), not an
