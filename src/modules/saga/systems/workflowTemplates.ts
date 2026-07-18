@@ -338,11 +338,83 @@ export const TEMPLATE_VIDEO_I2V_WAN_A14B: WorkflowTemplate = {
   }),
 };
 
+// ----------------------------------------------------------------------------
+// VIDEO — Wan 2.2 FLF2V-A14B (FIRST-LAST-FRAME → video). Directed-motion path.
+// Identical MoE lightning stack to the verified A14B I2V template above, with ONE
+// structural change: the motion node is WanFirstLastFrameToVideo and it takes BOTH
+// a start_image (${referenceImage}) AND an end_image (${endImage}). The model
+// generates the in-between motion that morphs the first pose into the last — so a
+// keyframeChoreography emits one bind of this per adjacent keyframe pair. Identity
+// is anchored on the START frame's CLIP-Vision (the pose we're moving away from).
+//
+// ⚠️ PROVISIONAL GRAPH: the WanFirstLastFrameToVideo NODE is confirmed PRESENT on
+// the box (saga-audit.sh, 2026-07-18) — de-risking the class name. Socket order +
+// clip_vision handling still get one live render before this is marked verified
+// (same "template in repo → verify live → fix" loop that corrected IP-Adapter's
+// weight_type and validated the I2V graph). The BINDING is what the harness proves
+// here; full-graph correctness is the remaining live gate, tracked in
+// VERIFICATION.md. Do not mark non-provisional until it renders on the box.
+// ----------------------------------------------------------------------------
+export const TEMPLATE_VIDEO_FLF_WAN_A14B: WorkflowTemplate = {
+  id: 'video-flf-wan-a14b@1',
+  jobKind: 'video_gen',
+  inputs: [
+    { name: 'highNoiseUnet', type: 'string', required: true },
+    { name: 'lowNoiseUnet', type: 'string', required: true },
+    { name: 'highLora', type: 'string', required: true },
+    { name: 'lowLora', type: 'string', required: true },
+    { name: 'textEncoder', type: 'string', required: true },
+    { name: 'vae', type: 'string', required: true },
+    { name: 'clipVision', type: 'string', required: true },
+    { name: 'prompt', type: 'string', required: false, default: '' }, // motion hint; poses carry the content
+    { name: 'negative', type: 'string', required: false, default: '' },
+    { name: 'referenceImage', type: 'string', required: true }, // START frame (in ComfyUI input/)
+    { name: 'endImage', type: 'string', required: true },       // LAST frame (in ComfyUI input/)
+    { name: 'width', type: 'integer', required: false, default: 1280, min: 256, max: 1280 },
+    { name: 'height', type: 'integer', required: false, default: 704, min: 256, max: 1280 },
+    { name: 'length', type: 'integer', required: false, default: 33, min: 8, max: 81 }, // one Wan window
+    { name: 'fps', type: 'integer', required: false, default: 16, min: 8, max: 60 },
+    { name: 'seed', type: 'integer', required: false, default: 0, min: 0 },
+    { name: 'shift', type: 'number', required: false, default: 5, min: 1, max: 12 },
+  ],
+  graphJson: JSON.stringify({
+    '1': { class_type: 'UnetLoaderGGUF', inputs: { unet_name: '${highNoiseUnet}' } },
+    '2': { class_type: 'UnetLoaderGGUF', inputs: { unet_name: '${lowNoiseUnet}' } },
+    '3': { class_type: 'LoraLoaderModelOnly', inputs: { model: ['1', 0], lora_name: '${highLora}', strength_model: 1.0 } },
+    '4': { class_type: 'LoraLoaderModelOnly', inputs: { model: ['2', 0], lora_name: '${lowLora}', strength_model: 1.0 } },
+    '5': { class_type: 'ModelSamplingSD3', inputs: { model: ['3', 0], shift: '${shift}' } },
+    '6': { class_type: 'ModelSamplingSD3', inputs: { model: ['4', 0], shift: '${shift}' } },
+    '7': { class_type: 'CLIPLoader', inputs: { clip_name: '${textEncoder}', type: 'wan' } },
+    '8': { class_type: 'VAELoader', inputs: { vae_name: '${vae}' } },
+    '9': { class_type: 'CLIPVisionLoader', inputs: { clip_name: '${clipVision}' } },
+    '10': { class_type: 'LoadImage', inputs: { image: '${referenceImage}' } },
+    '19': { class_type: 'LoadImage', inputs: { image: '${endImage}' } },
+    '11': { class_type: 'CLIPVisionEncode', inputs: { clip_vision: ['9', 0], image: ['10', 0], crop: 'center' } },
+    '12': { class_type: 'CLIPTextEncode', inputs: { text: '${prompt}', clip: ['7', 0] } },
+    '13': { class_type: 'CLIPTextEncode', inputs: { text: '${negative}', clip: ['7', 0] } },
+    '14': {
+      class_type: 'WanFirstLastFrameToVideo',
+      inputs: { positive: ['12', 0], negative: ['13', 0], vae: ['8', 0], clip_vision_output: ['11', 0], start_image: ['10', 0], end_image: ['19', 0], width: '${width}', height: '${height}', length: '${length}', batch_size: 1 },
+    },
+    '15': {
+      class_type: 'KSamplerAdvanced',
+      inputs: { add_noise: 'enable', noise_seed: '${seed}', steps: 4, cfg: 1.0, sampler_name: 'euler', scheduler: 'simple', start_at_step: 0, end_at_step: 2, return_with_leftover_noise: 'enable', model: ['5', 0], positive: ['14', 0], negative: ['14', 1], latent_image: ['14', 2] },
+    },
+    '16': {
+      class_type: 'KSamplerAdvanced',
+      inputs: { add_noise: 'disable', noise_seed: '${seed}', steps: 4, cfg: 1.0, sampler_name: 'euler', scheduler: 'simple', start_at_step: 2, end_at_step: 10000, return_with_leftover_noise: 'disable', model: ['6', 0], positive: ['14', 0], negative: ['14', 1], latent_image: ['15', 0] },
+    },
+    '17': { class_type: 'VAEDecode', inputs: { samples: ['16', 0], vae: ['8', 0] } },
+    '18': { class_type: 'VHS_VideoCombine', inputs: { images: ['17', 0], frame_rate: '${fps}', loop_count: 0, filename_prefix: 'saga_flf', format: 'video/h264-mp4', pingpong: false, save_output: true } },
+  }),
+};
+
 const REGISTRY = new Map<string, WorkflowTemplate>([
   [TEMPLATE_IMAGE_BASIC.id, TEMPLATE_IMAGE_BASIC],
   [TEMPLATE_IMAGE_REFERENCE.id, TEMPLATE_IMAGE_REFERENCE],
   [TEMPLATE_VIDEO_I2V_WAN.id, TEMPLATE_VIDEO_I2V_WAN],
   [TEMPLATE_VIDEO_I2V_WAN_A14B.id, TEMPLATE_VIDEO_I2V_WAN_A14B],
+  [TEMPLATE_VIDEO_FLF_WAN_A14B.id, TEMPLATE_VIDEO_FLF_WAN_A14B],
 ]);
 
 export function getTemplate(id: string): WorkflowTemplate | undefined {
