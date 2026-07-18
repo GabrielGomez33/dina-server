@@ -16,9 +16,13 @@ from anywhere with `SAGA_ROOT` set) and `chmod +x`.
 ### LoRA training flow
 1. `saga-lora-setup.sh` (once) — install the trainer. GPU not needed.
 2. Gather 15–30 varied on-model images → `saga-lora-dataset.sh --raw … --trigger …`.
-3. `saga-lora-train.sh` (built after setup is confirmed) — **drains the GPU** (stops
-   Ollama/ComfyUI; SDXL LoRA needs ~12–16 GB) then runs sd-scripts.
-4. Register the resulting `.safetensors` in `models/loras/` + `modelRegistry`.
+3. `saga-lora-train.sh --dataset <out> --name Exodia --trigger exodia_saga` —
+   **drains the GPU** (stops Ollama/ComfyUI; needs ~12–16 GB, checks free VRAM
+   before launching), runs sd-scripts (SDXL, UNet-only, AdamW8bit, bf16,
+   `--no_half_vae`, min-SNR), copies the `.safetensors` into `models/loras/`,
+   and restores ComfyUI on exit. Defaults mirror `core/loraTraining.ts`.
+4. Register the resulting `.safetensors` in `modelRegistry` + wire `Exodia LoRA +
+   IP-Adapter` into generation.
 
 ## Prereqs on the box
 - `saga-comfyui` up (localhost:8188), `jq` + `ffmpeg` installed.
