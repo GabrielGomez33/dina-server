@@ -17,7 +17,8 @@
 #   STEP 4  polish     — RIFE interpolate + ESRGAN 2K (if helper scripts present)
 #
 # Usage:
-#   REF=... SEAL1=... SEAL2=... SEAL3=... SEAL4=... SEAL5=... ./saga-jutsu-flf.sh
+#   LORA=exodia.safetensors TRIGGER=exodia_saga ./saga-jutsu-flf.sh
+#   (add USE_CONTROL=1 + SEAL1..SEAL5=... to force seal poses via ControlNet)
 # Flags:
 #   --check     run STEP 0 preflight only, then exit
 #   --force     regenerate artifacts even if they already exist
@@ -30,7 +31,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 KF="$HERE/saga-keyframe.sh"; FLF="$HERE/saga-flf.sh"
 
 # ── CONFIG (edit or pass via env) ───────────────────────────────────────────
-REF="${REF:-$SAGA_ROOT/tmp/exodia_ref.png}"
+# Identity now comes from the trained LoRA (no IP-Adapter pose-prior fighting the
+# seals). Seal control is OPTIONAL (USE_CONTROL=1 + canny once wired); by default
+# the LoRA + a descriptive seal prompt drives the pose.
+LORA="${LORA:-exodia.safetensors}"
+TRIGGER="${TRIGGER:-exodia_saga}"
+LORAW="${LORAW:-0.85}"
+USE_CONTROL="${USE_CONTROL:-0}"     # 1 = force seals via ControlNet from the crops below
 SEAL1="${SEAL1:-$SAGA_ROOT/tmp/seal_tiger.png}"
 SEAL2="${SEAL2:-$SAGA_ROOT/tmp/seal_serpent.png}"
 SEAL3="${SEAL3:-$SAGA_ROOT/tmp/seal_dragon.png}"
@@ -60,7 +67,9 @@ have_file(){ [ -s "$1" ]; }
 verify_out(){ have_file "$1" || fail "expected output missing/empty: $1"; log "  ✓ $(basename "$1") ($(stat -c%s "$1" 2>/dev/null || echo 0) bytes)"; }
 frames_of(){ command -v ffprobe >/dev/null && ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 "$1" 2>/dev/null || echo "?"; }
 
-BASE="Exodia the Forbidden One, golden armored egyptian anime god, glowing red eyes, ornate gold headdress with blue gem, pink and gold plating, cel shaded anime, 2d, flat colors, dark background, embers, dramatic lighting, masterpiece"
+# Identity is carried by the LoRA + trigger (prepended by saga-keyframe.sh);
+# BASE is just style + scene so the trigger isn't diluted.
+BASE="solo, cel shaded anime, 2d, flat colors, dark background, embers, dramatic lighting, masterpiece"
 
 echo "════════════════════════════════════════════════════"
 echo " SAGA — 20s JUTSU (keyframe/FLF)   seed=$SEED  ${W}x${H}@${FPS}fps"
@@ -81,24 +90,27 @@ log "engine reachable at $COMFY"
 OI=$(mktemp); curl -sf "$COMFY/object_info" -o "$OI" || fail "cannot fetch /object_info"
 KEYS=$(jq -r 'keys[]' "$OI"); rm -f "$OI"
 need_node(){ grep -qx "$1" <<<"$KEYS" || fail "required ComfyUI node MISSING: $1"; }
-for n in CheckpointLoaderSimple IPAdapterUnifiedLoader IPAdapterAdvanced \
-         ControlNetLoader ControlNetApplyAdvanced DWPreprocessor \
-         UnetLoaderGGUF CLIPLoader WanFirstLastFrameToVideo VHS_VideoCombine; do need_node "$n"; done
-log "nodes ok (incl. WanFirstLastFrameToVideo)"
+NODES="CheckpointLoaderSimple LoraLoader UnetLoaderGGUF CLIPLoader WanFirstLastFrameToVideo VHS_VideoCombine"
+[ "$USE_CONTROL" -eq 1 ] && NODES="$NODES ControlNetLoader ControlNetApplyAdvanced DWPreprocessor"
+for n in $NODES; do need_node "$n"; done
+log "nodes ok (incl. LoraLoader, WanFirstLastFrameToVideo)"
 
 have_model(){ find "$SAGA_ROOT/models" -name "$1" -print -quit 2>/dev/null | grep -q .; }
-for m in animagine-xl-4.0.safetensors controlnet-union-sdxl-promax.safetensors \
+for m in animagine-xl-4.0.safetensors \
          Wan2.2-I2V-A14B-HighNoise-Q6_K.gguf Wan2.2-I2V-A14B-LowNoise-Q6_K.gguf \
          "$FLF_T5" wan_2.1_vae.safetensors CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors; do
   have_model "$m" || fail "required model file MISSING under models/: $m"
 done
-log "models ok (umt5 = $FLF_T5)"
+[ -f "$SAGA_ROOT/models/loras/$LORA" ] || fail "LoRA not found: models/loras/$LORA (train it: saga-lora-train.sh)"
+log "models ok (lora=$LORA, umt5=$FLF_T5)"
 
-MISS=0
-for f in "$REF" "$SEAL1" "$SEAL2" "$SEAL3" "$SEAL4" "$SEAL5"; do
-  if have_file "$f"; then log "  input ✓ $f"; else log "  input ✗ MISSING $f"; MISS=1; fi
-done
-[ "$MISS" -eq 0 ] || fail "provide the Exodia ref + 5 seal crops (set REF, SEAL1..SEAL5)"
+if [ "$USE_CONTROL" -eq 1 ]; then
+  MISS=0
+  for f in "$SEAL1" "$SEAL2" "$SEAL3" "$SEAL4" "$SEAL5"; do
+    if have_file "$f"; then log "  seal ✓ $f"; else log "  seal ✗ MISSING $f"; MISS=1; fi
+  done
+  [ "$MISS" -eq 0 ] || fail "USE_CONTROL=1 needs the 5 seal crops (set SEAL1..SEAL5)"
+fi
 log "inputs ok"
 echo "✅ preflight passed"
 [ "$CHECK_ONLY" -eq 1 ] && { echo "(--check) done."; exit 0; }
@@ -110,9 +122,10 @@ CUR=1; step 1 "keyframes (8 pose stills)"
 gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.png
   local name="$1" extra="$2" ctrl="${3:-}" out="$SAGA_ROOT/tmp/${1}.png"
   if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse $name (exists; --force to redo)"; return 0; fi
-  local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" -r "$REF" -p "$BASE, $extra")
-  [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre dwpose --control-strength 0.85)
-  log "  gen $name ${ctrl:+(control: $(basename "$ctrl"))}"
+  # identity via the trained LoRA + trigger (no IP-Adapter pose prior)
+  local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -p "$BASE, $extra")
+  [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre dwpose --control-strength 0.85)
+  log "  gen $name ${ctrl:+${USE_CONTROL:+(control: $(basename "$ctrl"))}}"
   "$KF" "${args[@]}" || fail "keyframe $name failed"
 }
 gen_kf jutsu_k1 "both hands forming a ninja hand seal, fingers interlocked, tiger seal, intense focus" "$SEAL1"; K1="$SAGA_ROOT/tmp/jutsu_k1.png"; verify_out "$K1"

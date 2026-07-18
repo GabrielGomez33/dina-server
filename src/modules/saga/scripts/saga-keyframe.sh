@@ -8,14 +8,23 @@
 # image (a cropped seal from the reference sheet) through ControlNet Union Promax.
 # This is the "author the pose as a still, fix it ONCE" half of the keyframe path.
 #
+# Identity can come from a trained LoRA (preferred — no pose prior), an IP-Adapter
+# reference image, both, or neither. With a LoRA there's no reference-pose prior
+# fighting the ControlNet, so seal poses actually take.
+#
 # Shared param convention with saga-flf.sh:
 #   -o/--out NAME   -s/--seed N   -W/--width N   -H/--height N
-#   -p/--prompt STR   -n/--neg STR   -r/--ref IMG
-# Keyframe-specific:
-#   -c/--control IMG           control image (a cropped seal; omit → IP-Adapter only)
+#   -p/--prompt STR   -n/--neg STR
+# Identity:
+#   --lora FILE                LoRA in models/loras (e.g. exodia.safetensors)
+#   --lora-weight F            LoRA strength (default 0.85)
+#   --trigger TOKEN            prepended to the prompt (the LoRA's trigger word)
+#   -r/--ref IMG               IP-Adapter reference image (optional; identity/style)
+#   --ip-weight F              IP-Adapter weight 0..1 (default 0.65)
+# Pose:
+#   -c/--control IMG           control image (a cropped seal)
 #   --control-pre MODE         none|dwpose|openpose   (default dwpose)
 #   --control-strength F       ControlNet strength 0..1 (default 0.8)
-#   --ip-weight F              IP-Adapter weight 0..1 (default 0.65)
 #   --steps N (default 28)   --cfg F (default 5.5)
 #
 # Env (override model filenames if yours differ):
@@ -37,6 +46,7 @@ CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"
 OUT="saga_kf"; SEED=0; W=1280; H=704; STEPS=28; CFG=5.5
 PROMPT=""; NEG="lowres, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, worst quality, blurry, multiple people, 2boys"
 REF=""; CONTROL=""; CPRE="dwpose"; CSTR=0.8; IPW=0.65
+LORA=""; LORAW=0.85; TRIGGER=""
 
 die(){ echo "❌ $*" >&2; exit 1; }
 usage(){ sed -n '2,30p' "$0"; exit 0; }
@@ -53,6 +63,9 @@ while [ $# -gt 0 ]; do case "$1" in
   --control-pre) CPRE="$2"; shift 2;;
   --control-strength) CSTR="$2"; shift 2;;
   --ip-weight) IPW="$2"; shift 2;;
+  --lora) LORA="$2"; shift 2;;
+  --lora-weight) LORAW="$2"; shift 2;;
+  --trigger) TRIGGER="$2"; shift 2;;
   --steps) STEPS="$2"; shift 2;;
   --cfg) CFG="$2"; shift 2;;
   -h|--help) usage;;
@@ -60,8 +73,10 @@ while [ $# -gt 0 ]; do case "$1" in
 esac; done
 
 [ -n "$PROMPT" ] || die "need -p/--prompt"
-[ -n "$REF" ] || die "need -r/--ref (Exodia identity image)"
 command -v jq >/dev/null || die "jq required"
+[ -z "$LORA" ] || [ -f "$SAGA_ROOT/models/loras/$LORA" ] || die "LoRA not found: models/loras/$LORA"
+[ -n "$REF" ] || [ -n "$LORA" ] || echo "⚠️ no --lora and no --ref: plain generation (no identity lock)" >&2
+[ -n "$TRIGGER" ] && PROMPT="$TRIGGER, $PROMPT"
 
 CID="sagakf-$$-$RANDOM"
 
@@ -109,9 +124,13 @@ fetch_first(){ # <history-json> <prompt_id> <dest>   [tries HTTP /view, then dis
   die "could not retrieve $fn (view http=$code; not found on disk). Set COMFY_OUT to your ComfyUI output dir."
 }
 
-echo "▶ keyframe: '$OUT'  seed=$SEED  ${W}x${H}  ip=$IPW  control=${CONTROL:-none}/$CPRE@$CSTR"
-REF_NAME=$(upload "$REF"); echo "  ref uploaded: $REF_NAME"
+echo "▶ keyframe: '$OUT'  seed=$SEED  ${W}x${H}  lora=${LORA:-none}@$LORAW  ref=${REF:+ip@$IPW}  control=${CONTROL:-none}/$CPRE@$CSTR"
+REF_NAME=""; [ -n "$REF" ] && { REF_NAME=$(upload "$REF"); echo "  ref uploaded: $REF_NAME"; }
 CTRL_NAME=""; [ -n "$CONTROL" ] && { CTRL_NAME=$(upload "$CONTROL"); echo "  control uploaded: $CTRL_NAME"; }
+
+# Identity routing: a LoRA (node 40) rewires model+clip; IP-Adapter (nodes
+# 8/14/9/10) further wraps the model. KMODEL is what the sampler consumes.
+if [ -n "$LORA" ]; then MODEL='["40",0]'; CLIP='["40",1]'; else MODEL='["1",0]'; CLIP='["1",1]'; fi
 
 # --- build graph ------------------------------------------------------------
 GRAPH=$(mktemp)
@@ -119,14 +138,28 @@ GRAPH=$(mktemp)
 cat <<JSON
 {
  "1": {"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"$CKPT"}},
- "2": {"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$PROMPT" '$s'),"clip":["1",1]}},
- "3": {"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$NEG" '$s'),"clip":["1",1]}},
+JSON
+[ -n "$LORA" ] && cat <<JSON
+ "40":{"class_type":"LoraLoader","inputs":{"model":["1",0],"clip":["1",1],"lora_name":"$LORA","strength_model":$LORAW,"strength_clip":$LORAW}},
+JSON
+cat <<JSON
+ "2": {"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$PROMPT" '$s'),"clip":$CLIP}},
+ "3": {"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$NEG" '$s'),"clip":$CLIP}},
  "4": {"class_type":"EmptyLatentImage","inputs":{"width":$W,"height":$H,"batch_size":1}},
+JSON
+
+# IP-Adapter only when a reference image is supplied.
+if [ -n "$REF_NAME" ]; then
+cat <<JSON
  "8": {"class_type":"LoadImage","inputs":{"image":"$REF_NAME"}},
  "14":{"class_type":"PrepImageForClipVision","inputs":{"image":["8",0],"interpolation":"LANCZOS","crop_position":"center","sharpening":0}},
- "9": {"class_type":"IPAdapterUnifiedLoader","inputs":{"model":["1",0],"preset":"PLUS (high strength)"}},
+ "9": {"class_type":"IPAdapterUnifiedLoader","inputs":{"model":$MODEL,"preset":"PLUS (high strength)"}},
  "10":{"class_type":"IPAdapterAdvanced","inputs":{"model":["9",0],"ipadapter":["9",1],"image":["14",0],"weight":$IPW,"weight_type":"linear","combine_embeds":"concat","start_at":0,"end_at":1,"embeds_scaling":"V only"}},
 JSON
+  KMODEL='["10",0]'
+else
+  KMODEL="$MODEL"
+fi
 
 if [ -n "$CTRL_NAME" ]; then
   # preprocessor selection (confirmed nodes: DWPreprocessor / OpenposePreprocessor)
@@ -149,7 +182,7 @@ else
 fi
 
 cat <<JSON
- "5": {"class_type":"KSampler","inputs":{"seed":$SEED,"steps":$STEPS,"cfg":$CFG,"sampler_name":"euler_ancestral","scheduler":"normal","denoise":1,"model":["10",0],"positive":$POS,"negative":$NEGC,"latent_image":["4",0]}},
+ "5": {"class_type":"KSampler","inputs":{"seed":$SEED,"steps":$STEPS,"cfg":$CFG,"sampler_name":"euler_ancestral","scheduler":"normal","denoise":1,"model":$KMODEL,"positive":$POS,"negative":$NEGC,"latent_image":["4",0]}},
  "6": {"class_type":"VAEDecode","inputs":{"samples":["5",0],"vae":["1",2]}},
  "7": {"class_type":"SaveImage","inputs":{"filename_prefix":"$OUT","images":["6",0]}}
 }
