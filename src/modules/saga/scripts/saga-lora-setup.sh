@@ -51,17 +51,21 @@ if [ ! -x "$PY" ]; then
 fi
 "$PY" -m pip install --upgrade pip wheel >/dev/null || die "pip upgrade failed"
 
-log "3/5 install torch (cu121, matches the ComfyUI stack)"
-"$PY" -m pip install torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu121 \
-  || die "torch install failed"
+log "3/5 install torch (cu121; py3.12 needs >=2.2 — default 2.5.1)"
+# py3.12 has no torch 2.1.x cu121 wheels; the index carries 2.2.0..2.5.1.
+TORCH_VER="${TORCH_VER:-2.5.1}"; TV_VER="${TV_VER:-0.20.1}"
+"$PY" -m pip install "torch==${TORCH_VER}" "torchvision==${TV_VER}" --index-url https://download.pytorch.org/whl/cu121 \
+  || die "torch install failed (try a different TORCH_VER/TV_VER; index has 2.2.0..2.5.1 for py3.12)"
 
 log "4/5 install sd-scripts requirements + training extras"
 # requirements.txt installs the sd-scripts library (library/*) + accelerate/
 # transformers/diffusers/etc. Extras: 8-bit Adam (bitsandbytes) + xformers.
 ( cd "$SDROOT" && "$PY" -m pip install -r requirements.txt ) || die "requirements install failed"
-"$PY" -m pip install bitsandbytes==0.43.1 || echo "⚠️ bitsandbytes install nonzero — AdamW8bit may be unavailable (train can fall back to AdamW)"
-"$PY" -m pip install xformers==0.0.23.post1 --index-url https://download.pytorch.org/whl/cu121 \
-  || echo "⚠️ xformers install nonzero — train can use --sdpa instead"
+"$PY" -m pip install bitsandbytes || echo "⚠️ bitsandbytes install nonzero — AdamW8bit may be unavailable (train can fall back to AdamW)"
+# xformers must match torch; 0.0.28.post3 ↔ torch 2.5.1. Best-effort (train can use --sdpa).
+XFORMERS_VER="${XFORMERS_VER:-0.0.28.post3}"
+"$PY" -m pip install "xformers==${XFORMERS_VER}" --index-url https://download.pytorch.org/whl/cu121 \
+  || echo "⚠️ xformers ${XFORMERS_VER} install nonzero — train can use --sdpa instead"
 
 log "5/5 write a non-interactive single-GPU accelerate config + smoke test"
 ACC_DIR="$HOME/.cache/huggingface/accelerate"; mkdir -p "$ACC_DIR"
