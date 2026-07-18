@@ -108,6 +108,27 @@ manifest regenerated (17 files hashed).
 **Open (params, not graph):** motion smoothness at 4 steps (→ RIFE interpolation if steppy);
 optional anime-style LoRA to push styling further; expert step-split (currently 2/2 of 4) untuned.
 
+## Phase 0.8 — Pipeline readiness audit — ✅ 2026-07-18
+
+`saga-audit.sh` inventoried every pipeline stage's models + ComfyUI nodes on the box. **Result:
+the entire pipeline is installed — nothing missing.** This seeds `pipeline.ts`'s
+`CURRENT_BOX_READINESS` baseline and de-risks the FLF path.
+
+| Stage | Nodes | Models | Status |
+|---|---|---|---|
+| Generate (I2V + **FLF**) | `WanImageToVideo`, **`WanFirstLastFrameToVideo`**, `UnetLoaderGGUF` | A14B Q6_K experts + both LightX2V LoRAs + wan_2.1 vae + CLIP-ViT-H | ✅ FLF node **confirmed present** |
+| Detail | `FaceDetailer`, `UltralyticsDetectorProvider` | `hand_yolov8s.pt` **+** `face_yolov8m.pt` (in `ultralytics/bbox/`) | ✅ the hand model was there all along — jutsu chain just never called it |
+| ControlNet (seal-forcing) | `ControlNetLoader`, `ControlNetApplyAdvanced`, `DWPreprocessor`, `OpenposePreprocessor` | `controlnet-union-sdxl-promax.safetensors` | ✅ Union Promax does OpenPose/hand — can force exact seal hand configs |
+| Interpolate | `RIFE VFI` | (node-bundled) | ✅ |
+| Upscale | `UpscaleModelLoader`, `ImageUpscaleWithModel` | `4x-AnimeSharp.pth` | ✅ |
+| Reference | `IPAdapterUnifiedLoader`, `IPAdapterAdvanced` | `ip-adapter-plus_sdxl_vit-h` | ✅ (known good) |
+
+Also on the box: SUPIR-v0Q (photoreal-only upscaler), FLUX schnell, Wan 5B fp16 (fallback), wan2.2
+vae. No SAM model (FaceDetailer falls back to bbox masks — fine). Key takeaway: the first jutsu
+render's missing hand pass was a missing **call**, not a missing model — exactly the silent-skip
+`pipeline.ts` now prevents (it recommends detail when hands are in frame, and blocks+surfaces any
+stage whose model is actually absent).
+
 ## Phase 0.7 — Polish stage proven + upscaler decision — ✅ 2026-07-17
 
 All three polish passes verified live on the box, and templated intent recorded:

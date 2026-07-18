@@ -347,12 +347,13 @@ export const TEMPLATE_VIDEO_I2V_WAN_A14B: WorkflowTemplate = {
 // keyframeChoreography emits one bind of this per adjacent keyframe pair. Identity
 // is anchored on the START frame's CLIP-Vision (the pose we're moving away from).
 //
-// ⚠️ PROVISIONAL GRAPH: WanFirstLastFrameToVideo class name + socket order are
-// verified against LIVE ComfyUI before use (same "template in repo → verify live →
-// fix" loop that corrected IP-Adapter's weight_type and validated the I2V graph).
-// The BINDING is what the harness proves here; ComfyUI-node correctness is a
-// separate live gate, tracked in VERIFICATION.md. Do not mark non-provisional
-// until it renders on the box.
+// ⚠️ PROVISIONAL GRAPH: the WanFirstLastFrameToVideo NODE is confirmed PRESENT on
+// the box (saga-audit.sh, 2026-07-18) — de-risking the class name. Socket order +
+// clip_vision handling still get one live render before this is marked verified
+// (same "template in repo → verify live → fix" loop that corrected IP-Adapter's
+// weight_type and validated the I2V graph). The BINDING is what the harness proves
+// here; full-graph correctness is the remaining live gate, tracked in
+// VERIFICATION.md. Do not mark non-provisional until it renders on the box.
 // ----------------------------------------------------------------------------
 export const TEMPLATE_VIDEO_FLF_WAN_A14B: WorkflowTemplate = {
   id: 'video-flf-wan-a14b@1',

@@ -119,7 +119,13 @@ Legend: ✅ done & proven · 🟡 in progress · ⬜ not started
 - ✅ **Keyframe / FLF choreography (directed motion)**: `keyframeChoreography.ts` — pins poses as
   still keyframes and plans first-last-frame (FLF2V) transitions between them; the fix for the
   jutsu render's improvised action. Tested (42). Provisional FLF template `video-flf-wan-a14b@1`
-  (needs box verification). **← most recent module (commit `d37aee0`).**
+  (FLF node confirmed present on the box; full render still the gate). Commit `d37aee0`.
+- ✅ **Pipeline planner**: `pipeline.ts` — the production pipeline (generate→detail→interpolate→
+  upscale→filters) as an explicit plan: content-based stage recommendations + user overrides +
+  **readiness cross-check** (blocks/surfaces any stage whose node/model is absent, instead of the
+  hardcoded box-script chains that silently skipped the hand detailer). Tested (38). **← most recent
+  module.** Seeded by the 2026-07-18 box audit (`CURRENT_BOX_READINESS`) — **entire pipeline is
+  installed, nothing missing** (incl. ControlNet Union Promax for seal-forcing).
 - 🟡 **LoRA subsystem**: **plan-gate only** (`loraTraining.ts`, `resolveLoraPlan`, tested 25). The
   actual trainer (kohya_ss install + dataset builder + training worker + registration) is NOT built.
 - ⬜ **Audio subsystem** (multi-track): TTS, AI SFX (text-to-audio + video-to-audio foley), music
@@ -152,6 +158,7 @@ orchestration. **tests/** = proof harnesses. Run any via `npm run test:saga:<nam
 | `core/cinematography.ts` | route cine terms → prompt/camera/ffmpeg | cine (61) | `7dbde6c` |
 | `core/timeline.ts` | NLE sequence/track/clip + validation + export plan | timeline (68) | `72f0dc1` |
 | `core/keyframeChoreography.ts` | FLF (first-last-frame) directed-motion planner | keyframe (42) | `d37aee0` |
+| `core/pipeline.ts` | stage recommend + override + model-readiness planner | pipeline (38) | (this commit) |
 | `systems/generationWorker.ts` | orchestrate a generation job (ports injected) | worker (38) | `80b65c2` |
 | `systems/workflowTemplates.ts` | ComfyUI node-graph templates (image/ref/video) | render (29) | multiple |
 | `systems/comfyClient.ts`, `jobQueue.ts`, `progressMapper.ts` | transport / queue / progress | render/foundation | Phase 1–2 |
