@@ -24,7 +24,7 @@
 #   FLF_LO=Wan2.2-I2V-A14B-LowNoise-Q6_K.gguf
 #   FLF_HILORA=wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors
 #   FLF_LOLORA=wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors
-#   FLF_T5=umt5_xxl_fp8_e4m3fn_scaled.safetensors   # ← set to YOUR umt5 filename
+#   FLF_T5=umt5_xxl_fp8_e4m3fn_scaled.safetensors   # confirmed installed (audit 2026-07-18)
 #   FLF_VAE=wan_2.1_vae.safetensors
 #   FLF_CLIPVISION=CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors
 # ============================================================================

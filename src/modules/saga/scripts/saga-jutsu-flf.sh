@@ -1,102 +1,182 @@
 #!/usr/bin/env bash
 # ============================================================================
-# saga-jutsu-flf.sh — the 20s jutsu, keyframe-directed
+# saga-jutsu-flf.sh — the 20s jutsu, keyframe-directed (A–Z orchestrator)
 # ----------------------------------------------------------------------------
 # 5 seals → hands together (prayer) → on separation a purple rasengan orb grows,
 # flowing with energy. 8 keyframes, 7 FLF transitions + 3 holds = 320 frames @
 # 16fps = 20.0s exactly. Every FLF segment fits Wan's ~81-frame window.
 #
-# This is a DRIVER: it calls saga-keyframe.sh (pose stills) and saga-flf.sh
-# (animate between them), then concats → (optional) RIFE → (optional) ESRGAN.
+# Runs the whole pipeline in numbered STEPS with preflight checks, per-step
+# output verification, a timestamped LOG, and idempotent resume (existing
+# artifacts are reused unless --force). Drives saga-keyframe.sh + saga-flf.sh.
 #
-# ── YOU PROVIDE (edit the CONFIG block) ─────────────────────────────────────
-#   REF   : an Exodia identity image (IP-Adapter anchor)
-#   SEAL1..SEAL5 : five cropped seal images from your reference sheet (the hand
-#                  drawings — one per file). Prayer/orb keyframes are prompt-driven
-#                  (no seal control needed).
+#   STEP 0  preflight  — tools, engine, nodes, models, inputs
+#   STEP 1  keyframes  — 8 pose stills
+#   STEP 2  motion     — 3 holds + 7 FLF transitions
+#   STEP 3  assemble   — concat → 20s master
+#   STEP 4  polish     — RIFE interpolate + ESRGAN 2K (if helper scripts present)
+#
+# Usage:
+#   REF=... SEAL1=... SEAL2=... SEAL3=... SEAL4=... SEAL5=... ./saga-jutsu-flf.sh
+# Flags:
+#   --check     run STEP 0 preflight only, then exit
+#   --force     regenerate artifacts even if they already exist
+#   --no-polish skip STEP 4
 # ============================================================================
 set -uo pipefail
 : "${SAGA_ROOT:?set SAGA_ROOT}"
+COMFY="${COMFY:-http://127.0.0.1:8188}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 KF="$HERE/saga-keyframe.sh"; FLF="$HERE/saga-flf.sh"
-[ -x "$KF" ] || KF="bash $KF"; [ -x "$FLF" ] || FLF="bash $FLF"
 
-# ── CONFIG ──────────────────────────────────────────────────────────────────
+# ── CONFIG (edit or pass via env) ───────────────────────────────────────────
 REF="${REF:-$SAGA_ROOT/tmp/exodia_ref.png}"
 SEAL1="${SEAL1:-$SAGA_ROOT/tmp/seal_tiger.png}"
 SEAL2="${SEAL2:-$SAGA_ROOT/tmp/seal_serpent.png}"
 SEAL3="${SEAL3:-$SAGA_ROOT/tmp/seal_dragon.png}"
 SEAL4="${SEAL4:-$SAGA_ROOT/tmp/seal_ram.png}"
 SEAL5="${SEAL5:-$SAGA_ROOT/tmp/seal_boar.png}"
-SEED="${SEED:-777}"
-W="${W:-1280}"; H="${H:-704}"; FPS="${FPS:-16}"
+SEED="${SEED:-777}"; W="${W:-1280}"; H="${H:-704}"; FPS="${FPS:-16}"
+
+# confirmed installed filenames (audit 2026-07-18); saga-flf.sh reads these via env
+export FLF_T5="${FLF_T5:-umt5_xxl_fp8_e4m3fn_scaled.safetensors}"
+
+FORCE=0; POLISH=1; CHECK_ONLY=0
+while [ $# -gt 0 ]; do case "$1" in
+  --check) CHECK_ONLY=1; shift;; --force) FORCE=1; shift;;
+  --no-polish) POLISH=0; shift;; -h|--help) sed -n '2,34p' "$0"; exit 0;;
+  *) echo "unknown arg: $1"; exit 2;;
+esac; done
+
 WORK="$SAGA_ROOT/tmp/jutsu"; mkdir -p "$WORK"
+LOG="$WORK/run_$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -a "$LOG") 2>&1
+T0=$(date +%s)
+
+log(){ echo "[$(date +%H:%M:%S)] $*"; }
+step(){ echo; echo "════════════ STEP $1 — $2 ════════════"; }
+fail(){ echo; echo "❌ FAIL (step ${CUR:-?}): $*" >&2; echo "   log: $LOG" >&2; exit 1; }
+have_file(){ [ -s "$1" ]; }
+verify_out(){ have_file "$1" || fail "expected output missing/empty: $1"; log "  ✓ $(basename "$1") ($(stat -c%s "$1" 2>/dev/null || echo 0) bytes)"; }
+frames_of(){ command -v ffprobe >/dev/null && ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 "$1" 2>/dev/null || echo "?"; }
 
 BASE="Exodia the Forbidden One, golden armored egyptian anime god, glowing red eyes, ornate gold headdress with blue gem, pink and gold plating, cel shaded anime, 2d, flat colors, dark background, embers, dramatic lighting, masterpiece"
 
-echo "════════ 20s JUTSU (keyframe/FLF) — seed $SEED ════════"
+echo "════════════════════════════════════════════════════"
+echo " SAGA — 20s JUTSU (keyframe/FLF)   seed=$SEED  ${W}x${H}@${FPS}fps"
+echo " log: $LOG"
+echo "════════════════════════════════════════════════════"
 
-# ── 1. KEYFRAMES (pose stills) ──────────────────────────────────────────────
-# seals: control-forced hand poses; prayer/orb: prompt-driven identity poses.
-gen_kf(){ # <out> <prompt-extra> [control-image]
-  local out="$1" extra="$2" ctrl="${3:-}"
-  local args=(-o "$out" -s "$SEED" -W "$W" -H "$H" -r "$REF" -p "$BASE, $extra")
+# ── STEP 0 — PREFLIGHT ──────────────────────────────────────────────────────
+CUR=0; step 0 "preflight checks"
+for t in jq curl ffmpeg; do command -v "$t" >/dev/null || fail "missing tool: $t"; done
+command -v ffprobe >/dev/null || log "  ⚠ ffprobe absent — frame-count checks will be skipped"
+[ -x "$KF" ] || fail "not executable: $KF (chmod +x)"
+[ -x "$FLF" ] || fail "not executable: $FLF (chmod +x)"
+log "tools ok"
+
+curl -sf "$COMFY/system_stats" >/dev/null || fail "ComfyUI not reachable at $COMFY (is saga-comfyui up?)"
+log "engine reachable at $COMFY"
+
+OI=$(mktemp); curl -sf "$COMFY/object_info" -o "$OI" || fail "cannot fetch /object_info"
+KEYS=$(jq -r 'keys[]' "$OI"); rm -f "$OI"
+need_node(){ grep -qx "$1" <<<"$KEYS" || fail "required ComfyUI node MISSING: $1"; }
+for n in CheckpointLoaderSimple IPAdapterUnifiedLoader IPAdapterAdvanced \
+         ControlNetLoader ControlNetApplyAdvanced DWPreprocessor \
+         UnetLoaderGGUF CLIPLoader WanFirstLastFrameToVideo VHS_VideoCombine; do need_node "$n"; done
+log "nodes ok (incl. WanFirstLastFrameToVideo)"
+
+have_model(){ find "$SAGA_ROOT/models" -name "$1" -print -quit 2>/dev/null | grep -q .; }
+for m in animagine-xl-4.0.safetensors controlnet-union-sdxl-promax.safetensors \
+         Wan2.2-I2V-A14B-HighNoise-Q6_K.gguf Wan2.2-I2V-A14B-LowNoise-Q6_K.gguf \
+         "$FLF_T5" wan_2.1_vae.safetensors CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors; do
+  have_model "$m" || fail "required model file MISSING under models/: $m"
+done
+log "models ok (umt5 = $FLF_T5)"
+
+MISS=0
+for f in "$REF" "$SEAL1" "$SEAL2" "$SEAL3" "$SEAL4" "$SEAL5"; do
+  if have_file "$f"; then log "  input ✓ $f"; else log "  input ✗ MISSING $f"; MISS=1; fi
+done
+[ "$MISS" -eq 0 ] || fail "provide the Exodia ref + 5 seal crops (set REF, SEAL1..SEAL5)"
+log "inputs ok"
+echo "✅ preflight passed"
+[ "$CHECK_ONLY" -eq 1 ] && { echo "(--check) done."; exit 0; }
+
+# ── STEP 1 — KEYFRAMES ──────────────────────────────────────────────────────
+CUR=1; step 1 "keyframes (8 pose stills)"
+gen_kf(){ # <name> <prompt-extra> [control]
+  local name="$1" extra="$2" ctrl="${3:-}" out="$SAGA_ROOT/tmp/${1}.png"
+  if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse $name (exists; --force to redo)"; echo "$out"; return; fi
+  local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" -r "$REF" -p "$BASE, $extra")
   [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre dwpose --control-strength 0.85)
-  $KF "${args[@]}" >/dev/null && echo "$SAGA_ROOT/tmp/${out}.png"
-}
-echo "▶ keyframes…"
-K1=$(gen_kf jutsu_k1 "both hands forming a ninja hand seal, fingers interlocked, tiger seal, intense focus" "$SEAL1")
-K2=$(gen_kf jutsu_k2 "both hands forming a ninja hand seal, serpent seal, hands clasped" "$SEAL2")
-K3=$(gen_kf jutsu_k3 "both hands forming a ninja hand seal, dragon seal" "$SEAL3")
-K4=$(gen_kf jutsu_k4 "both hands forming a ninja hand seal, ram seal, index fingers up" "$SEAL4")
-K5=$(gen_kf jutsu_k5 "both hands forming a ninja hand seal, boar seal, fists together" "$SEAL5")
-K6=$(gen_kf jutsu_k6 "both hands pressed flat together in prayer position at center, gathering purple energy, faint glow between the palms")
-K7=$(gen_kf jutsu_k7 "hands slightly apart, a small swirling purple energy orb forming between the palms, rasengan, glowing")
-K8=$(gen_kf jutsu_k8 "hands held wide apart, a large swirling purple energy sphere between the palms, rasengan, crackling purple lightning, energy flowing, radiant glow")
-
-# ── 2. HOLDS (freeze a keyframe for N frames) ───────────────────────────────
-hold(){ # <still.png> <frames> <out.mp4>
-  local png="$1" n="$2" out="$3"
-  ffmpeg -y -loop 1 -i "$png" -t "$(awk -v n="$n" -v f="$FPS" 'BEGIN{printf "%.4f", n/f}')" \
-    -r "$FPS" -s "${W}x${H}" -c:v libx264 -pix_fmt yuv420p "$out" >/dev/null 2>&1 || { echo "❌ hold failed"; exit 1; }
+  log "  gen $name ${ctrl:+(control: $(basename "$ctrl"))}"
+  "$KF" "${args[@]}" >/dev/null || fail "keyframe $name failed"
   echo "$out"
 }
+K1=$(gen_kf jutsu_k1 "both hands forming a ninja hand seal, fingers interlocked, tiger seal, intense focus" "$SEAL1"); verify_out "$K1"
+K2=$(gen_kf jutsu_k2 "both hands forming a ninja hand seal, serpent seal, hands clasped" "$SEAL2"); verify_out "$K2"
+K3=$(gen_kf jutsu_k3 "both hands forming a ninja hand seal, dragon seal" "$SEAL3"); verify_out "$K3"
+K4=$(gen_kf jutsu_k4 "both hands forming a ninja hand seal, ram seal, index fingers up" "$SEAL4"); verify_out "$K4"
+K5=$(gen_kf jutsu_k5 "both hands forming a ninja hand seal, boar seal, fists together" "$SEAL5"); verify_out "$K5"
+K6=$(gen_kf jutsu_k6 "both hands pressed flat together in prayer position at center, gathering purple energy, faint glow between the palms"); verify_out "$K6"
+K7=$(gen_kf jutsu_k7 "hands slightly apart, a small swirling purple energy orb forming between the palms, rasengan, glowing"); verify_out "$K7"
+K8=$(gen_kf jutsu_k8 "hands held wide apart, a large swirling purple energy sphere between the palms, rasengan, crackling purple lightning, energy flowing, radiant glow"); verify_out "$K8"
+echo "✅ 8 keyframes ready"
 
-# ── 3. FLF TRANSITIONS + assembly order (320 frames = 20.0s) ────────────────
+# ── STEP 2 — MOTION (holds + FLF transitions) ───────────────────────────────
+CUR=2; step 2 "motion (3 holds + 7 FLF transitions = 320f/20s)"
+hold(){ # <still> <frames> <out>
+  local png="$1" n="$2" out="$3"
+  if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse hold $(basename "$out")"; echo "$out"; return; fi
+  log "  hold $(basename "$png") × ${n}f"
+  ffmpeg -y -loop 1 -i "$png" -t "$(awk -v n="$n" -v f="$FPS" 'BEGIN{printf "%.4f", n/f}')" \
+    -r "$FPS" -s "${W}x${H}" -c:v libx264 -pix_fmt yuv420p "$out" >/dev/null 2>&1 || fail "hold render failed: $out"
+  echo "$out"
+}
+flf(){ # <name> <first> <last> <frames> <motion-prompt>
+  local name="$1" a="$2" b="$3" n="$4" mp="$5" out="$SAGA_ROOT/tmp/${1}.mp4"
+  if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse flf $name"; echo "$out"; return; fi
+  log "  flf $name  ${n}f  ($(basename "$a") → $(basename "$b"))"
+  "$FLF" -o "$name" -a "$a" -b "$b" -L "$n" --fps "$FPS" -W "$W" -H "$H" -s "$SEED" -p "$mp" >/dev/null || fail "flf $name failed"
+  echo "$out"
+}
 SEAL_MOTION="both hands smoothly change to the next ninja hand seal, precise finger movement"
 declare -a CLIPS
-echo "▶ hold + transitions…"
-CLIPS+=( "$(hold "$K1" 8 "$WORK/s00_hold1.mp4")" )
-CLIPS+=( "$($FLF -o s01 -a "$K1" -b "$K2" -L 40 --fps "$FPS" -s "$SEED" -p "$SEAL_MOTION"; echo "$SAGA_ROOT/tmp/s01.mp4")" )
-CLIPS+=( "$($FLF -o s02 -a "$K2" -b "$K3" -L 40 --fps "$FPS" -s "$SEED" -p "$SEAL_MOTION"; echo "$SAGA_ROOT/tmp/s02.mp4")" )
-CLIPS+=( "$($FLF -o s03 -a "$K3" -b "$K4" -L 40 --fps "$FPS" -s "$SEED" -p "$SEAL_MOTION"; echo "$SAGA_ROOT/tmp/s03.mp4")" )
-CLIPS+=( "$($FLF -o s04 -a "$K4" -b "$K5" -L 40 --fps "$FPS" -s "$SEED" -p "$SEAL_MOTION"; echo "$SAGA_ROOT/tmp/s04.mp4")" )
-CLIPS+=( "$($FLF -o s05 -a "$K5" -b "$K6" -L 40 --fps "$FPS" -s "$SEED" -p "both hands come together into prayer position, energy gathering at the center"; echo "$SAGA_ROOT/tmp/s05.mp4")" )
+CLIPS+=( "$(hold "$K1" 8  "$WORK/s00_hold1.mp4")" )
+CLIPS+=( "$(flf s01 "$K1" "$K2" 40 "$SEAL_MOTION")" )
+CLIPS+=( "$(flf s02 "$K2" "$K3" 40 "$SEAL_MOTION")" )
+CLIPS+=( "$(flf s03 "$K3" "$K4" 40 "$SEAL_MOTION")" )
+CLIPS+=( "$(flf s04 "$K4" "$K5" 40 "$SEAL_MOTION")" )
+CLIPS+=( "$(flf s05 "$K5" "$K6" 40 "both hands come together into prayer position, energy gathering at the center")" )
 CLIPS+=( "$(hold "$K6" 16 "$WORK/s06_hold6.mp4")" )
-CLIPS+=( "$($FLF -o s07 -a "$K6" -b "$K7" -L 40 --fps "$FPS" -s "$SEED" -p "the hands separate, a purple energy orb forms and swirls between the palms"; echo "$SAGA_ROOT/tmp/s07.mp4")" )
-CLIPS+=( "$($FLF -o s08 -a "$K7" -b "$K8" -L 48 --fps "$FPS" -s "$SEED" -p "the purple energy orb grows larger, swirling and flowing with crackling energy, radiant"; echo "$SAGA_ROOT/tmp/s08.mp4")" )
-CLIPS+=( "$(hold "$K8" 8 "$WORK/s09_hold8.mp4")" )
+CLIPS+=( "$(flf s07 "$K6" "$K7" 40 "the hands separate, a purple energy orb forms and swirls between the palms")" )
+CLIPS+=( "$(flf s08 "$K7" "$K8" 48 "the purple energy orb grows larger, swirling and flowing with crackling energy, radiant")" )
+CLIPS+=( "$(hold "$K8" 8  "$WORK/s09_hold8.mp4")" )
+TOT=0
+for c in "${CLIPS[@]}"; do verify_out "$c"; f=$(frames_of "$c"); [ "$f" != "?" ] && TOT=$((TOT+f)); done
+log "total frames (measured): ${TOT:-?} (expected 320 = 20.0s @ ${FPS}fps)"
+echo "✅ motion segments ready"
 
-# ── 4. CONCAT → master ──────────────────────────────────────────────────────
+# ── STEP 3 — ASSEMBLE ───────────────────────────────────────────────────────
+CUR=3; step 3 "assemble → master"
 LIST="$WORK/concat.txt"; : > "$LIST"
-for c in "${CLIPS[@]}"; do [ -f "$c" ] || { echo "❌ missing clip: $c"; exit 1; }; echo "file '$c'" >> "$LIST"; done
+for c in "${CLIPS[@]}"; do echo "file '$c'" >> "$LIST"; done
 MASTER="$WORK/jutsu_20s_master.mp4"
-ffmpeg -y -f concat -safe 0 -i "$LIST" -c:v libx264 -pix_fmt yuv420p -r "$FPS" "$MASTER" >/dev/null 2>&1 \
-  || { echo "❌ concat failed"; exit 1; }
-echo "✅ master (raw, ${FPS}fps): $MASTER"
+ffmpeg -y -f concat -safe 0 -i "$LIST" -c:v libx264 -pix_fmt yuv420p -r "$FPS" "$MASTER" >/dev/null 2>&1 || fail "concat failed"
+verify_out "$MASTER"; log "master frames: $(frames_of "$MASTER"), duration ~$(awk -v t="$(frames_of "$MASTER")" -v f="$FPS" 'BEGIN{printf "%.1f", (t=="?"?0:t)/f}')s"
+echo "✅ master → $MASTER"
 
-# ── 5. POLISH (uses your existing box scripts if present) ───────────────────
-# Pipeline planner's recommendation for a FINAL clip: interpolate (16→ higher) +
-# upscale to 2K. Hands were already pinned+clean at the keyframes, so per-frame
-# detail is optional here.
-if [ -x "$HERE/saga-interpolate.sh" ]; then
-  echo "▶ RIFE interpolate…"; "$HERE/saga-interpolate.sh" "$MASTER" || echo "⚠️ interpolate step skipped"
-else
-  echo "ℹ next: RIFE interpolate  →  saga-interpolate.sh \"$MASTER\""
+# ── STEP 4 — POLISH ─────────────────────────────────────────────────────────
+CUR=4; step 4 "polish (interpolate + upscale)"
+if [ "$POLISH" -eq 0 ]; then log "(--no-polish) skipped"; else
+  if [ -x "$HERE/saga-interpolate.sh" ]; then log "RIFE interpolate…"; "$HERE/saga-interpolate.sh" "$MASTER" || log "⚠ interpolate step returned nonzero"; else log "ℹ next: saga-interpolate.sh \"$MASTER\""; fi
+  if [ -x "$HERE/saga-esrgan-video.sh" ]; then log "ESRGAN 2K upscale…"; "$HERE/saga-esrgan-video.sh" "$MASTER" || log "⚠ upscale step returned nonzero"; else log "ℹ next: saga-esrgan-video.sh \"$MASTER\""; fi
 fi
-if [ -x "$HERE/saga-esrgan-video.sh" ]; then
-  echo "▶ ESRGAN 2K upscale…"; "$HERE/saga-esrgan-video.sh" "$MASTER" || echo "⚠️ upscale step skipped"
-else
-  echo "ℹ next: ESRGAN 2K upscale →  saga-esrgan-video.sh \"$MASTER\""
-fi
-echo "════════ done — review $MASTER ════════"
+
+DT=$(( $(date +%s) - T0 ))
+echo
+echo "════════════════════════════════════════════════════"
+echo " ✅ DONE in ${DT}s — review: $MASTER"
+echo " log: $LOG"
+echo "════════════════════════════════════════════════════"

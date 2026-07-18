@@ -9,7 +9,7 @@ from anywhere with `SAGA_ROOT` set) and `chmod +x`.
 |---|---|---|
 | `saga-keyframe.sh` | Pose ONE keyframe still: Animagine + IP-Adapter identity + ControlNet Union Promax pose-forcing | `-r ref` `-c control` `--control-pre dwpose\|openpose\|none` `--control-strength` `--ip-weight` |
 | `saga-flf.sh` | Render ONE first-last-frame clip (Wan 2.2 FLF2V-A14B lightning) | `-a first` `-b last` `-d durationS`\|`-L frames` `--fps` `--shift` |
-| `saga-jutsu-flf.sh` | The 20s jutsu driver: 8 keyframes → 7 FLF transitions + 3 holds = 320f @ 16fps, concat → polish | env: `REF`, `SEAL1..5`, `SEED`, `FLF_T5` |
+| `saga-jutsu-flf.sh` | The 20s jutsu A–Z orchestrator: preflight checks → 8 keyframes → 7 FLF + 3 holds (320f/20s) → concat → polish, with a timestamped log + idempotent resume | env: `REF`, `SEAL1..5`, `SEED`; flags: `--check` (preflight only), `--force` (redo artifacts), `--no-polish` |
 
 ## Prereqs on the box
 - `saga-comfyui` up (localhost:8188), `jq` + `ffmpeg` installed.
