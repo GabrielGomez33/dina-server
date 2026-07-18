@@ -59,14 +59,18 @@ pipeline has this stage. It is the honest answer to "will the quality be good en
 No open model does a clean 20 s single take. Real approach: **generate in chunks + keyframe +
 interpolate + stitch.** Model choice is a quality/VRAM tradeoff:
 
+**Decision: Wan 2.2 TI2V-5B is the video engine** (image→video; animate our proven Animagine
+stills). AnimateDiff was evaluated and **dropped** — SDXL motion modules are too weak, and a dead
+node is a liability. Output is assembled to mp4 by **VideoHelperSuite (VHS_VideoCombine)**.
+
 | Option | Best for | VRAM (on our card) | Status |
 |---|---|---|---|
-| **AnimateDiff** (SDXL motion module) | Stylized anime motion, short clips, keeps our SDXL look | ~10–14 GB | ⬜ |
-| **Wan 2.1 (1.3B)** | Good text/image→video that *fits comfortably* | ~8–10 GB | ⬜ |
-| **LTX-Video (2B)** | Fast iteration / previs, near-interactive | ~10 GB | ⬜ |
-| **Wan 2.2 / Hunyuan Video (fp8)** | Highest quality, realistic | 16–24 GB (arbiter drains Ollama, block-swap) | ⬜ |
+| **Wan 2.2 TI2V-5B** ← chosen | Image→video, 720p, keeps our stills | ~16–18 GB (heavy → exclusive lease) | ✅ downloaded |
+| **VHS_VideoCombine** (output) | frames → mp4 + audio mux | — | 🔧 installing |
+| ~~AnimateDiff~~ | dropped — motion too weak | — | ❌ removed |
+| **LTX-Video (2B)** | optional fast previs later | ~10 GB | ⬜ |
 | **30→60 fps for action** | Frame interpolation, not native render | **RIFE / FILM** (`ComfyUI-Frame-Interpolation`), light | ⬜ |
-| Longer dialogue clips (~20 s) | Context-window scheduling + stitch | AnimateDiff context / chunk-and-blend | ⬜ |
+| Longer clips (~20 s) | chunk + keyframe + stitch | Wan chained segments | ⬜ |
 
 ## Stage 5 — Audio (local, realistic, persona-instructable)
 
