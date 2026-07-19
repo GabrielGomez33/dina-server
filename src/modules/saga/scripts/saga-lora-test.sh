@@ -19,11 +19,15 @@ COMFY="${COMFY:-http://127.0.0.1:8188}"
 CKPT="${LORA_CKPT:-animagine-xl-4.0.safetensors}"
 
 LORA=""; TRIGGER=""; WEIGHT=0.85; EXTRA=""; SEED=777; STEPS=28; CFG=5.5; W=1024; H=1024
-NEG="lowres, bad anatomy, bad hands, extra fingers, worst quality, blurry, multiple people, 2boys, watermark, text"
+# Default to BRIGHT/neutral so features read (the dataset skewed dark/backlit);
+# pass --style to change it (e.g. the dark dramatic look you liked).
+STYLE="cel shaded anime, 2d, flat colors, soft even lighting, simple plain background, detailed face, looking at viewer, masterpiece, best quality"
+NEG="lowres, bad anatomy, bad hands, extra fingers, worst quality, blurry, multiple people, 2boys, watermark, text, dark, silhouette, underexposed"
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
   --lora) LORA="$2"; shift 2;; --trigger) TRIGGER="$2"; shift 2;;
   --weight) WEIGHT="$2"; shift 2;; --prompt) EXTRA="$2"; shift 2;;
+  --style) STYLE="$2"; shift 2;;
   --seed) SEED="$2"; shift 2;; --steps) STEPS="$2"; shift 2;; --cfg) CFG="$2"; shift 2;;
   -W|--width) W="$2"; shift 2;; -H|--height) H="$2"; shift 2;; -n|--neg) NEG="$2"; shift 2;;
   -h|--help) sed -n '2,18p' "$0"; exit 0;;
@@ -70,7 +74,7 @@ JSON
 }
 
 echo "▶ LoRA test: $LORA @ weight $WEIGHT  trigger='$TRIGGER'  seed=$SEED"
-STY="cel shaded anime, 2d, flat colors, dark background, dramatic lighting, masterpiece"
+STY="$STYLE"
 X=""; [ -n "$EXTRA" ] && X=", $EXTRA"
 gen loratest_portrait  "$TRIGGER, solo, portrait, upper body, $STY$X"
 gen loratest_fullbody  "$TRIGGER, solo, full body, standing, fighting stance, $STY$X"
