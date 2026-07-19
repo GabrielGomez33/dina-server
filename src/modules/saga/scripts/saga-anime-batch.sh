@@ -14,8 +14,14 @@
 # VARIETY (angles, expressions) comes from your different source photos, exactly
 # what a character LoRA wants. Orientation is fixed first (uploads are sideways).
 #
-#   saga-anime-batch.sh --raw DIR [--autoland]
-#      [--out DIR] [--denoise 0.46] [--prompt "..."] [--add-neg "..."]
+# Canonical per-user tree (same --user addressing as the rest of the pipeline):
+#   --user gabrielgomez1  →  raw  = $SAGA_ROOT/users/<user>/uploads/images
+#                            out  = $SAGA_ROOT/users/<user>/datasets/anime_src
+# (--raw / --out still override if you need a one-off folder.)
+#
+#   saga-anime-batch.sh --user gabrielgomez1 [--autoland]
+#   saga-anime-batch.sh --raw DIR --out DIR [--autoland]      # explicit form
+#      [--denoise 0.46] [--prompt "..."] [--add-neg "..."]
 #      [--lora F --lora-weight 0.5 --trigger T] [--seed 777] [--limit N]
 #
 # Idempotent: an image whose output already exists is skipped (safe to re-run).
@@ -28,22 +34,31 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENGINE="$SCRIPT_DIR/saga-anime.sh"
 
 # --- Locked d046 winning recipe (defaults; override with flags) ---------------
-RAW=""; OUT=""; DENOISE="0.46"; SEED=777; AUTOLAND=0; LIMIT=0
+USERTOK=""; RAW=""; OUT=""; DENOISE="0.46"; SEED=777; AUTOLAND=0; LIMIT=0
 LORA=""; LORAW=0.5; TRIGGER=""
 PROMPT="brown eyes, black hair, low cut waves, clean grouped hair, smooth eyebrows, tidy trimmed beard, clean sharp lineart"
 ADDNEG="stray hair, flyaway hair, loose hairs, messy hair, frizzy hair, fuzzy edges, scattered hair strands, wispy hair, realistic hair texture, detailed hair strands"
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
+  --user) USERTOK="$2"; shift 2;;
   --raw) RAW="$2"; shift 2;; --out) OUT="$2"; shift 2;;
   --denoise) DENOISE="$2"; shift 2;; --seed) SEED="$2"; shift 2;;
   --prompt) PROMPT="$2"; shift 2;; --add-neg) ADDNEG="$2"; shift 2;;
   --lora) LORA="$2"; shift 2;; --lora-weight) LORAW="$2"; shift 2;; --trigger) TRIGGER="$2"; shift 2;;
   --autoland) AUTOLAND=1; shift;; --limit) LIMIT="$2"; shift 2;;
-  -h|--help) sed -n '2,26p' "$0"; exit 0;;
+  -h|--help) sed -n '2,30p' "$0"; exit 0;;
   *) die "unknown arg: $1";;
 esac; done
 
-[ -n "$RAW" ] && [ -d "$RAW" ] || die "need --raw <dir of your photos>"
+# --user resolves raw-in + out to the canonical per-user tree (saga-user-init layout)
+if [ -n "$USERTOK" ]; then
+  UBASE="$SAGA_ROOT/users/$USERTOK"
+  [ -d "$UBASE" ] || die "no user tree at $UBASE — run saga-user-init.sh --user $USERTOK first"
+  [ -n "$RAW" ] || RAW="$UBASE/uploads/images"
+  [ -n "$OUT" ] || OUT="$UBASE/datasets/anime_src"
+fi
+
+[ -n "$RAW" ] && [ -d "$RAW" ] || die "need --user <token> or --raw <dir of your photos>"
 [ -x "$ENGINE" ] || [ -f "$ENGINE" ] || die "img2img engine not found: $ENGINE"
 command -v jq   >/dev/null || die "jq required"
 command -v curl >/dev/null || die "curl required"
@@ -53,7 +68,7 @@ curl -sf "$COMFY/system_stats" >/dev/null 2>&1 || die "ComfyUI not reachable at 
 if command -v magick >/dev/null; then ORIENT="magick"; elif command -v convert >/dev/null; then ORIENT="convert"; else ORIENT=""; fi
 [ "$AUTOLAND" = "1" ] && [ -z "$ORIENT" ] && die "--autoland needs ImageMagick (sudo apt-get install -y imagemagick)"
 
-OUT="${OUT:-$SAGA_ROOT/tmp/dataset-anime}"
+OUT="${OUT:-$SAGA_ROOT/tmp/dataset-anime}"   # tmp only when no --user/--out given
 WORK="$SAGA_ROOT/tmp/.anime-batch-src"   # oriented sources (transient)
 mkdir -p "$OUT" "$WORK"
 
@@ -103,10 +118,13 @@ for f in "${SRC[@]}"; do
 done
 
 CNT=$(find "$OUT" -maxdepth 1 -name 'anime_*.png' | wc -l)
+# Anime dataset trains a SEPARATE trigger from the real-photo LoRA (gabrielgomez1),
+# and its prepared kohya set lands in the same per-user datasets/ home.
+DS_OUT="$SAGA_ROOT/tmp/lora/animegabriel_dataset"; [ -n "$USERTOK" ] && DS_OUT="$SAGA_ROOT/users/$USERTOK/datasets"
 echo
 echo "✅ batch done: $made new, $skipped skipped, $bad failed  →  $CNT anime images in $OUT"
 echo "   NEXT:"
 echo "   1) CURATE: open $OUT and delete every image that isn't on-model (keep 15-30 good ones)."
-echo "   2) DATASET: bash $SCRIPT_DIR/saga-lora-dataset.sh --raw \"$OUT\" --trigger AnimeGabriel --repeats 10"
-echo "   3) TRAIN:   bash $SCRIPT_DIR/saga-lora-train.sh --dataset <path from step 2> --trigger animegabriel --name animegabriel --rank 32 --steps 2800"
+echo "   2) DATASET: bash $SCRIPT_DIR/saga-lora-dataset.sh --raw \"$OUT\" --trigger animegabriel --repeats 10 --out \"$DS_OUT\""
+echo "   3) TRAIN:   bash $SCRIPT_DIR/saga-lora-train.sh --dataset \"$DS_OUT\" --name animegabriel --trigger animegabriel --rank 32 --steps 2800"
 echo "   (anime images are already clean-styled, so training on them has no realism drag.)"
