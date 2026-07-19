@@ -7,8 +7,50 @@
 
 Companion docs (reference, not state): `PHASES.md` (original plan), `VERIFICATION.md` (live proof
 log), `TOOLCHAIN.md` (every tool), `RESEARCH_ANIME_PIPELINE.md` (model research),
-`REFERENCE_FIDELITY.md` (consistency laws), `PREPRODUCTION_AND_FRAMERATE.md`, `OVERVIEW.md`,
-`INTEGRATION.md`, `ENVIRONMENT.md`.
+`REFERENCE_FIDELITY.md` (consistency laws), `USER_STORAGE.md` (per-user asset storage design +
+future extrapolation), `PREPRODUCTION_AND_FRAMERATE.md`, `OVERVIEW.md`, `INTEGRATION.md`,
+`ENVIRONMENT.md`.
+
+---
+
+## ADDENDUM — 2026-07-18 (session 2: LoRA subsystem + consistency pivot)
+
+**Roadmap step 2 (LoRA) is largely built and exercised end-to-end:**
+- Tested core: `loraTraining.ts` (plan-gate, 25) + `loraDataset.ts` (kohya layout/step math, 25) +
+  `pipeline.ts` (stage recommend/override/readiness, 38).
+- Box scripts (in `scripts/`): `saga-lora-setup.sh` (kohya sd-scripts venv — installed live: torch
+  2.5.1+cu121), `saga-lora-dataset.sh`, `saga-lora-train.sh` (drains GPU, SDXL UNet-only), plus
+  `saga-lora-test.sh`. Also the FLF/keyframe path: `saga-keyframe.sh` (now LoRA+IP-Adapter+canny),
+  `saga-flf.sh`, `saga-jutsu-flf.sh`, and `core/keyframeChoreography.ts` (FLF planner, 42).
+- **First Exodia LoRA trained live** (rank 24, 1800 steps, 12 images). Result: **big identity win
+  over IP-Adapter** (real headdress stripes / mask / ankh / chains) BUT **not design-consistent** —
+  gauntlets, abs (six-pack vs none), face details, and palette drift frame-to-frame. Root cause:
+  a lean, design-*inconsistent* 12-image dataset (mixed Exodia depictions) → the LoRA learned a
+  *range*, not one canonical look. (Lesson: I twice over-claimed "consistent"; consistency must be
+  MEASURED, and it's gated by dataset design-consistency, not just pose variety.)
+
+**Live findings this session (in VERIFICATION spirit):**
+- FLF node fix: `WanFirstLastFrameToVideo` takes separate `clip_vision_start_image`/`_end_image`,
+  NOT the I2V node's `clip_vision_output`. Corrected.
+- **Canny control on the line-art seal crops FAILED** — filled-black silhouettes make noisy canny
+  maps → tablets/grids/pillar artifacts, and a silhouette can't encode finger positions anyway.
+  DWPose also useless on drawings (needs a photographed person). `SetUnionControlNetType` confirmed
+  present; canny enum = `canny/lineart/anime_lineart/mlsd`.
+- Retrieval hardened (HTTP /view → disk fallback); box scripts now print the real ComfyUI
+  execution_error node+message.
+
+**THE PIVOT (current direction):** train a **person LoRA on the USER** (consistent phone selfies —
+~40 photos across face/upper/full/hands). This solves consistency at the source (same person every
+frame), gives **real-hand photos** as working DWPose/OpenPose seal control refs (fixing both the
+hands capability and exact seals), and tests the core **real→anime** show pipeline. Shot list
+delivered; user gathering photos. Train at rank 32 / ~2800 steps. Then tune LoRA weight (~0.7) so
+output is anime, not photoreal (captioning fix in reserve if it leans realistic).
+
+**Open / next:** (1) person LoRA train + test; (2) build + PROVE a hand-detailer pass
+(`saga-detail.sh`, `FaceDetailer`+`hand_yolov8`) — hands as a demonstrated capability, not assumed;
+(3) a consistency *measurement* (fixed-everything-but-seed grid + score); (4) implement
+`USER_STORAGE.md` (storagePaths user areas + `characterRegistry.ts` + DB). The FLF 20s video has
+still not been confirmed rendered end-to-end — verify once keyframes are on a consistent character.
 
 ---
 
