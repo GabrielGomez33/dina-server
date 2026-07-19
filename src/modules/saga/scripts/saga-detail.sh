@@ -20,7 +20,7 @@ CKPT="${DTL_CKPT:-animagine-xl-4.0.safetensors}"
 
 IMG=""; DETECT="both"; LORA=""; LORAW=0.75; TRIGGER=""; DENOISE=0.4; SEED=0; CFG=6.0; STEPS=20
 PROMPT="cel shaded anime, detailed face, detailed hands"; OUT="saga_detail"
-NEG="lowres, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, worst quality, blurry, deformed"
+NEG="lowres, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, extra limbs, extra arms, worst quality, blurry, deformed"
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
   --image) IMG="$2"; shift 2;; --detect) DETECT="$2"; shift 2;;

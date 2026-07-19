@@ -118,3 +118,26 @@ changes *which profiles we add and validate*:
 
 Every "recommended default" above becomes a calibrated value in `modelRegistry` **only after we
 measure it on the box** — no unverified number ships as a default.
+
+## Prompt hygiene & the per-keyframe consistency layer (general, future-facing)
+
+Recurring keyframe failures were all the same shape — no *shared* layer enforcing consistency and
+suppressing artifact classes across every keyframe. The durable fixes (in `saga-jutsu-flf.sh`, and
+worth replicating in any multi-keyframe driver):
+
+- **Pose-words that name an entity summon that entity.** "boar seal / dragon seal" rendered ghostly
+  boars/dragons in the background. **Describe poses geometrically** (finger positions), keep the
+  entity name in a comment only. Force *exact* poses with ControlNet, never by naming them.
+- **A single shared NEGATIVE feeds every keyframe AND the detailer.** It guards failure *classes*,
+  not instances: hand mutations (`mutated/malformed hands, extra limbs`), entity bleed
+  (`animal, creature, <the seal animals>`), wrong eye color (`blue/green/glowing eyes, heterochromia`),
+  costume drift (`mask, hood, helmet`), wrong sex (`1girl`), `text/watermark`. Extend via `NEG=`.
+- **Character attributes are PINNED across all keyframes** via env (`OUTFIT`, `EYES`) prepended to a
+  shared BASE — so wardrobe/eye-color can't drift frame to frame. Keep the pin SIMPLE and matched to
+  what the LoRA learned; vague/exotic outfits make the model invent a new costume per keyframe
+  (`high-collar` → face mask).
+- **Global sub-script defaults** (`saga-keyframe`, `saga-detail`) carry the universal hand/anatomy
+  negatives so *every* generation benefits, not just the jutsu; scene-specific negatives layer on top.
+
+Principle: consistency and artifact-suppression belong in a **shared layer applied to every frame**,
+configurable per character/scene — not hand-patched per keyframe after the fact.

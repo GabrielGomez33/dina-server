@@ -47,7 +47,7 @@ CKPT="${KF_CKPT:-animagine-xl-4.0.safetensors}"
 CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"
 
 OUT="saga_kf"; SEED=0; W=1280; H=704; STEPS=28; CFG=5.5
-PROMPT=""; NEG="lowres, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, worst quality, blurry, multiple people, 2boys"
+PROMPT=""; NEG="lowres, worst quality, blurry, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, extra limbs, extra arms, multiple people, 2boys, text, watermark, signature"
 REF=""; CONTROL=""; CPRE="canny"; CSTR=0.8; IPW=0.65; UTYPE="auto"
 LORA=""; LORAW=0.85; TRIGGER=""
 

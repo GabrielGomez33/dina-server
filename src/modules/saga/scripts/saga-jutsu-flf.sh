@@ -56,6 +56,14 @@ DETAIL="${DETAIL:-hands}"           # none | hands | both — fix hands (and opt
 OUTFIT="${OUTFIT:-wearing a plain white short-sleeve shirt}"
 POLISH_FPS="${POLISH_FPS:-32}"      # STEP 4 interpolation target fps
 UPSCALE_MODE="${UPSCALE_MODE:-esrgan}"   # esrgan (crisp cel lines) | lanczos (soft/painterly — matches a low-CFG look)
+EYES="${EYES:-brown eyes}"          # PINNED eye color across ALL keyframes (prevents eye-color drift)
+# Shared negative fed to EVERY keyframe AND the hand-fixer. Guards the recurring
+# FAILURE CLASSES (not just this scene): hand mutations, seal-name animals bleeding
+# into the background, wrong eye colors, mask/costume drift, wrong sex, text.
+# Extend/override per scene or character via NEG=.  (Want the ghostly seal-spirit
+# animals as an intentional effect? Drop the animal words from NEG and add them
+# to a keyframe's prompt.)
+NEG="${NEG:-lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, extra limbs, extra arms, boar, dragon, ram, serpent, tiger, snake, animal, creature, monster, mask, face covering, hood, helmet, blue eyes, green eyes, glowing eyes, heterochromia, 1girl, woman, female, text, watermark, signature}"
 USE_CONTROL="${USE_CONTROL:-0}"     # 1 = force seals via ControlNet from the crops below
 SEAL1="${SEAL1:-$SAGA_ROOT/tmp/seal_tiger.png}"
 SEAL2="${SEAL2:-$SAGA_ROOT/tmp/seal_serpent.png}"
@@ -89,7 +97,7 @@ frames_of(){ command -v ffprobe >/dev/null && ffprobe -v error -count_frames -se
 
 # Identity is carried by the LoRA + trigger (prepended by saga-keyframe.sh);
 # BASE is just style + scene so the trigger isn't diluted.
-BASE="solo, $OUTFIT, cel shaded anime, 2d, flat colors, dark background, embers, dramatic lighting, masterpiece"
+BASE="solo, $OUTFIT, $EYES, cel shaded anime, 2d, flat colors, dark background, embers, dramatic lighting, masterpiece"
 
 echo "════════════════════════════════════════════════════"
 echo " SAGA — 20s JUTSU (keyframe/FLF)   seed=$SEED  ${W}x${H}@${FPS}fps"
@@ -183,13 +191,13 @@ gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.pn
   if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse $name (exists; --force to redo)"; return 0; fi
   if [ "$IDENTITY" = "instantid" ]; then
     # identity via InstantID (real face embedding) + LoRA for style; pose from prompt
-    local a=(--face "$FACE" -o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" --iid-weight "$IIDW" --iid-end "$IIDE" -p "$BASE, $extra")
+    local a=(--face "$FACE" -o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" --iid-weight "$IIDW" --iid-end "$IIDE" -n "$NEG" -p "$BASE, $extra")
     [ -n "$CFG" ] && a+=(--cfg "$CFG")
     log "  gen $name (instantid, face=$(basename "$FACE"))"
     "$IIDKF" "${a[@]}" || fail "instantid keyframe $name failed"
   else
     # identity via the trained LoRA + trigger (no IP-Adapter pose prior)
-    local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -p "$BASE, $extra")
+    local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -n "$NEG" -p "$BASE, $extra")
     [ -n "$CFG" ] && args+=(--cfg "$CFG")
     [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre canny --control-strength 0.85 --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
     log "  gen $name ${ctrl:+${USE_CONTROL:+(control: $(basename "$ctrl"))}}"
@@ -198,7 +206,7 @@ gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.pn
   # HAND FIX: re-render hands (and optionally the face) on the keyframe IN PLACE,
   # before it feeds FLF — so clean hands are carried through the interpolation.
   if [ "$DETAIL" != "none" ]; then
-    local dargs=(--image "$out" --detect "$DETAIL" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -o "$name")
+    local dargs=(--image "$out" --detect "$DETAIL" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -n "$NEG" -o "$name")
     # detailer keeps its OWN guidance — it corrects fingers better at normal CFG;
     # only the keyframe GENERATION uses the soft low CFG.
     log "  detail $name (--detect $DETAIL)"
@@ -206,11 +214,15 @@ gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.pn
     have_file "$out" || fail "detail produced no output for $name"
   fi
 }
-gen_kf jutsu_k1 "both hands forming a ninja hand seal, fingers interlocked, tiger seal, intense focus" "$SEAL1"; K1="$SAGA_ROOT/tmp/jutsu_k1.png"; verify_out "$K1"
-gen_kf jutsu_k2 "both hands forming a ninja hand seal, serpent seal, hands clasped" "$SEAL2"; K2="$SAGA_ROOT/tmp/jutsu_k2.png"; verify_out "$K2"
-gen_kf jutsu_k3 "both hands forming a ninja hand seal, dragon seal" "$SEAL3"; K3="$SAGA_ROOT/tmp/jutsu_k3.png"; verify_out "$K3"
-gen_kf jutsu_k4 "both hands forming a ninja hand seal, ram seal, index fingers up" "$SEAL4"; K4="$SAGA_ROOT/tmp/jutsu_k4.png"; verify_out "$K4"
-gen_kf jutsu_k5 "both hands forming a ninja hand seal, boar seal, fists together" "$SEAL5"; K5="$SAGA_ROOT/tmp/jutsu_k5.png"; verify_out "$K5"
+# Seal keyframes describe the HAND POSE GEOMETRICALLY — never the animal name.
+# (The Naruto seal each corresponds to is noted for the show; the animal word is
+# kept OUT of the prompt because it renders the animal. Exact seal shapes come
+# from ControlNet via USE_CONTROL=1 + the SEAL* crops, not from naming them.)
+gen_kf jutsu_k1 "both hands forming a ninja hand seal, fingers interlocked in front of chest, intense focus" "$SEAL1"; K1="$SAGA_ROOT/tmp/jutsu_k1.png"; verify_out "$K1"   # tiger
+gen_kf jutsu_k2 "both hands forming a ninja hand seal, hands clasped together, fingers laced" "$SEAL2"; K2="$SAGA_ROOT/tmp/jutsu_k2.png"; verify_out "$K2"                    # serpent
+gen_kf jutsu_k3 "both hands forming a ninja hand seal, palms together, fingers crossed" "$SEAL3"; K3="$SAGA_ROOT/tmp/jutsu_k3.png"; verify_out "$K3"                            # dragon
+gen_kf jutsu_k4 "both hands forming a ninja hand seal, both index fingers raised and pressed together, remaining fingers folded" "$SEAL4"; K4="$SAGA_ROOT/tmp/jutsu_k4.png"; verify_out "$K4"  # ram
+gen_kf jutsu_k5 "both hands forming a ninja hand seal, fists pressed together, knuckles touching" "$SEAL5"; K5="$SAGA_ROOT/tmp/jutsu_k5.png"; verify_out "$K5"                  # boar
 gen_kf jutsu_k6 "both hands pressed flat together in prayer position at center, gathering purple energy, faint glow between the palms"; K6="$SAGA_ROOT/tmp/jutsu_k6.png"; verify_out "$K6"
 gen_kf jutsu_k7 "hands slightly apart, a small swirling purple energy orb forming between the palms, rasengan, glowing"; K7="$SAGA_ROOT/tmp/jutsu_k7.png"; verify_out "$K7"
 gen_kf jutsu_k8 "hands held wide apart, a large swirling purple energy sphere between the palms, rasengan, crackling purple lightning, energy flowing, radiant glow"; K8="$SAGA_ROOT/tmp/jutsu_k8.png"; verify_out "$K8"
