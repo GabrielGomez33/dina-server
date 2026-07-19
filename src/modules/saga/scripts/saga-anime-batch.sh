@@ -93,7 +93,12 @@ echo "  recipe locked: prompt='$PROMPT'"
 
 n=0; made=0; skipped=0; bad=0
 for f in "${SRC[@]}"; do
-  n=$((n+1)); idx=$(printf '%03d' "$n"); dest="$OUT/anime_${idx}.png"
+  n=$((n+1)); idx=$(printf '%03d' "$n")
+  # Deterministic output name from the SOURCE path (stem + short path-hash), so
+  # re-runs and SEPARATE runs into the same OUT (e.g. faces then hand-signs)
+  # never collide or false-skip. A numeric index would restart at 001 each run.
+  stem=$(basename "$f"); stem=$(echo "${stem%.*}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+|_+$//g')
+  hash=$(printf '%s' "$f" | cksum | cut -d' ' -f1); dest="$OUT/anime_${stem}_${hash}.png"
   if [ -s "$dest" ]; then echo "  [$idx] skip (exists): $(basename "$dest")"; skipped=$((skipped+1)); continue; fi
   src_oriented="$WORK/src_${idx}.png"
   orient "$f" "$src_oriented" || { echo "  [$idx] ⚠ orient failed: $(basename "$f")"; bad=$((bad+1)); continue; }

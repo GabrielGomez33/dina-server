@@ -215,6 +215,24 @@ Plus a **publish/CDN** staging area and per-rendition delivery metadata.
 - **Scheduled/queued jobs** (overnight batch training/renders) with a per-user job history.
 - **Cost/telemetry**: GPU-hours, storage bytes, render counts — rolled into `quota` + billing.
 
+### 7.9 Dataset bootstrap + curation UI (the img2img→LoRA loop)
+
+The proven path to an on-model anime character LoRA is **bootstrapping**: real photos
+→ img2img (`saga-anime.sh`) at a locked recipe → a stylistically uniform anime set →
+**human curation** → train a clean stylized LoRA (no realism drag). Storage + UI notes:
+
+- **`datasets/anime_src/`** (per user) — the pre-curation pool of generated anime images
+  from `saga-anime-batch.sh`. Immutable generation output; curation *selects*, never edits.
+- **Curation UI (Phase 5, frontend)** — a grid of `anime_src/` thumbnails with keep/drop
+  toggles the user resolves **before** training starts. Persist the decision as a
+  `curation.json` (kept ids + timestamp + who), so a training run is reproducible and the
+  drop set can be revisited. The kept set is materialized into the kohya `datasets/<n>_<trigger>/`
+  layout. Curation is a durable record, not a throwaway filter.
+- **Source ingest is not just `uploads/images`** — themed source sets (hand-signs/seals for
+  DWPose, expression sheets, wardrobe refs) may be ingested to their own folders and must be
+  swept into the same img2img→dataset loop. Output names are derived from the source path
+  (collision-free), so multiple source folders can target one `anime_src/` safely.
+
 ### Design invariant across all of the above
 
 Every future path still resolves **under `tenants/<tenantId>/`** and through the same
