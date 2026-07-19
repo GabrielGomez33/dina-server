@@ -43,7 +43,9 @@ echo "  raw: $RAW"
 echo "  out: $DIR"
 
 # collect images (png/jpg/jpeg/webp/bmp), stable order
-mapfile -t SRC < <(find "$RAW" -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' -o -iname '*.bmp' \) | sort)
+# JPEG/PNG preferred; tif/heic accepted if ImageMagick has the delegates.
+# Camera RAW (.ARW etc.) is NOT decoded here — export to JPEG first.
+mapfile -t SRC < <(find "$RAW" -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' -o -iname '*.bmp' -o -iname '*.tif' -o -iname '*.tiff' -o -iname '*.heic' \) | sort)
 [ "${#SRC[@]}" -gt 0 ] || die "no images found in $RAW"
 
 # Convert one image → RGB PNG, downscaled to <=maxres, alpha flattened to black,
