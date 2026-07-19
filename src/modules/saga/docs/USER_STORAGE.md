@@ -48,9 +48,12 @@ tenants/<tenantId>/
 │   │   ├── images/
 │   │   ├── curated/                # ★ user-picked SOURCE photos (the keep set to img2img) (added; created at registration)
 │   │   └── audio/
-│   ├── datasets/<datasetId>/       # prepared training sets (kohya "<repeats>_<trigger>/" + captions) ← from uploads
+│   ├── datasets/                   # per-user datasets home (siblings below, NOT nested)
 │   │   ├── anime_src/              # ★ img2img photo→anime output POOL, pre-curation (added; created at registration)
-│   │   └── anime_curated/          # ★ anime images the user KEPT → feeds the anime LoRA (added; created at registration)
+│   │   ├── anime_curated/          # ★ anime images the user KEPT → source for a prepared set (added; created at registration)
+│   │   └── dataset_<N>/            # ★ ONE prepared training set per numbered folder = the datasetId (ISOLATION: kohya trains on every
+│   │       ├── <repeats>_<trigger>/  #   "<repeats>_<trigger>/" under a parent, so one concept per dataset_N — never share a parent)
+│   │       └── dataset.json        #   manifest: datasetId, trigger, repeats, images, caption, source, created
 │   ├── loras/<loraId>/             # trained personal LoRAs (self, owned characters), VERSIONED
 │   │   └── v3/lora.safetensors     #   + card.json (base, trigger, rank, steps, dataset hash, sample grid)
 │   ├── characters/<characterId>/   # ★ a CHARACTER = the show's building block (added)
