@@ -55,6 +55,7 @@ DETAIL="${DETAIL:-hands}"           # none | hands | both — fix hands (and opt
 # costume per keyframe, and "high-collar" in particular reads as a face mask.
 OUTFIT="${OUTFIT:-wearing a plain white short-sleeve shirt}"
 POLISH_FPS="${POLISH_FPS:-32}"      # STEP 4 interpolation target fps
+UPSCALE_MODE="${UPSCALE_MODE:-esrgan}"   # esrgan (crisp cel lines) | lanczos (soft/painterly — matches a low-CFG look)
 USE_CONTROL="${USE_CONTROL:-0}"     # 1 = force seals via ControlNet from the crops below
 SEAL1="${SEAL1:-$SAGA_ROOT/tmp/seal_tiger.png}"
 SEAL2="${SEAL2:-$SAGA_ROOT/tmp/seal_serpent.png}"
@@ -144,9 +145,11 @@ fi
 if [ "$POLISH" -eq 1 ]; then
   for s in "$HERE/saga-esrgan-video.sh" "$HERE/saga-interpolate.sh"; do [ -x "$s" ] || fail "not executable: $s (chmod +x)"; done
   command -v ffprobe >/dev/null || fail "ffprobe required for polish (2K upscale); apt-get install ffmpeg or run --no-polish"
-  for n in UpscaleModelLoader ImageUpscaleWithModel ImageScale; do need_node "$n"; done
-  have_model "4x-AnimeSharp.pth" || fail "upscale model missing under models/: 4x-AnimeSharp.pth (--no-polish to skip)"
-  log "polish ok (2K upscale + ${POLISH_FPS}fps interpolate)"
+  if [ "$UPSCALE_MODE" = "esrgan" ]; then
+    for n in UpscaleModelLoader ImageUpscaleWithModel ImageScale; do need_node "$n"; done
+    have_model "4x-AnimeSharp.pth" || fail "upscale model missing under models/: 4x-AnimeSharp.pth (use UPSCALE_MODE=lanczos or --no-polish)"
+  fi
+  log "polish ok (${UPSCALE_MODE} 2K upscale + ${POLISH_FPS}fps interpolate)"
 fi
 
 if [ "$USE_CONTROL" -eq 1 ]; then
@@ -260,8 +263,8 @@ FINAL="$MASTER"
 if [ "$POLISH" -eq 0 ]; then log "(--no-polish) skipped"; else
   # Upscale FIRST (fewer frames through ESRGAN), then interpolate the 2K clip.
   UP="$WORK/jutsu_2k.mp4"
-  log "2K upscale (4x-AnimeSharp, per frame — the slow step)…"
-  "$HERE/saga-esrgan-video.sh" "$MASTER" -o "$UP" >/dev/null || fail "2K upscale failed"
+  log "2K upscale ($UPSCALE_MODE)…"
+  "$HERE/saga-esrgan-video.sh" "$MASTER" --method "$UPSCALE_MODE" -o "$UP" >/dev/null || fail "2K upscale failed"
   verify_out "$UP"
   POL="$WORK/jutsu_final.mp4"
   log "interpolate → ${POLISH_FPS}fps…"

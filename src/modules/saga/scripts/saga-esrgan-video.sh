@@ -8,7 +8,9 @@
 # OOM on a long clip, and uses ONLY verified nodes (UpscaleModelLoader +
 # ImageUpscaleWithModel + ImageScale). Slower than a batch graph, but bulletproof.
 #
-#   saga-esrgan-video.sh <input.mp4> [--model 4x-AnimeSharp.pth] [--max 2048] [-o out.mp4]
+#   saga-esrgan-video.sh <input.mp4> [--method esrgan|lanczos] [--model 4x-AnimeSharp.pth] [--max 2048] [-o out.mp4]
+#     --method esrgan  = crisp cel lines (per-frame ESRGAN, slow)   [default]
+#     --method lanczos = soft/painterly (single ffmpeg pass, fast, no model)
 #
 # Env: SAGA_ROOT (required)  COMFY=http://127.0.0.1:8188
 # ============================================================================
@@ -16,17 +18,37 @@ set -uo pipefail
 COMFY="${COMFY:-http://127.0.0.1:8188}"
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 MODEL="${UPSCALE_MODEL:-4x-AnimeSharp.pth}"
-IN=""; MAX=2048; OUT=""
+IN=""; MAX=2048; OUT=""; METHOD="esrgan"   # esrgan = crisp cel lines; lanczos = soft (preserves a low-CFG painterly look)
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
   --model) MODEL="$2"; shift 2;; --max) MAX="$2"; shift 2;; -o|--out) OUT="$2"; shift 2;;
+  --method) METHOD="$2"; shift 2;;
   -h|--help) sed -n '2,16p' "$0"; exit 0;;
   -*) die "unknown arg: $1";;
   *) IN="$1"; shift;;
 esac; done
 [ -n "$IN" ] && [ -f "$IN" ] || die "need <input.mp4>"
-for t in jq curl ffmpeg ffprobe; do command -v "$t" >/dev/null || die "missing tool: $t"; done
+for t in ffmpeg ffprobe; do command -v "$t" >/dev/null || die "missing tool: $t"; done
+[ "$METHOD" = "esrgan" ] && { for t in jq curl; do command -v "$t" >/dev/null || die "missing tool: $t"; done; }
 OUT="${OUT:-${IN%.*}_2k.mp4}"
+
+# target 2K dims (long edge = MAX, /8-aligned) from the stream dimensions
+read -r OW OH < <(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=' ' "$IN" 2>/dev/null || echo "0 0")
+GTW=0; GTH=0
+if [ "${OW:-0}" -gt 0 ] && [ "${OH:-0}" -gt 0 ]; then
+  if [ "$OW" -ge "$OH" ]; then GTW=$MAX; GTH=$(( (OH*MAX/OW+4)/8*8 )); else GTH=$MAX; GTW=$(( (OW*MAX/OH+4)/8*8 )); fi
+fi
+
+# SOFT path: single-pass lanczos — keeps the painterly/soft aesthetic that ESRGAN
+# "AnimeSharp" would crisp away. Fast (no per-frame ComfyUI), no model needed.
+if [ "$METHOD" = "lanczos" ]; then
+  [ "$GTW" -gt 0 ] || die "lanczos needs stream dims (ffprobe failed on $IN)"
+  echo "▶ soft upscale $(basename "$IN") → ${GTW}x${GTH} (lanczos)" >&2
+  ffmpeg -y -i "$IN" -vf "scale=${GTW}:${GTH}:flags=lanczos" -c:v libx264 -pix_fmt yuv420p -crf 16 "$OUT" >/dev/null 2>&1 \
+    || die "lanczos upscale failed"
+  echo "✅ $OUT" >&2; echo "$OUT"; exit 0
+fi
+[ "$METHOD" = "esrgan" ] || die "unknown --method: $METHOD (use esrgan|lanczos)"
 
 WORK="$SAGA_ROOT/tmp/.esrgan_vid_$$"; IND="$WORK/in"; OUTD="$WORK/out"; mkdir -p "$IND" "$OUTD"
 cleanup(){ rm -rf "$WORK"; }; trap cleanup EXIT
