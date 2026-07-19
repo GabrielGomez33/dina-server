@@ -22,18 +22,28 @@
 #   saga-lora-dataset.sh --user gabrielgomez1 --raw DIR --trigger animegabriel   # → datasets/dataset_N/
 #   saga-lora-dataset.sh --raw DIR --trigger exodia_saga [--out DIR] [--repeats 10] [--maxres 1536] [--caption "extra tags"]
 #
+# --autotag  WD14 per-image tags (kohya's tagger) + the trigger prepended, so every
+#   variable attribute is a SEPARABLE, promptable concept and nothing incidental gets
+#   welded into the identity token. Without it, all images share one blanket trigger
+#   caption (identity + everything fused). Env: WD14_REPO, WD14_THRESH (default 0.35).
+#
 # Env: SAGA_ROOT (required)
 # ============================================================================
 set -uo pipefail
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 
-RAW=""; TRIGGER=""; REPEATS=10; MAXRES=1536; OUT=""; EXTRA=""; ROTATE=0; AUTOLAND=0; USERTOK=""; SLOT=""
+RAW=""; TRIGGER=""; REPEATS=10; MAXRES=1536; OUT=""; EXTRA=""; ROTATE=0; AUTOLAND=0; USERTOK=""; SLOT=""; AUTOTAG=0; PRUNE=""
+# WD14 auto-tagging uses kohya's built-in tagger (already installed for training).
+SDROOT="${SD_SCRIPTS:-$SAGA_ROOT/engine/sd-scripts}"; SDPY="$SDROOT/venv/bin/python"
+WD14_REPO="${WD14_REPO:-SmilingWolf/wd-v1-4-convnextv2-tagger-v2}"; WD14_THRESH="${WD14_THRESH:-0.35}"
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
   --raw) RAW="$2"; shift 2;; --trigger) TRIGGER="$2"; shift 2;;
   --repeats) REPEATS="$2"; shift 2;; --maxres) MAXRES="$2"; shift 2;;
   --out) OUT="$2"; shift 2;; --caption) EXTRA="$2"; shift 2;;
   --user) USERTOK="$2"; shift 2;; --slot) SLOT="$2"; shift 2;;
+  --autotag) AUTOTAG=1; shift;;      # WD14 per-image tags + trigger prepended (separable attributes)
+  --prune) PRUNE="$2"; shift 2;;     # csv of tags to KEEP welded to the trigger (removed from captions, e.g. "beard,dark skin,brown eyes")
   --rotate) ROTATE="$2"; shift 2;;   # 0|90|180|270 clockwise, applied AFTER auto-orient (uniform)
   --autoland) AUTOLAND=1; shift;;    # rotate ONLY landscape (sideways) frames 90 CW; keep portrait/square
   -h|--help) sed -n '2,28p' "$0"; exit 0;;
@@ -46,6 +56,15 @@ command -v ffmpeg >/dev/null || die "ffmpeg required (for resize/convert)"
 # sanitize trigger to match loraDataset.ts sanitizeStem (alnum + underscore)
 TRIGGER=$(echo "$TRIGGER" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+|_+$//g')
 [ -n "$TRIGGER" ] || die "trigger reduced to empty after sanitizing"
+
+TAGGER=""
+if [ "$AUTOTAG" = 1 ]; then
+  [ -x "$SDPY" ] || die "--autotag needs the sd-scripts venv ($SDPY) — run saga-lora-setup.sh"
+  for c in "$SDROOT/finetune/tag_images_by_wd14_tagger.py" "$SDROOT/tag_images_by_wd14_tagger.py"; do
+    [ -f "$c" ] && { TAGGER="$c"; break; }
+  done
+  [ -n "$TAGGER" ] || die "WD14 tagger not found under $SDROOT (expected finetune/tag_images_by_wd14_tagger.py)"
+fi
 
 # --user → isolated, numbered parent under the user's datasets/ (front-end datasetId).
 if [ -z "$OUT" ] && [ -n "$USERTOK" ]; then
@@ -92,11 +111,37 @@ n=0; bad=0
 for f in "${SRC[@]}"; do
   n=$((n+1)); idx=$(printf '%03d' "$n"); base="${TRIGGER}_${idx}"
   if convert_img "$f" "$DIR/${base}.png"; then
-    printf '%s' "$CAP" > "$DIR/${base}.txt"
+    # with --autotag the caption is written later by WD14; otherwise blanket trigger
+    [ "$AUTOTAG" = 1 ] || printf '%s' "$CAP" > "$DIR/${base}.txt"
   else
     echo "  ⚠️ skip (convert failed): $f"; bad=$((bad+1)); n=$((n-1))
   fi
 done
+
+if [ "$AUTOTAG" = 1 ]; then
+  echo "▶ WD14 auto-tagging ($WD14_REPO, thresh $WD14_THRESH) — downloads the tagger on first run"
+  ( cd "$SDROOT" && "$SDPY" "$TAGGER" "$DIR" --repo_id "$WD14_REPO" --thresh "$WD14_THRESH" \
+      --caption_extension .txt --remove_underscore --batch_size 4 ) \
+    || die "WD14 tagging failed — the sd-scripts venv may need deps:
+     $SDPY -m pip install onnxruntime-gpu huggingface_hub"
+  # Prepend the trigger (identity anchor) so it co-occurs with every image's tags;
+  # everything else becomes a SEPARABLE, promptable concept — nothing incidental
+  # gets welded into the identity token.
+  # optional: drop identity-core tags so they stay bound to the trigger (stronger identity)
+  prune_tags(){ [ -z "$PRUNE" ] && { cat; return; }
+    awk -v prune="$PRUNE" 'BEGIN{ np=split(tolower(prune),P,/ *, */); for(i=1;i<=np;i++) DROP[P[i]]=1 }
+      { nt=split($0,T,/ *, */); out="";
+        for(i=1;i<=nt;i++){ g=T[i]; gsub(/^ +| +$/,"",g); if(g!="" && !(tolower(g) in DROP)) out=(out==""?g:out", "g) }
+        print out }'; }
+  tagged=0
+  for t in "$DIR"/*.txt; do
+    [ -f "$t" ] || continue
+    tags=$(tr '\r\n' '  ' < "$t" | sed -E 's/[[:space:]]+$//' | prune_tags)
+    printf '%s, %s' "$CAP" "$tags" > "$t"; tagged=$((tagged+1))
+  done
+  [ "$tagged" -gt 0 ] || die "WD14 wrote no .txt tags"
+  echo "  captions: \"$CAP, <wd14 tags>\"${PRUNE:+  (pruned: $PRUNE)} ($tagged files)"
+fi
 
 CNT=$(find "$DIR" -name '*.png' | wc -l)
 
@@ -107,6 +152,6 @@ printf '{\n  "datasetId": "%s",\n  "trigger": "%s",\n  "repeats": %s,\n  "images
 echo "✅ prepared $CNT images (${bad} skipped) in $DIR"
 echo "  datasetId: $DID   manifest: $OUT/dataset.json"
 [ "$CNT" -lt 8 ] && echo "⚠️ only $CNT images — a character LoRA wants 15-30 varied shots; below 8 the trainer will refuse"
-echo "  caption (each .txt): \"$CAP\""
+if [ "$AUTOTAG" = 1 ]; then echo "  caption (each .txt): \"$CAP, <per-image WD14 tags>\""; else echo "  caption (each .txt): \"$CAP\""; fi
 echo "  next: saga-lora-train.sh --dataset \"$OUT\" --trigger $TRIGGER --name $TRIGGER --rank 32 --steps 2800"
 echo "$OUT"
