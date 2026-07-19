@@ -13,10 +13,17 @@
 #
 #   users/<u>/
 #     uploads/{images,audio}     # raw ingested media (immutable source)
+#     uploads/curated/           # user-picked SOURCE photos (the keep set to img2img)
 #     datasets/                  # prepared kohya training sets
+#     datasets/anime_src/        # img2img photo→anime output pool (pre-curation)
+#     datasets/anime_curated/    # anime images the user KEPT (feeds the anime LoRA)
 #     loras/                     # trained LoRAs (durable home; ComfyUI copy lives in models/loras)
 #     characters/<u>/{refs,control}  # canonical refs + pose/seal control refs
 #     voices/  models/  profile/
+#
+# These paths are created at user-init so the front end can rely on them existing
+# the moment a user is registered (curation writes into curated/ dirs — see
+# USER_STORAGE.md §7.9).
 #
 # Env: SAGA_ROOT (required)
 # ============================================================================
@@ -39,7 +46,9 @@ U=$(echo "$TOKEN" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+
 BASE="$SAGA_ROOT/users/$U"
 CHAR="$BASE/characters/$U"
 echo "▶ scaffolding user tree: $BASE  (token '$U')"
-for d in uploads/images uploads/audio datasets loras "characters/$U/refs" "characters/$U/control" voices models profile; do
+for d in uploads/images uploads/audio uploads/curated \
+         datasets datasets/anime_src datasets/anime_curated \
+         loras "characters/$U/refs" "characters/$U/control" voices models profile; do
   mkdir -p "$BASE/$d"
 done
 

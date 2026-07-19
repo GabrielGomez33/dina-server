@@ -46,8 +46,11 @@ tenants/<tenantId>/
 ├── users/<userId>/                 # ── USER SCOPE — reusable identity assets ──
 │   ├── uploads/                    # raw ingested media (photos, ref images, audio). IMMUTABLE source of truth
 │   │   ├── images/
+│   │   ├── curated/                # ★ user-picked SOURCE photos (the keep set to img2img) (added; created at registration)
 │   │   └── audio/
 │   ├── datasets/<datasetId>/       # prepared training sets (kohya "<repeats>_<trigger>/" + captions) ← from uploads
+│   │   ├── anime_src/              # ★ img2img photo→anime output POOL, pre-curation (added; created at registration)
+│   │   └── anime_curated/          # ★ anime images the user KEPT → feeds the anime LoRA (added; created at registration)
 │   ├── loras/<loraId>/             # trained personal LoRAs (self, owned characters), VERSIONED
 │   │   └── v3/lora.safetensors     #   + card.json (base, trigger, rank, steps, dataset hash, sample grid)
 │   ├── characters/<characterId>/   # ★ a CHARACTER = the show's building block (added)
@@ -214,6 +217,32 @@ Plus a **publish/CDN** staging area and per-rendition delivery metadata.
 - **Saved pipelines/workflows** (a user's named render recipes; parameterized batch jobs).
 - **Scheduled/queued jobs** (overnight batch training/renders) with a per-user job history.
 - **Cost/telemetry**: GPU-hours, storage bytes, render counts — rolled into `quota` + billing.
+
+### 7.9 Dataset bootstrap + curation UI (the img2img→LoRA loop)
+
+The proven path to an on-model anime character LoRA is **bootstrapping**: real photos
+→ img2img (`saga-anime.sh`) at a locked recipe → a stylistically uniform anime set →
+**human curation** → train a clean stylized LoRA (no realism drag). Storage + UI notes:
+
+- **`datasets/anime_src/`** (per user) — the pre-curation pool of generated anime images
+  from `saga-anime-batch.sh`. Immutable generation output; curation *selects*, never edits.
+- **Curation UI (Phase 5, frontend)** — a grid of `anime_src/` thumbnails with keep/drop
+  toggles the user resolves **before** training starts. Persist the decision as a
+  `curation.json` (kept ids + timestamp + who), so a training run is reproducible and the
+  drop set can be revisited. The kept set is materialized into the kohya `datasets/<n>_<trigger>/`
+  layout. Curation is a durable record, not a throwaway filter.
+- **Source ingest is not just `uploads/images`** — themed source sets (hand-signs/seals for
+  DWPose, expression sheets, wardrobe refs) may be ingested to their own folders and must be
+  swept into the same img2img→dataset loop. Output names are derived from the source path
+  (collision-free), so multiple source folders can target one `anime_src/` safely.
+
+- **Registration-time contract (front end):** `uploads/curated/`, `datasets/anime_src/`, and
+  `datasets/anime_curated/` are created **when a user is created and registered** — not lazily
+  on first write — so the UI can address them immediately. `saga-user-init.sh` already scaffolds
+  them; the DB-backed user-registration flow MUST create the same paths (and their production
+  `tenants/<t>/users/<uuid>/` equivalents in `storagePaths.ts`) as part of provisioning. The
+  curation UI writes the keep set into `uploads/curated/` (source photos) and
+  `datasets/anime_curated/` (kept anime), and records the decision in `curation.json`.
 
 ### Design invariant across all of the above
 

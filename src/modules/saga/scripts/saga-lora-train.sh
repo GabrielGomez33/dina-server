@@ -40,6 +40,11 @@ esac; done
 [ -n "$NAME" ] || die "need --name (output LoRA name)"
 [ -x "$VENV/bin/python" ] || die "sd-scripts venv missing — run saga-lora-setup.sh first"
 
+# ensure a valid cwd (dataset prep may have rm-rf'd + recreated the caller's dir)
+cd "$SAGA_ROOT" 2>/dev/null || cd / || true
+# fix Intel oneMKL "Cannot load libtorch_cpu.so" — numpy/torch MKL threading-layer clash
+export MKL_THREADING_LAYER="${MKL_THREADING_LAYER:-GNU}"
+
 NAMESTEM=$(echo "$NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+|_+$//g')
 ALPHA=$(( RANK / 2 )); [ "$ALPHA" -lt 1 ] && ALPHA=1
 WARMUP=$(( STEPS / 20 ))
