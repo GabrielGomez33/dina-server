@@ -68,7 +68,7 @@ INTERPOLATE="${INTERPOLATE:-0}"     # 1 = interpolate to POLISH_FPS. OFF by defa
 # Extend/override per scene or character via NEG=.  (Want the ghostly seal-spirit
 # animals as an intentional effect? Drop the animal words from NEG and add them
 # to a keyframe's prompt.)
-NEG="${NEG:-lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, extra limbs, extra arms, boar, dragon, ram, serpent, tiger, snake, animal, creature, monster, mask, face covering, hood, helmet, blue eyes, green eyes, glowing eyes, heterochromia, watch, wristwatch, jewelry, bracelet, necklace, 1girl, woman, female, text, watermark, signature}"
+NEG="${NEG:-lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, extra limbs, extra arms, boar, dragon, ram, serpent, tiger, snake, animal, creature, monster, mask, face covering, hood, helmet, blue eyes, green eyes, glowing eyes, heterochromia, 1girl, woman, female, text, watermark, signature}"
 USE_CONTROL="${USE_CONTROL:-0}"     # 1 = force seals via ControlNet from the crops below
 SEAL1="${SEAL1:-$SAGA_ROOT/tmp/seal_tiger.png}"
 SEAL2="${SEAL2:-$SAGA_ROOT/tmp/seal_serpent.png}"

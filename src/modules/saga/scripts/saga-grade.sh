@@ -6,10 +6,16 @@
 # film grain and muting/contrasting the palette. Presets are reusable across the
 # whole show's aesthetic — not specific to one clip.
 #
-#   saga-grade.sh <input.mp4> [--preset lain|grain|none] [-o out.mp4]
+#   saga-grade.sh <input.mp4> [--preset lain|lain-bloom|bloom|grain|none] [-o out.mp4]
+#     lain-bloom = the cohesive analog look: sharpen→soft-glow (Orton) + muted + grain.
+#                  The uniform glow layer masks per-segment seams → reads as one scene.
+#     bloom = sharpen→soft-glow only (Orton effect: crisp base + blurred screen layer)
 #     lain  = desaturated, muted, contrasty + grain (Serial Experiments Lain vibe)
 #     grain = grain only, palette untouched
 #     none  = passthrough (copy)
+#
+# Validate any preset's ffmpeg filter on a synthetic clip before a long render:
+#   ffmpeg -f lavfi -i testsrc=size=320x180:rate=16:duration=1 -vf "<VF>" -frames:v 4 /tmp/t.mp4
 #
 # Env: SAGA_ROOT (required)
 # ============================================================================
@@ -27,11 +33,14 @@ esac; done
 command -v ffmpeg >/dev/null || die "ffmpeg required"
 OUT="${OUT:-${IN%.*}_${PRESET}.mp4}"
 
+BLOOM="split=2[a][b];[a]unsharp=5:5:1.0[s];[b]gblur=sigma=6[g];[s][g]blend=all_mode=screen:all_opacity=0.35"
 case "$PRESET" in
-  lain)  VF="eq=saturation=0.68:contrast=1.10:brightness=-0.015,noise=alls=14:allf=t+u";;
-  grain) VF="noise=alls=12:allf=t+u";;
-  none)  cp -f "$IN" "$OUT"; echo "$OUT"; exit 0;;
-  *) die "unknown --preset: $PRESET (lain|grain|none)";;
+  lain-bloom) VF="${BLOOM}[bl];[bl]eq=saturation=0.72:contrast=1.08:brightness=-0.01,noise=alls=12:allf=t+u";;
+  bloom)      VF="$BLOOM";;
+  lain)       VF="eq=saturation=0.68:contrast=1.10:brightness=-0.015,noise=alls=14:allf=t+u";;
+  grain)      VF="noise=alls=12:allf=t+u";;
+  none)       cp -f "$IN" "$OUT"; echo "$OUT"; exit 0;;
+  *) die "unknown --preset: $PRESET (lain-bloom|bloom|lain|grain|none)";;
 esac
 
 echo "▶ grade $(basename "$IN") [$PRESET]" >&2
