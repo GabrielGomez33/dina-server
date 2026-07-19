@@ -46,6 +46,7 @@ esac; done
 command -v jq >/dev/null || die "jq required"; command -v ffmpeg >/dev/null || die "ffmpeg required"
 [ -f "$SAGA_ROOT/models/loras/$LORA" ] || die "LoRA not found: models/loras/$LORA"
 [ -x "$KF" ] || die "not executable: $KF"
+curl -sf "$COMFY/system_stats" >/dev/null 2>&1 || die "ComfyUI not reachable at $COMFY — start it: sudo pm2 restart saga-comfyui (wait ~15s)"
 
 # shared consistency prefix on EVERY frame (identity/outfit/eyes/style pinned)
 BASE="solo, 1man, $TRIGGER, $OUTFIT, $EYES, $STYLE, medium shot, centered composition, consistent framing, eye level, dark background, dramatic lighting"
