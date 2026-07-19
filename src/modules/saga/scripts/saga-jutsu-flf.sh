@@ -35,7 +35,7 @@ set -uo pipefail
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 COMFY="${COMFY:-http://127.0.0.1:8188}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-KF="$HERE/saga-keyframe.sh"; FLF="$HERE/saga-flf.sh"; IIDKF="$HERE/saga-instantid-keyframe.sh"; DTL="$HERE/saga-detail.sh"
+KF="$HERE/saga-keyframe.sh"; FLF="$HERE/saga-flf.sh"; IIDKF="$HERE/saga-instantid-keyframe.sh"; DTL="$HERE/saga-detail.sh"; GRADE_SH="$HERE/saga-grade.sh"
 
 # ── CONFIG (edit or pass via env) ───────────────────────────────────────────
 # Identity now comes from the trained LoRA (no IP-Adapter pose-prior fighting the
@@ -57,13 +57,18 @@ OUTFIT="${OUTFIT:-wearing a plain white short-sleeve shirt}"
 POLISH_FPS="${POLISH_FPS:-32}"      # STEP 4 interpolation target fps
 UPSCALE_MODE="${UPSCALE_MODE:-esrgan}"   # esrgan (crisp cel lines) | lanczos (soft/painterly — matches a low-CFG look)
 EYES="${EYES:-brown eyes}"          # PINNED eye color across ALL keyframes (prevents eye-color drift)
+# Visual style for keyframes — default leans rough/analog anime (Serial Experiments
+# Lain-ish): grainy, muted, hand-drawn — counters the smooth "3D" render look.
+STYLE="${STYLE:-retro 1990s anime, cel animation, rough sketchy linework, grainy, muted desaturated colors, film grain, hand-drawn, flat colors, 2d}"
+GRADE="${GRADE:-lain}"              # none | grain | lain — post grade; also UNIFIES color across FLF segments (reduces visible seams)
+INTERPOLATE="${INTERPOLATE:-0}"     # 1 = interpolate to POLISH_FPS. OFF by default: minterpolate ghosts fast motion (the trailing light-rays)
 # Shared negative fed to EVERY keyframe AND the hand-fixer. Guards the recurring
 # FAILURE CLASSES (not just this scene): hand mutations, seal-name animals bleeding
 # into the background, wrong eye colors, mask/costume drift, wrong sex, text.
 # Extend/override per scene or character via NEG=.  (Want the ghostly seal-spirit
 # animals as an intentional effect? Drop the animal words from NEG and add them
 # to a keyframe's prompt.)
-NEG="${NEG:-lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, extra limbs, extra arms, boar, dragon, ram, serpent, tiger, snake, animal, creature, monster, mask, face covering, hood, helmet, blue eyes, green eyes, glowing eyes, heterochromia, 1girl, woman, female, text, watermark, signature}"
+NEG="${NEG:-lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, extra limbs, extra arms, boar, dragon, ram, serpent, tiger, snake, animal, creature, monster, mask, face covering, hood, helmet, blue eyes, green eyes, glowing eyes, heterochromia, watch, wristwatch, jewelry, bracelet, necklace, 1girl, woman, female, text, watermark, signature}"
 USE_CONTROL="${USE_CONTROL:-0}"     # 1 = force seals via ControlNet from the crops below
 SEAL1="${SEAL1:-$SAGA_ROOT/tmp/seal_tiger.png}"
 SEAL2="${SEAL2:-$SAGA_ROOT/tmp/seal_serpent.png}"
@@ -97,7 +102,9 @@ frames_of(){ command -v ffprobe >/dev/null && ffprobe -v error -count_frames -se
 
 # Identity is carried by the LoRA + trigger (prepended by saga-keyframe.sh);
 # BASE is just style + scene so the trigger isn't diluted.
-BASE="solo, $OUTFIT, $EYES, cel shaded anime, 2d, flat colors, dark background, embers, dramatic lighting, masterpiece"
+# Consistent framing/composition tags reduce inter-keyframe variance, so the FLF
+# segments read as one continuous scene instead of jump-cuts.
+BASE="solo, $OUTFIT, $EYES, $STYLE, medium shot, centered composition, consistent framing, eye level, dark background, embers, dramatic lighting"
 
 echo "════════════════════════════════════════════════════"
 echo " SAGA — 20s JUTSU (keyframe/FLF)   seed=$SEED  ${W}x${H}@${FPS}fps"
@@ -151,7 +158,7 @@ if [ "$DETAIL" != "none" ]; then
 fi
 
 if [ "$POLISH" -eq 1 ]; then
-  for s in "$HERE/saga-esrgan-video.sh" "$HERE/saga-interpolate.sh"; do [ -x "$s" ] || fail "not executable: $s (chmod +x)"; done
+  for s in "$HERE/saga-esrgan-video.sh" "$HERE/saga-interpolate.sh" "$GRADE_SH"; do [ -x "$s" ] || fail "not executable: $s (chmod +x)"; done
   command -v ffprobe >/dev/null || fail "ffprobe required for polish (2K upscale); apt-get install ffmpeg or run --no-polish"
   if [ "$UPSCALE_MODE" = "esrgan" ]; then
     for n in UpscaleModelLoader ImageUpscaleWithModel ImageScale; do need_node "$n"; done
@@ -270,18 +277,29 @@ verify_out "$MASTER"; log "master frames: $(frames_of "$MASTER"), duration ~$(aw
 echo "✅ master → $MASTER"
 
 # ── STEP 4 — POLISH ─────────────────────────────────────────────────────────
-CUR=4; step 4 "polish (2K upscale → interpolate)"
+CUR=4; step 4 "polish (2K upscale → grade → interpolate?)"
 FINAL="$MASTER"
 if [ "$POLISH" -eq 0 ]; then log "(--no-polish) skipped"; else
-  # Upscale FIRST (fewer frames through ESRGAN), then interpolate the 2K clip.
   UP="$WORK/jutsu_2k.mp4"
   log "2K upscale ($UPSCALE_MODE)…"
   "$HERE/saga-esrgan-video.sh" "$MASTER" --method "$UPSCALE_MODE" -o "$UP" >/dev/null || fail "2K upscale failed"
-  verify_out "$UP"
-  POL="$WORK/jutsu_final.mp4"
-  log "interpolate → ${POLISH_FPS}fps…"
-  "$HERE/saga-interpolate.sh" "$UP" --fps "$POLISH_FPS" -o "$POL" >/dev/null || fail "interpolate failed"
-  verify_out "$POL"; FINAL="$POL"
+  verify_out "$UP"; FINAL="$UP"
+  # grade unifies color/exposure across the whole clip (reduces per-segment seams)
+  # and adds the analog grain.
+  if [ "$GRADE" != "none" ]; then
+    GR="$WORK/jutsu_graded.mp4"
+    log "grade ($GRADE — unify color + grain)…"
+    "$GRADE_SH" "$FINAL" --preset "$GRADE" -o "$GR" >/dev/null || fail "grade failed"
+    verify_out "$GR"; FINAL="$GR"
+  fi
+  if [ "$INTERPOLATE" = "1" ]; then
+    POL="$WORK/jutsu_final.mp4"
+    log "interpolate → ${POLISH_FPS}fps…"
+    "$HERE/saga-interpolate.sh" "$FINAL" --fps "$POLISH_FPS" -o "$POL" >/dev/null || fail "interpolate failed"
+    verify_out "$POL"; FINAL="$POL"
+  else
+    log "interpolation OFF (minterpolate ghosts fast motion → trailing rays; set INTERPOLATE=1 to enable)"
+  fi
   log "polished → $FINAL ($(frames_of "$FINAL") frames)"
 fi
 

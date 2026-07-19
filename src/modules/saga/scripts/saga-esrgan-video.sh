@@ -32,8 +32,10 @@ for t in ffmpeg ffprobe; do command -v "$t" >/dev/null || die "missing tool: $t"
 [ "$METHOD" = "esrgan" ] && { for t in jq curl; do command -v "$t" >/dev/null || die "missing tool: $t"; done; }
 OUT="${OUT:-${IN%.*}_2k.mp4}"
 
-# target 2K dims (long edge = MAX, /8-aligned) from the stream dimensions
-read -r OW OH < <(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0:s=' ' "$IN" 2>/dev/null || echo "0 0")
+# target 2K dims (long edge = MAX, /8-aligned) from the stream dimensions.
+# Robust read: one value per line (nokey), joined — avoids fragile csv separators.
+DIMS=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of default=noprint_wrappers=1:nokey=1 "$IN" 2>/dev/null | tr '\n' ' ')
+read -r OW OH _ <<<"$DIMS"
 GTW=0; GTH=0
 if [ "${OW:-0}" -gt 0 ] && [ "${OH:-0}" -gt 0 ]; then
   if [ "$OW" -ge "$OH" ]; then GTW=$MAX; GTH=$(( (OH*MAX/OW+4)/8*8 )); else GTH=$MAX; GTW=$(( (OW*MAX/OH+4)/8*8 )); fi
