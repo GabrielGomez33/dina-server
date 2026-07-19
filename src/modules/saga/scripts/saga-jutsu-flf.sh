@@ -49,7 +49,11 @@ IDENTITY="${IDENTITY:-lora}"         # lora | instantid  (instantid keyframes ne
 FACE="${FACE:-}"                     # required when IDENTITY=instantid: a front-facing photo
 IIDW="${IIDW:-0.8}"; IIDE="${IIDE:-0.9}"   # InstantID face weight / end (only used when IDENTITY=instantid)
 DETAIL="${DETAIL:-hands}"           # none | hands | both — fix hands (and optionally face) on each keyframe BEFORE FLF
-OUTFIT="${OUTFIT:-wearing a dark high-collar martial arts gi}"   # PINNED across ALL keyframes (wardrobe continuity)
+# PINNED across ALL keyframes for wardrobe continuity. Keep it SIMPLE and match
+# what the LoRA already learned (e.g. the shirt in the training photos) — vague or
+# exotic outfits ("high-collar", "gi", "armor") make the model invent a different
+# costume per keyframe, and "high-collar" in particular reads as a face mask.
+OUTFIT="${OUTFIT:-wearing a plain white short-sleeve shirt}"
 POLISH_FPS="${POLISH_FPS:-32}"      # STEP 4 interpolation target fps
 USE_CONTROL="${USE_CONTROL:-0}"     # 1 = force seals via ControlNet from the crops below
 SEAL1="${SEAL1:-$SAGA_ROOT/tmp/seal_tiger.png}"
