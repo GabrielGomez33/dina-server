@@ -120,8 +120,11 @@ done
 
 if [ "$AUTOTAG" = 1 ]; then
   echo "▶ WD14 auto-tagging ($WD14_REPO, thresh $WD14_THRESH) — downloads the tagger on first run"
-  # --onnx uses onnxruntime (NOT tensorflow) — lighter, and the backend we install below.
-  ( cd "$SDROOT" && "$SDPY" "$TAGGER" "$DIR" --onnx --repo_id "$WD14_REPO" --thresh "$WD14_THRESH" \
+  # --onnx uses onnxruntime (GPU). Force a fresh download if the onnx weights are
+  # absent (e.g. a prior tensorflow-mode run left the dir without model.onnx).
+  MODEL_ONNX="$SDROOT/wd14_tagger_model/$(printf '%s' "$WD14_REPO" | tr '/' '_')/model.onnx"
+  FORCE=""; [ -f "$MODEL_ONNX" ] || FORCE="--force_download"
+  ( cd "$SDROOT" && "$SDPY" "$TAGGER" "$DIR" --onnx $FORCE --repo_id "$WD14_REPO" --thresh "$WD14_THRESH" \
       --caption_extension .txt --remove_underscore --batch_size 4 ) \
     || die "WD14 tagging failed. Keep it on GPU — pin onnxruntime-gpu to a CUDA-12
    build that matches this box (torch cu121). A too-new build wants a newer CUDA
