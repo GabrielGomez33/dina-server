@@ -18,16 +18,15 @@ COMFY="${COMFY:-http://127.0.0.1:8188}"
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 CKPT="${LORA_CKPT:-animagine-xl-4.0.safetensors}"
 
-LORA=""; TRIGGER=""; WEIGHT=0.85; EXTRA=""; SEED=777; STEPS=28; CFG=5.5; W=1024; H=1024
-# Default to BRIGHT/neutral so features read (the dataset skewed dark/backlit);
-# pass --style to change it (e.g. the dark dramatic look you liked).
-STYLE="cel shaded anime, 2d, flat colors, soft even lighting, simple plain background, detailed face, looking at viewer, masterpiece, best quality"
+LORA=""; TRIGGER=""; WEIGHT=0.85; EXTRA=""; SEED=777; STEPS=28; CFG=5.5; W=1024; H=1024; OUT="loratest"
+# Default: clean GENERIC anime, bright so features read. Pass --style to change it.
+STYLE="anime, anime screencap, cel shading, clean lineart, detailed anime face, flat colors, soft even lighting, simple plain background, masterpiece, best quality"
 NEG="lowres, bad anatomy, bad hands, extra fingers, worst quality, blurry, multiple people, 2boys, watermark, text, dark, silhouette, underexposed"
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
   --lora) LORA="$2"; shift 2;; --trigger) TRIGGER="$2"; shift 2;;
   --weight) WEIGHT="$2"; shift 2;; --prompt) EXTRA="$2"; shift 2;;
-  --style) STYLE="$2"; shift 2;;
+  --style) STYLE="$2"; shift 2;; -o|--out) OUT="$2"; shift 2;;
   --seed) SEED="$2"; shift 2;; --steps) STEPS="$2"; shift 2;; --cfg) CFG="$2"; shift 2;;
   -W|--width) W="$2"; shift 2;; -H|--height) H="$2"; shift 2;; -n|--neg) NEG="$2"; shift 2;;
   -h|--help) sed -n '2,18p' "$0"; exit 0;;
@@ -76,7 +75,7 @@ JSON
 echo "▶ LoRA test: $LORA @ weight $WEIGHT  trigger='$TRIGGER'  seed=$SEED"
 STY="$STYLE"
 X=""; [ -n "$EXTRA" ] && X=", $EXTRA"
-gen loratest_portrait  "$TRIGGER, solo, portrait, upper body, $STY$X"
-gen loratest_fullbody  "$TRIGGER, solo, full body, standing, fighting stance, $STY$X"
-gen loratest_hands     "$TRIGGER, solo, both hands forming a ninja hand seal, close-up on hands, $STY$X"
-echo "✅ 3 test stills in $SAGA_ROOT/tmp/loratest_*.png — try --weight 0.6..1.0 to tune identity strength"
+gen "${OUT}_portrait"  "$TRIGGER, solo, portrait, upper body, $STY$X"
+gen "${OUT}_fullbody"  "$TRIGGER, solo, full body, standing, fighting stance, $STY$X"
+gen "${OUT}_hands"     "$TRIGGER, solo, both hands forming a ninja hand seal, close-up on hands, $STY$X"
+echo "✅ 3 test stills in $SAGA_ROOT/tmp/${OUT}_*.png — try --weight 0.6..1.0 to tune identity strength"
