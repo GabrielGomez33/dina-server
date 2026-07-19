@@ -30,7 +30,8 @@ LORA=""; TRIGGER=""; LORAW=2.0; DENOISE=0.45; REANCHOR=3; CFG=2.0; SEED=777; W=1
 # img2img chain they RE-APPLY every frame and snowball into noise. Apply the Lain
 # roughness ONCE in post: saga-grade.sh --preset lain-bloom <preview>.
 STYLE="${STYLE:-anime, cel shading, clean lineart, flat colors, soft lighting, detailed anime}"
-OUTFIT="wearing a plain white short-sleeve shirt"; EYES="brown eyes"
+OUTFIT="${OUTFIT:-wearing a plain white short-sleeve shirt}"; EYES="${EYES:-brown eyes}"
+GROOMING="${GROOMING:-buzz cut, very short hair, short trimmed beard}"   # pinned so hair/beard stay consistent
 NEG="lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, mutated hands, extra limbs, boar, dragon, ram, serpent, tiger, animal, creature, mask, hood, blue eyes, glowing eyes, 1girl, woman, text, watermark"
 # 10-beat smooth progression (small increments chain best). Override with --poses.
 POSES="both hands relaxed, calm;both hands rising in front of the body;both hands at chest height, palms facing;both hands close together at chest, fingers apart;both hands fingertips touching;both hands pressed together, fingers interlocked, ninja hand seal;both hands pressed flat together in prayer position at center;hands pressed together, faint glow between the palms;hands slightly apart, small swirling energy orb forming between the palms;hands cupping a glowing swirling energy orb"
@@ -52,7 +53,7 @@ command -v jq >/dev/null || die "jq required"; command -v ffmpeg >/dev/null || d
 curl -sf "$COMFY/system_stats" >/dev/null 2>&1 || die "ComfyUI not reachable at $COMFY — start it: sudo pm2 restart saga-comfyui (wait ~15s)"
 
 # shared consistency prefix on EVERY frame (identity/outfit/eyes/style pinned)
-BASE="solo, 1man, $TRIGGER, $OUTFIT, $EYES, $STYLE, medium shot, centered composition, consistent framing, eye level, dark background, dramatic lighting"
+BASE="solo, 1man, $TRIGGER, $GROOMING, $OUTFIT, $EYES, $STYLE, medium shot, centered composition, consistent framing, eye level, dark background, dramatic lighting"
 
 CID="sagachain-$$-$RANDOM"
 upload(){ curl -sf -F "image=@${1}" -F "overwrite=true" "$COMFY/upload/image" | jq -r '.name' || die "upload failed: $1"; }
