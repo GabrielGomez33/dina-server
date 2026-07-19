@@ -123,8 +123,10 @@ if [ "$AUTOTAG" = 1 ]; then
   # --onnx uses onnxruntime (NOT tensorflow) — lighter, and the backend we install below.
   ( cd "$SDROOT" && "$SDPY" "$TAGGER" "$DIR" --onnx --repo_id "$WD14_REPO" --thresh "$WD14_THRESH" \
       --caption_extension .txt --remove_underscore --batch_size 4 ) \
-    || die "WD14 tagging failed — install the onnx backend into the sd-scripts venv:
-     $SDPY -m pip install onnxruntime-gpu huggingface_hub onnx"
+    || die "WD14 tagging failed. GPU onnxruntime often mismatches this box's CUDA
+   (libcudart.so.NN). Tagging is light — use CPU onnxruntime (reliable, no CUDA):
+     $SDPY -m pip uninstall -y onnxruntime-gpu
+     $SDPY -m pip install onnxruntime huggingface_hub onnx"
   # Prepend the trigger (identity anchor) so it co-occurs with every image's tags;
   # everything else becomes a SEPARABLE, promptable concept — nothing incidental
   # gets welded into the identity token.
