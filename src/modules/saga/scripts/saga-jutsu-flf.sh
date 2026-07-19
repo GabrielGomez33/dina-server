@@ -14,7 +14,7 @@
 #   STEP 1  keyframes  — 8 pose stills, hands (and optionally face) detailed in place
 #   STEP 2  motion     — 3 holds + 7 FLF transitions
 #   STEP 3  assemble   — concat → 20s master
-#   STEP 4  polish     — RIFE interpolate + ESRGAN 2K (if helper scripts present)
+#   STEP 4  polish     — ESRGAN 2K upscale (4x-AnimeSharp) → frame interpolation
 #
 # Usage:
 #   LORA=exodia.safetensors TRIGGER=exodia_saga ./saga-jutsu-flf.sh
@@ -46,6 +46,8 @@ IDENTITY="${IDENTITY:-lora}"         # lora | instantid  (instantid keyframes ne
 FACE="${FACE:-}"                     # required when IDENTITY=instantid: a front-facing photo
 IIDW="${IIDW:-0.8}"; IIDE="${IIDE:-0.9}"   # InstantID face weight / end (only used when IDENTITY=instantid)
 DETAIL="${DETAIL:-hands}"           # none | hands | both — fix hands (and optionally face) on each keyframe BEFORE FLF
+OUTFIT="${OUTFIT:-wearing a dark high-collar martial arts gi}"   # PINNED across ALL keyframes (wardrobe continuity)
+POLISH_FPS="${POLISH_FPS:-32}"      # STEP 4 interpolation target fps
 USE_CONTROL="${USE_CONTROL:-0}"     # 1 = force seals via ControlNet from the crops below
 SEAL1="${SEAL1:-$SAGA_ROOT/tmp/seal_tiger.png}"
 SEAL2="${SEAL2:-$SAGA_ROOT/tmp/seal_serpent.png}"
@@ -78,7 +80,7 @@ frames_of(){ command -v ffprobe >/dev/null && ffprobe -v error -count_frames -se
 
 # Identity is carried by the LoRA + trigger (prepended by saga-keyframe.sh);
 # BASE is just style + scene so the trigger isn't diluted.
-BASE="solo, cel shaded anime, 2d, flat colors, dark background, embers, dramatic lighting, masterpiece"
+BASE="solo, $OUTFIT, cel shaded anime, 2d, flat colors, dark background, embers, dramatic lighting, masterpiece"
 
 echo "════════════════════════════════════════════════════"
 echo " SAGA — 20s JUTSU (keyframe/FLF)   seed=$SEED  ${W}x${H}@${FPS}fps"
@@ -129,6 +131,14 @@ if [ "$DETAIL" != "none" ]; then
   have_model "hand_yolov8s.pt" || fail "hand detector missing under models/: hand_yolov8s.pt (needed for DETAIL=$DETAIL)"
   [ "$DETAIL" = "both" ] && { have_model "face_yolov8m.pt" || fail "face detector missing under models/: face_yolov8m.pt"; }
   log "hand-fixer ok (--detect $DETAIL on each keyframe)"
+fi
+
+if [ "$POLISH" -eq 1 ]; then
+  for s in "$HERE/saga-esrgan-video.sh" "$HERE/saga-interpolate.sh"; do [ -x "$s" ] || fail "not executable: $s (chmod +x)"; done
+  command -v ffprobe >/dev/null || fail "ffprobe required for polish (2K upscale); apt-get install ffmpeg or run --no-polish"
+  for n in UpscaleModelLoader ImageUpscaleWithModel ImageScale; do need_node "$n"; done
+  have_model "4x-AnimeSharp.pth" || fail "upscale model missing under models/: 4x-AnimeSharp.pth (--no-polish to skip)"
+  log "polish ok (2K upscale + ${POLISH_FPS}fps interpolate)"
 fi
 
 if [ "$USE_CONTROL" -eq 1 ]; then
@@ -226,15 +236,25 @@ verify_out "$MASTER"; log "master frames: $(frames_of "$MASTER"), duration ~$(aw
 echo "✅ master → $MASTER"
 
 # ── STEP 4 — POLISH ─────────────────────────────────────────────────────────
-CUR=4; step 4 "polish (interpolate + upscale)"
+CUR=4; step 4 "polish (2K upscale → interpolate)"
+FINAL="$MASTER"
 if [ "$POLISH" -eq 0 ]; then log "(--no-polish) skipped"; else
-  if [ -x "$HERE/saga-interpolate.sh" ]; then log "RIFE interpolate…"; "$HERE/saga-interpolate.sh" "$MASTER" || log "⚠ interpolate step returned nonzero"; else log "ℹ next: saga-interpolate.sh \"$MASTER\""; fi
-  if [ -x "$HERE/saga-esrgan-video.sh" ]; then log "ESRGAN 2K upscale…"; "$HERE/saga-esrgan-video.sh" "$MASTER" || log "⚠ upscale step returned nonzero"; else log "ℹ next: saga-esrgan-video.sh \"$MASTER\""; fi
+  # Upscale FIRST (fewer frames through ESRGAN), then interpolate the 2K clip.
+  UP="$WORK/jutsu_2k.mp4"
+  log "2K upscale (4x-AnimeSharp, per frame — the slow step)…"
+  "$HERE/saga-esrgan-video.sh" "$MASTER" -o "$UP" >/dev/null || fail "2K upscale failed"
+  verify_out "$UP"
+  POL="$WORK/jutsu_final.mp4"
+  log "interpolate → ${POLISH_FPS}fps…"
+  "$HERE/saga-interpolate.sh" "$UP" --fps "$POLISH_FPS" -o "$POL" >/dev/null || fail "interpolate failed"
+  verify_out "$POL"; FINAL="$POL"
+  log "polished → $FINAL ($(frames_of "$FINAL") frames)"
 fi
 
 DT=$(( $(date +%s) - T0 ))
 echo
 echo "════════════════════════════════════════════════════"
-echo " ✅ DONE in ${DT}s — review: $MASTER"
+echo " ✅ DONE in ${DT}s — review: $FINAL"
+echo "   (raw master: $MASTER)"
 echo " log: $LOG"
 echo "════════════════════════════════════════════════════"
