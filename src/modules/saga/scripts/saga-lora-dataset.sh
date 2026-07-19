@@ -120,10 +120,11 @@ done
 
 if [ "$AUTOTAG" = 1 ]; then
   echo "▶ WD14 auto-tagging ($WD14_REPO, thresh $WD14_THRESH) — downloads the tagger on first run"
-  ( cd "$SDROOT" && "$SDPY" "$TAGGER" "$DIR" --repo_id "$WD14_REPO" --thresh "$WD14_THRESH" \
+  # --onnx uses onnxruntime (NOT tensorflow) — lighter, and the backend we install below.
+  ( cd "$SDROOT" && "$SDPY" "$TAGGER" "$DIR" --onnx --repo_id "$WD14_REPO" --thresh "$WD14_THRESH" \
       --caption_extension .txt --remove_underscore --batch_size 4 ) \
-    || die "WD14 tagging failed — the sd-scripts venv may need deps:
-     $SDPY -m pip install onnxruntime-gpu huggingface_hub"
+    || die "WD14 tagging failed — install the onnx backend into the sd-scripts venv:
+     $SDPY -m pip install onnxruntime-gpu huggingface_hub onnx"
   # Prepend the trigger (identity anchor) so it co-occurs with every image's tags;
   # everything else becomes a SEPARABLE, promptable concept — nothing incidental
   # gets welded into the identity token.
