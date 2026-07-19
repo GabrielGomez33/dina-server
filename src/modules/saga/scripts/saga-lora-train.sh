@@ -51,9 +51,22 @@ WARMUP=$(( STEPS / 20 ))
 CKPT="$SAGA_ROOT/models/checkpoints/$BASE"
 [ -f "$CKPT" ] || die "base checkpoint not found: $CKPT"
 
-# locate + sanity-check the concept folder
-CONCEPT=$(find "$DATASET" -maxdepth 1 -type d -regextype posix-extended -regex '.*/[0-9]+_.+' | head -1)
-[ -n "$CONCEPT" ] || die "no '<repeats>_<trigger>' folder inside $DATASET — run saga-lora-dataset.sh"
+# locate + sanity-check the concept folder(s)
+# CRITICAL: --train_data_dir (below) is the PARENT and kohya trains on EVERY
+# "<repeats>_<trigger>/" concept inside it. If two datasets share a parent (e.g.
+# a real-photo 10_gabrielgomez1 next to an anime 10_animegabriel) it silently
+# MIXES them — realism drag re-enters. Refuse rather than contaminate: one
+# concept per --dataset parent. Isolate with saga-lora-dataset.sh --out <own dir>.
+mapfile -t CONCEPTS < <(find "$DATASET" -maxdepth 1 -type d -regextype posix-extended -regex '.*/[0-9]+_.+' | sort)
+[ "${#CONCEPTS[@]}" -gt 0 ] || die "no '<repeats>_<trigger>' folder inside $DATASET — run saga-lora-dataset.sh"
+if [ "${#CONCEPTS[@]}" -gt 1 ]; then
+  echo "❌ multiple concept folders share this --dataset parent:" >&2
+  printf '     %s\n' "${CONCEPTS[@]}" >&2
+  die "kohya trains on ALL of them (mixes datasets). Give the ONE you want its own parent dir:
+     saga-lora-dataset.sh --raw <curated> --trigger $TRIGGER --out \"$DATASET/${TRIGGER}_set\"
+     saga-lora-train.sh   --dataset \"$DATASET/${TRIGGER}_set\" --name $NAME --trigger $TRIGGER ..."
+fi
+CONCEPT="${CONCEPTS[0]}"
 NIMG=$(find "$CONCEPT" -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) | wc -l)
 NTXT=$(find "$CONCEPT" -type f -iname '*.txt' | wc -l)
 [ "$NIMG" -ge 8 ] || die "only $NIMG images in $CONCEPT — a character LoRA needs >=8 (15-30 recommended)"
