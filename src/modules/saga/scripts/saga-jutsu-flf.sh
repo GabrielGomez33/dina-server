@@ -11,10 +11,17 @@
 # artifacts are reused unless --force). Drives saga-keyframe.sh + saga-flf.sh.
 #
 #   STEP 0  preflight  — tools, engine, nodes, models, inputs
-#   STEP 1  keyframes  — 8 pose stills, hands (and optionally face) detailed in place
+#   STEP 1  keyframes  — 8 pose stills (anchor-chain by default), hands detailed in place
 #   STEP 2  motion     — 3 holds + 7 FLF transitions
 #   STEP 3  assemble   — concat → 20s master
 #   STEP 4  polish     — ESRGAN 2K upscale (4x-AnimeSharp) → frame interpolation
+#
+# STEP 1 keyframe modes (see KEYFRAME_MODE / CHAIN_DENOISE in CONFIG):
+#   anchor       (default) — K1 generated fully, then K2..K8 are img2img EDITs of the
+#                  clean K1 (edit, don't redraw): identity/outfit/framing inherited,
+#                  only the pose changes → maximum consistency. FLF adds the motion.
+#   --independent          — generate every keyframe from scratch (more pose freedom,
+#                  higher inter-keyframe variance).
 #
 # Usage:
 #   LORA=exodia.safetensors TRIGGER=exodia_saga ./saga-jutsu-flf.sh
@@ -35,7 +42,7 @@ set -uo pipefail
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 COMFY="${COMFY:-http://127.0.0.1:8188}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-KF="$HERE/saga-keyframe.sh"; FLF="$HERE/saga-flf.sh"; IIDKF="$HERE/saga-instantid-keyframe.sh"; DTL="$HERE/saga-detail.sh"; GRADE_SH="$HERE/saga-grade.sh"
+KF="$HERE/saga-keyframe.sh"; FLF="$HERE/saga-flf.sh"; IIDKF="$HERE/saga-instantid-keyframe.sh"; DTL="$HERE/saga-detail.sh"; GRADE_SH="$HERE/saga-grade.sh"; EDIT="$HERE/saga-edit.sh"
 
 # ── CONFIG (edit or pass via env) ───────────────────────────────────────────
 # Identity now comes from the trained LoRA (no IP-Adapter pose-prior fighting the
@@ -50,6 +57,22 @@ FACE="${FACE:-}"                     # required when IDENTITY=instantid: a front
 IIDW="${IIDW:-0.8}"; IIDE="${IIDE:-0.9}"   # InstantID face weight / end (only used when IDENTITY=instantid)
 DETAIL="${DETAIL:-hands}"           # none | hands | both — fix hands (and optionally face) on each keyframe BEFORE FLF
 HAND_DENOISE="${HAND_DENOISE:-0.3}" # GENTLE by default: at 0.4 the detailer re-invents hands (clean but wrong/missing limbs); 0.3 cleans without destroying good hands. Raise only to rescue badly-broken frames.
+# STEP-1 keyframe generation MODE:
+#   anchor      (DEFAULT) — generate K1 fully, then img2img-EDIT the CLEAN K1 into
+#                every other keyframe (via saga-edit.sh). Identity, outfit, framing
+#                and lighting are inherited from the anchor; only the hand pose
+#                changes. Editing the SAME clean anchor each time (never the previous,
+#                drifting frame) means error can't accumulate → maximum inter-keyframe
+#                consistency ("no chaos"). FLF supplies the motion between keyframes.
+#   independent — generate every keyframe from scratch (LoRA identity + pose prompt).
+#                More pose freedom, higher inter-keyframe variance (jump-cut risk).
+#                Select with the --independent flag or KEYFRAME_MODE=independent.
+KEYFRAME_MODE="${KEYFRAME_MODE:-anchor}"
+# Denoise for the anchor edits (anchor mode only). Each edit is off the CLEAN anchor
+# (no accumulation), so this can run high enough to restructure the hands into a new
+# seal without snowballing: ~0.5–0.6 is the working range. Lower = more faithful to
+# the anchor (poses barely change); higher = stronger pose change, more departure.
+CHAIN_DENOISE="${CHAIN_DENOISE:-0.55}"
 # PINNED across ALL keyframes for wardrobe continuity. Keep it SIMPLE and match
 # what the LoRA already learned (e.g. the shirt in the training photos) — vague or
 # exotic outfits ("high-collar", "gi", "armor") make the model invent a different
@@ -86,7 +109,8 @@ FORCE=0; POLISH=1; CHECK_ONLY=0; CLEAN=0
 while [ $# -gt 0 ]; do case "$1" in
   --check) CHECK_ONLY=1; shift;; --force) FORCE=1; shift;;
   --clean) CLEAN=1; shift;;
-  --no-polish) POLISH=0; shift;; -h|--help) sed -n '2,34p' "$0"; exit 0;;
+  --independent) KEYFRAME_MODE=independent; shift;;   # STEP 1: independent keyframes instead of the anchor chain
+  --no-polish) POLISH=0; shift;; -h|--help) sed -n '2,40p' "$0"; exit 0;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
 
@@ -159,6 +183,20 @@ if [ "$DETAIL" != "none" ]; then
   log "hand-fixer ok (--detect $DETAIL on each keyframe)"
 fi
 
+# Anchor-chain keyframes (STEP 1 default): validate the edit primitive + its knob.
+if [ "$KEYFRAME_MODE" = "anchor" ]; then
+  [ -x "$EDIT" ] || fail "not executable: $EDIT (chmod +x) — required for KEYFRAME_MODE=anchor"
+  case "$CHAIN_DENOISE" in ''|*[!0-9.]*) fail "CHAIN_DENOISE must be numeric (got '$CHAIN_DENOISE')";; esac
+  awk -v d="$CHAIN_DENOISE" 'BEGIN{exit !(d>0 && d<=1)}' || fail "CHAIN_DENOISE must be in (0,1] (got $CHAIN_DENOISE)"
+  # saga-edit re-renders the anchor with this checkpoint; keep it in the model set.
+  export EDIT_CKPT="${EDIT_CKPT:-animagine-xl-4.0.safetensors}"
+  have_model "$EDIT_CKPT" || fail "anchor-edit checkpoint missing under models/: $EDIT_CKPT (set EDIT_CKPT= or use --independent)"
+  [ "$USE_CONTROL" -eq 1 ] && log "  ⚠ anchor mode: ControlNet shapes only K1 (the anchor); K2–K8 poses come from the edit prompt"
+  log "anchor-chain ok (edit primitive, denoise=$CHAIN_DENOISE, ckpt=$EDIT_CKPT)"
+elif [ "$KEYFRAME_MODE" != "independent" ]; then
+  fail "KEYFRAME_MODE must be 'anchor' or 'independent' (got '$KEYFRAME_MODE')"
+fi
+
 if [ "$POLISH" -eq 1 ]; then
   for s in "$HERE/saga-esrgan-video.sh" "$HERE/saga-interpolate.sh" "$GRADE_SH"; do [ -x "$s" ] || fail "not executable: $s (chmod +x)"; done
   command -v ffprobe >/dev/null || fail "ffprobe required for polish (2K upscale); apt-get install ffmpeg or run --no-polish"
@@ -192,9 +230,39 @@ if [ "$CLEAN" -eq 1 ]; then
 fi
 
 # ── STEP 1 — KEYFRAMES ──────────────────────────────────────────────────────
-CUR=1; step 1 "keyframes (8 pose stills)"
+CUR=1; step 1 "keyframes (8 pose stills, mode=$KEYFRAME_MODE)"
 # helpers do the work + log to the run; they DON'T echo the path (callers use the
 # deterministic out path), so no stdout capture and `fail` halts the whole script.
+
+# HAND FIX (shared by both modes): re-render hands (and optionally the face) on a
+# keyframe IN PLACE, before it feeds FLF — so clean hands carry through interpolation.
+# GENTLE denoise: the detailer is a scalpel, not a paint roller — at high denoise it
+# re-invents good hands into anatomically-wrong ones. Low denoise cleans only.
+hand_fix(){ # <name> <out-path>
+  local name="$1" out="$2"
+  [ "$DETAIL" = "none" ] && return 0
+  local dargs=(--image "$out" --detect "$DETAIL" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" --denoise "$HAND_DENOISE" -n "$NEG" -o "$name")
+  log "  detail $name (--detect $DETAIL @ denoise $HAND_DENOISE)"
+  "$DTL" "${dargs[@]}" >/dev/null || fail "detail $name failed"
+  have_file "$out" || fail "detail produced no output for $name"
+}
+
+# ANCHOR EDIT: img2img-EDIT the clean anchor ($ANCHOR) into a new pose via saga-edit.
+# The full positive is assembled here (trigger + pinned BASE + pose) — saga-edit does
+# not editorialize the prompt. Then the shared hand_fix runs, same as gen_kf.
+anchor_edit(){ # <name> <pose-extra>  → writes $SAGA_ROOT/tmp/<name>.png
+  local name="$1" extra="$2" out="$SAGA_ROOT/tmp/${1}.png"
+  if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse $name (exists; --force to redo)"; return 0; fi
+  local full="$TRIGGER, $BASE, $extra"
+  local a=(--image "$ANCHOR" --prompt "$full" --denoise "$CHAIN_DENOISE" \
+           --lora "$LORA" --lora-weight "$LORAW" --cfg "${CFG:-2.0}" \
+           -s "$SEED" -W "$W" -H "$H" -n "$NEG" -o "$name")
+  log "  edit $name (anchor: $(basename "$ANCHOR") → denoise $CHAIN_DENOISE)"
+  "$EDIT" "${a[@]}" >/dev/null || fail "anchor edit $name failed"
+  have_file "$out" || fail "anchor edit produced no output for $name"
+  hand_fix "$name" "$out"
+}
+
 gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.png
   local name="$1" extra="$2" ctrl="${3:-}" out="$SAGA_ROOT/tmp/${1}.png"
   if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse $name (exists; --force to redo)"; return 0; fi
@@ -212,30 +280,52 @@ gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.pn
     log "  gen $name ${ctrl:+${USE_CONTROL:+(control: $(basename "$ctrl"))}}"
     "$KF" "${args[@]}" || fail "keyframe $name failed"
   fi
-  # HAND FIX: re-render hands (and optionally the face) on the keyframe IN PLACE,
-  # before it feeds FLF — so clean hands are carried through the interpolation.
-  if [ "$DETAIL" != "none" ]; then
-    local dargs=(--image "$out" --detect "$DETAIL" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" --denoise "$HAND_DENOISE" -n "$NEG" -o "$name")
-    # GENTLE denoise: the detailer is a scalpel, not a paint roller — at high denoise
-    # it re-invents good hands into anatomically-wrong ones. Low denoise cleans only.
-    log "  detail $name (--detect $DETAIL @ denoise $HAND_DENOISE)"
-    "$DTL" "${dargs[@]}" >/dev/null || fail "detail $name failed"
-    have_file "$out" || fail "detail produced no output for $name"
-  fi
+  # HAND FIX (in place, before FLF) — shared with anchor mode.
+  hand_fix "$name" "$out"
 }
 # Seal keyframes describe the HAND POSE GEOMETRICALLY — never the animal name.
-# (The Naruto seal each corresponds to is noted for the show; the animal word is
-# kept OUT of the prompt because it renders the animal. Exact seal shapes come
+# (The Naruto seal each corresponds to is noted in comments for the show; the animal
+# word is kept OUT of the prompt because it renders the animal. Exact seal shapes come
 # from ControlNet via USE_CONTROL=1 + the SEAL* crops, not from naming them.)
-gen_kf jutsu_k1 "both hands forming a ninja hand seal, fingers interlocked in front of chest, intense focus" "$SEAL1"; K1="$SAGA_ROOT/tmp/jutsu_k1.png"; verify_out "$K1"   # tiger
-gen_kf jutsu_k2 "both hands forming a ninja hand seal, hands clasped together, fingers laced" "$SEAL2"; K2="$SAGA_ROOT/tmp/jutsu_k2.png"; verify_out "$K2"                    # serpent
-gen_kf jutsu_k3 "both hands forming a ninja hand seal, palms together, fingers crossed" "$SEAL3"; K3="$SAGA_ROOT/tmp/jutsu_k3.png"; verify_out "$K3"                            # dragon
-gen_kf jutsu_k4 "both hands forming a ninja hand seal, both index fingers raised and pressed together, remaining fingers folded" "$SEAL4"; K4="$SAGA_ROOT/tmp/jutsu_k4.png"; verify_out "$K4"  # ram
-gen_kf jutsu_k5 "both hands forming a ninja hand seal, fists pressed together, knuckles touching" "$SEAL5"; K5="$SAGA_ROOT/tmp/jutsu_k5.png"; verify_out "$K5"                  # boar
-gen_kf jutsu_k6 "both hands pressed flat together in prayer position at center, gathering purple energy, faint glow between the palms"; K6="$SAGA_ROOT/tmp/jutsu_k6.png"; verify_out "$K6"
-gen_kf jutsu_k7 "hands slightly apart, a small swirling purple energy orb forming between the palms, rasengan, glowing"; K7="$SAGA_ROOT/tmp/jutsu_k7.png"; verify_out "$K7"
-gen_kf jutsu_k8 "hands held wide apart, a large swirling purple energy sphere between the palms, rasengan, crackling purple lightning, energy flowing, radiant glow"; K8="$SAGA_ROOT/tmp/jutsu_k8.png"; verify_out "$K8"
-echo "✅ 8 keyframes ready"
+# Single source of truth for the 8 poses — both modes iterate this list, so the pose
+# script never diverges between anchor and independent generation.
+declare -a KF_NAME KF_POSE KF_CTRL
+KF_NAME=( jutsu_k1 jutsu_k2 jutsu_k3 jutsu_k4 jutsu_k5 jutsu_k6 jutsu_k7 jutsu_k8 )
+KF_POSE=(
+  "both hands forming a ninja hand seal, fingers interlocked in front of chest, intense focus"                       # tiger
+  "both hands forming a ninja hand seal, hands clasped together, fingers laced"                                      # serpent
+  "both hands forming a ninja hand seal, palms together, fingers crossed"                                            # dragon
+  "both hands forming a ninja hand seal, both index fingers raised and pressed together, remaining fingers folded"   # ram
+  "both hands forming a ninja hand seal, fists pressed together, knuckles touching"                                  # boar
+  "both hands pressed flat together in prayer position at center, gathering purple energy, faint glow between the palms"
+  "hands slightly apart, a small swirling purple energy orb forming between the palms, rasengan, glowing"
+  "hands held wide apart, a large swirling purple energy sphere between the palms, rasengan, crackling purple lightning, energy flowing, radiant glow"
+)
+KF_CTRL=( "$SEAL1" "$SEAL2" "$SEAL3" "$SEAL4" "$SEAL5" "" "" "" )   # ControlNet crops (seals only)
+
+if [ "$KEYFRAME_MODE" = "anchor" ]; then
+  # ANCHOR-CHAIN: K1 via the full generator (identity + pose + hand-fix), then every
+  # other keyframe is an EDIT of the clean K1 — inherit identity/outfit/framing, change
+  # only the pose. Editing the same clean anchor each time = no drift accumulation.
+  gen_kf "${KF_NAME[0]}" "${KF_POSE[0]}" "${KF_CTRL[0]}"
+  ANCHOR="$SAGA_ROOT/tmp/${KF_NAME[0]}.png"; verify_out "$ANCHOR"
+  for i in 1 2 3 4 5 6 7; do
+    anchor_edit "${KF_NAME[$i]}" "${KF_POSE[$i]}"
+    verify_out "$SAGA_ROOT/tmp/${KF_NAME[$i]}.png"
+  done
+else
+  # INDEPENDENT: each keyframe generated from scratch (LoRA identity + pose prompt).
+  for i in 0 1 2 3 4 5 6 7; do
+    gen_kf "${KF_NAME[$i]}" "${KF_POSE[$i]}" "${KF_CTRL[$i]}"
+    verify_out "$SAGA_ROOT/tmp/${KF_NAME[$i]}.png"
+  done
+fi
+# STEP 2 references K1..K8 by name; bind them from the deterministic out paths.
+K1="$SAGA_ROOT/tmp/jutsu_k1.png"; K2="$SAGA_ROOT/tmp/jutsu_k2.png"
+K3="$SAGA_ROOT/tmp/jutsu_k3.png"; K4="$SAGA_ROOT/tmp/jutsu_k4.png"
+K5="$SAGA_ROOT/tmp/jutsu_k5.png"; K6="$SAGA_ROOT/tmp/jutsu_k6.png"
+K7="$SAGA_ROOT/tmp/jutsu_k7.png"; K8="$SAGA_ROOT/tmp/jutsu_k8.png"
+echo "✅ 8 keyframes ready (mode=$KEYFRAME_MODE)"
 
 # ── STEP 2 — MOTION (holds + FLF transitions) ───────────────────────────────
 CUR=2; step 2 "motion (3 holds + 7 FLF transitions = 320f/20s)"
