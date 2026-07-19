@@ -23,10 +23,13 @@ set -uo pipefail
 COMFY="${COMFY:-http://127.0.0.1:8188}"
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 CKPT="${ANIME_CKPT:-animagine-xl-4.0.safetensors}"
-HERE="$(cd "$(dirname "$0")" && pwd)"; KF="$HERE/saga-keyframe.sh"
+HERE="$(cd "$(dirname "$0")" && pwd)"; KF="$HERE/saga-keyframe.sh"; GRADE_SH="$HERE/saga-grade.sh"
 
-LORA=""; TRIGGER=""; LORAW=2.0; DENOISE=0.5; REANCHOR=0; CFG=2.0; SEED=777; W=1280; H=704; PFX="chain"; FPS=4
-STYLE="${STYLE:-retro 1990s anime, cel animation, rough sketchy linework, grainy, muted desaturated colors, hand-drawn, flat colors, 2d}"
+LORA=""; TRIGGER=""; LORAW=2.0; DENOISE=0.45; REANCHOR=3; CFG=2.0; SEED=777; W=1280; H=704; PFX="chain"; FPS=4
+# CLEAN style for the generation loop. NEVER put grain/rough tags here — in an
+# img2img chain they RE-APPLY every frame and snowball into noise. Apply the Lain
+# roughness ONCE in post: saga-grade.sh --preset lain-bloom <preview>.
+STYLE="${STYLE:-anime, cel shading, clean lineart, flat colors, soft lighting, detailed anime}"
 OUTFIT="wearing a plain white short-sleeve shirt"; EYES="brown eyes"
 NEG="lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, mutated hands, extra limbs, boar, dragon, ram, serpent, tiger, animal, creature, mask, hood, blue eyes, glowing eyes, 1girl, woman, text, watermark"
 # 10-beat smooth progression (small increments chain best). Override with --poses.
@@ -106,6 +109,11 @@ done
 PREVIEW="$SAGA_ROOT/tmp/${PFX}_preview.mp4"
 ffmpeg -y -framerate "$FPS" -i "$SAGA_ROOT/tmp/${PFX}_%02d.png" -c:v libx264 -pix_fmt yuv420p -crf 16 "$PREVIEW" >/dev/null 2>&1 \
   && echo "  ▶ preview → $PREVIEW (${FPS}fps)" || echo "  ⚠ preview assembly skipped"
+# apply the Lain roughness ONCE, in post (never in the generation loop)
+if [ -x "$GRADE_SH" ] && [ -s "$PREVIEW" ]; then
+  "$GRADE_SH" "$PREVIEW" --preset lain-bloom -o "$SAGA_ROOT/tmp/${PFX}_preview_lain.mp4" >/dev/null 2>&1 \
+    && echo "  ▶ graded → $SAGA_ROOT/tmp/${PFX}_preview_lain.mp4 (lain-bloom, applied once in post)"
+fi
 echo "✅ chain: $N frames → $SAGA_ROOT/tmp/${PFX}_01..${idx}.png"
 echo "   Judge: do all frames read as ONE continuous shot (same character/light/framing)?"
 echo "   Tune: --denoise up = bigger pose change per frame but more drift; --reanchor 3 caps drift."
