@@ -49,6 +49,7 @@ IDENTITY="${IDENTITY:-lora}"         # lora | instantid  (instantid keyframes ne
 FACE="${FACE:-}"                     # required when IDENTITY=instantid: a front-facing photo
 IIDW="${IIDW:-0.8}"; IIDE="${IIDE:-0.9}"   # InstantID face weight / end (only used when IDENTITY=instantid)
 DETAIL="${DETAIL:-hands}"           # none | hands | both — fix hands (and optionally face) on each keyframe BEFORE FLF
+HAND_DENOISE="${HAND_DENOISE:-0.3}" # GENTLE by default: at 0.4 the detailer re-invents hands (clean but wrong/missing limbs); 0.3 cleans without destroying good hands. Raise only to rescue badly-broken frames.
 # PINNED across ALL keyframes for wardrobe continuity. Keep it SIMPLE and match
 # what the LoRA already learned (e.g. the shirt in the training photos) — vague or
 # exotic outfits ("high-collar", "gi", "armor") make the model invent a different
@@ -213,10 +214,10 @@ gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.pn
   # HAND FIX: re-render hands (and optionally the face) on the keyframe IN PLACE,
   # before it feeds FLF — so clean hands are carried through the interpolation.
   if [ "$DETAIL" != "none" ]; then
-    local dargs=(--image "$out" --detect "$DETAIL" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -n "$NEG" -o "$name")
-    # detailer keeps its OWN guidance — it corrects fingers better at normal CFG;
-    # only the keyframe GENERATION uses the soft low CFG.
-    log "  detail $name (--detect $DETAIL)"
+    local dargs=(--image "$out" --detect "$DETAIL" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" --denoise "$HAND_DENOISE" -n "$NEG" -o "$name")
+    # GENTLE denoise: the detailer is a scalpel, not a paint roller — at high denoise
+    # it re-invents good hands into anatomically-wrong ones. Low denoise cleans only.
+    log "  detail $name (--detect $DETAIL @ denoise $HAND_DENOISE)"
     "$DTL" "${dargs[@]}" >/dev/null || fail "detail $name failed"
     have_file "$out" || fail "detail produced no output for $name"
   fi
