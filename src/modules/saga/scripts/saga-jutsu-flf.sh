@@ -26,6 +26,9 @@
 # Flags:
 #   --check     run STEP 0 preflight only, then exit
 #   --force     regenerate artifacts even if they already exist
+#   --clean     delete THIS pipeline's prior artifacts (keyframes/segments/master/
+#               polish) before running — frees disk + guarantees a fresh render.
+#               Only touches jutsu_*/s0*/hold/master/2k/final; nothing else in tmp.
 #   --no-polish skip STEP 4
 # ============================================================================
 set -uo pipefail
@@ -59,9 +62,10 @@ SEED="${SEED:-777}"; W="${W:-1280}"; H="${H:-704}"; FPS="${FPS:-16}"
 # confirmed installed filenames (audit 2026-07-18); saga-flf.sh reads these via env
 export FLF_T5="${FLF_T5:-umt5_xxl_fp8_e4m3fn_scaled.safetensors}"
 
-FORCE=0; POLISH=1; CHECK_ONLY=0
+FORCE=0; POLISH=1; CHECK_ONLY=0; CLEAN=0
 while [ $# -gt 0 ]; do case "$1" in
   --check) CHECK_ONLY=1; shift;; --force) FORCE=1; shift;;
+  --clean) CLEAN=1; shift;;
   --no-polish) POLISH=0; shift;; -h|--help) sed -n '2,34p' "$0"; exit 0;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
@@ -151,6 +155,17 @@ fi
 log "inputs ok"
 echo "✅ preflight passed"
 [ "$CHECK_ONLY" -eq 1 ] && { echo "(--check) done."; exit 0; }
+
+# --clean: remove ONLY this pipeline's regenerable artifacts (never touches
+# comparison stills, LoRAs, datasets, or anything else under tmp/).
+if [ "$CLEAN" -eq 1 ]; then
+  log "clean: removing prior jutsu artifacts (keyframes, FLF segments, holds, master, polish)…"
+  rm -f "$SAGA_ROOT"/tmp/jutsu_k[1-8].png 2>/dev/null
+  rm -f "$SAGA_ROOT"/tmp/s0[1-8].mp4 2>/dev/null
+  rm -f "$WORK"/s0*_hold*.mp4 "$WORK"/jutsu_20s_master.mp4 "$WORK"/jutsu_2k.mp4 "$WORK"/jutsu_final.mp4 "$WORK"/concat.txt 2>/dev/null
+  rm -rf "$SAGA_ROOT"/tmp/.esrgan_vid_* 2>/dev/null   # stale per-frame upscale temps from killed runs
+  log "  cleaned."
+fi
 
 # ── STEP 1 — KEYFRAMES ──────────────────────────────────────────────────────
 CUR=1; step 1 "keyframes (8 pose stills)"
