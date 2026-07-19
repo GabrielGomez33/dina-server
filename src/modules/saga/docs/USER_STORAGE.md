@@ -46,8 +46,11 @@ tenants/<tenantId>/
 ├── users/<userId>/                 # ── USER SCOPE — reusable identity assets ──
 │   ├── uploads/                    # raw ingested media (photos, ref images, audio). IMMUTABLE source of truth
 │   │   ├── images/
+│   │   ├── curated/                # ★ user-picked SOURCE photos (the keep set to img2img) (added; created at registration)
 │   │   └── audio/
 │   ├── datasets/<datasetId>/       # prepared training sets (kohya "<repeats>_<trigger>/" + captions) ← from uploads
+│   │   ├── anime_src/              # ★ img2img photo→anime output POOL, pre-curation (added; created at registration)
+│   │   └── anime_curated/          # ★ anime images the user KEPT → feeds the anime LoRA (added; created at registration)
 │   ├── loras/<loraId>/             # trained personal LoRAs (self, owned characters), VERSIONED
 │   │   └── v3/lora.safetensors     #   + card.json (base, trigger, rank, steps, dataset hash, sample grid)
 │   ├── characters/<characterId>/   # ★ a CHARACTER = the show's building block (added)
@@ -232,6 +235,14 @@ The proven path to an on-model anime character LoRA is **bootstrapping**: real p
   DWPose, expression sheets, wardrobe refs) may be ingested to their own folders and must be
   swept into the same img2img→dataset loop. Output names are derived from the source path
   (collision-free), so multiple source folders can target one `anime_src/` safely.
+
+- **Registration-time contract (front end):** `uploads/curated/`, `datasets/anime_src/`, and
+  `datasets/anime_curated/` are created **when a user is created and registered** — not lazily
+  on first write — so the UI can address them immediately. `saga-user-init.sh` already scaffolds
+  them; the DB-backed user-registration flow MUST create the same paths (and their production
+  `tenants/<t>/users/<uuid>/` equivalents in `storagePaths.ts`) as part of provisioning. The
+  curation UI writes the keep set into `uploads/curated/` (source photos) and
+  `datasets/anime_curated/` (kept anime), and records the decision in `curation.json`.
 
 ### Design invariant across all of the above
 
