@@ -167,7 +167,8 @@ gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.pn
   # before it feeds FLF — so clean hands are carried through the interpolation.
   if [ "$DETAIL" != "none" ]; then
     local dargs=(--image "$out" --detect "$DETAIL" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -o "$name")
-    [ -n "$CFG" ] && dargs+=(--cfg "$CFG")
+    # detailer keeps its OWN guidance — it corrects fingers better at normal CFG;
+    # only the keyframe GENERATION uses the soft low CFG.
     log "  detail $name (--detect $DETAIL)"
     "$DTL" "${dargs[@]}" >/dev/null || fail "detail $name failed"
     have_file "$out" || fail "detail produced no output for $name"
