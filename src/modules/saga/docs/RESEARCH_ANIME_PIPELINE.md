@@ -141,3 +141,27 @@ worth replicating in any multi-keyframe driver):
 
 Principle: consistency and artifact-suppression belong in a **shared layer applied to every frame**,
 configurable per character/scene — not hand-patched per keyframe after the fact.
+
+### Keyframe generation modes: anchor-chain (default) vs independent
+
+Two ways to produce the keyframe set, selectable in `saga-jutsu-flf.sh` STEP 1 via
+`KEYFRAME_MODE` (`--independent` flag flips it):
+
+- **anchor-chain (default)** — "edit, don't redraw" (borrowed from Nano Banana / video content
+  anchors). Generate K1 fully from the LoRA, then make every other keyframe an **img2img EDIT of the
+  CLEAN K1** at `CHAIN_DENOISE` (~0.55): identity, outfit, framing and lighting are inherited from the
+  anchor and only the hand pose changes. Editing the *same clean anchor* each time (never the previous,
+  already-drifting frame) means error can't accumulate — the observed "no chaos" behavior. FLF still
+  supplies the motion *between* keyframes; the chain only makes the keyframes mutually consistent.
+- **independent (`--independent`)** — every keyframe generated from scratch (LoRA identity + pose
+  prompt). More pose freedom, but higher inter-keyframe variance (jump-cut risk between beats).
+
+Both modes share the *same* pose list (single source of truth) and the *same* `hand_fix` detailer,
+so the only thing that varies is how the pixels for each keyframe are produced.
+
+**One edit graph, three callers (DRY).** The img2img-edit graph lives in exactly one place —
+`saga-edit.sh`, a single-concern primitive ("re-render one image toward a prompt at a denoise").
+It is driven by (1) `saga-chain.sh` for keyframe chaining, (2) `saga-jutsu-flf.sh` anchor keyframes,
+and (3) the planned front-end per-frame cleanup (Phase 5). `--prompt` is the *complete* positive —
+the caller assembles identity/trigger/style; the primitive does not editorialize. This means a fix or
+tuning to the edit path (sampler, VAE routing, resize) happens once and every caller inherits it.
