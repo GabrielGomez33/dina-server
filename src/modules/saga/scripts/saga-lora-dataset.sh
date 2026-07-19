@@ -17,12 +17,14 @@
 set -uo pipefail
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 
-RAW=""; TRIGGER=""; REPEATS=10; MAXRES=1536; OUT=""; EXTRA=""
+RAW=""; TRIGGER=""; REPEATS=10; MAXRES=1536; OUT=""; EXTRA=""; ROTATE=0; AUTOLAND=0
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
   --raw) RAW="$2"; shift 2;; --trigger) TRIGGER="$2"; shift 2;;
   --repeats) REPEATS="$2"; shift 2;; --maxres) MAXRES="$2"; shift 2;;
   --out) OUT="$2"; shift 2;; --caption) EXTRA="$2"; shift 2;;
+  --rotate) ROTATE="$2"; shift 2;;   # 0|90|180|270 clockwise, applied AFTER auto-orient (uniform)
+  --autoland) AUTOLAND=1; shift;;    # rotate ONLY landscape (sideways) frames 90 CW; keep portrait/square
   -h|--help) sed -n '2,20p' "$0"; exit 0;;
   *) die "unknown arg: $1";;
 esac; done
@@ -52,12 +54,18 @@ mapfile -t SRC < <(find "$RAW" -maxdepth 1 -type f \( -iname '*.png' -o -iname '
 # and CRITICALLY apply EXIF orientation so phone photos aren't trained sideways.
 # ImageMagick -auto-orient is authoritative; recent ffmpeg auto-applies EXIF too.
 if command -v magick >/dev/null; then ORIENT="magick"; elif command -v convert >/dev/null; then ORIENT="convert"; else ORIENT="ffmpeg"; fi
-echo "  orientation: EXIF via $ORIENT"
-convert_img(){ # <src> <dst>
+if [ "$AUTOLAND" = "1" ]; then
+  [ "$ORIENT" = "ffmpeg" ] && die "--autoland needs ImageMagick (sudo apt-get install -y imagemagick)"
+  ROTATE="90>"   # ImageMagick conditional: rotate 90 CW only if width > height (landscape)
+  echo "  auto-rotating LANDSCAPE (sideways) frames 90° CW; portrait/square kept as-is"
+fi
+echo "  orientation: EXIF via $ORIENT${ROTATE:+ + rotate ${ROTATE}}"
+tpose(){ case "$1" in 90) echo "transpose=1,";; 180) echo "transpose=1,transpose=1,";; 270) echo "transpose=2,";; *) echo "";; esac; }
+convert_img(){ # <src> <dst>  — auto-orient (EXIF) THEN optional manual rotate
   case "$ORIENT" in
-    magick)  magick "$1" -auto-orient -resize "${MAXRES}x${MAXRES}>" -background black -flatten "$2" 2>/dev/null;;
-    convert) convert "$1" -auto-orient -resize "${MAXRES}x${MAXRES}>" -background black -flatten "$2" 2>/dev/null;;
-    *)       ffmpeg -y -autorotate 1 -i "$1" -vf "scale='min($MAXRES,iw)':-2,format=rgb24" "$2" >/dev/null 2>&1;;
+    magick)  magick "$1" -auto-orient -rotate "$ROTATE" -resize "${MAXRES}x${MAXRES}>" -background black -flatten "$2" 2>/dev/null;;
+    convert) convert "$1" -auto-orient -rotate "$ROTATE" -resize "${MAXRES}x${MAXRES}>" -background black -flatten "$2" 2>/dev/null;;
+    *)       ffmpeg -y -autorotate 1 -i "$1" -vf "$(tpose "$ROTATE")scale='min($MAXRES,iw)':-2,format=rgb24" "$2" >/dev/null 2>&1;;
   esac
 }
 n=0; bad=0
@@ -74,5 +82,5 @@ CNT=$(find "$DIR" -name '*.png' | wc -l)
 echo "✅ prepared $CNT images (${bad} skipped) in $DIR"
 [ "$CNT" -lt 8 ] && echo "⚠️ only $CNT images — a character LoRA wants 15-30 varied shots; below 8 the trainer will refuse"
 echo "  caption (each .txt): \"$CAP\""
-echo "  next: saga-lora-train.sh --dataset \"$OUT\" --trigger $TRIGGER --name Exodia"
+echo "  next: saga-lora-train.sh --dataset \"$OUT\" --trigger $TRIGGER --name $TRIGGER --rank 32 --steps 2800"
 echo "$OUT"
