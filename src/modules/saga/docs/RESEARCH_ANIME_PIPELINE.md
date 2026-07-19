@@ -105,6 +105,15 @@ changes *which profiles we add and validate*:
    stages as templates (all installed).
 2. **Video:** add a **LightX2V speed LoRA** + an **anime-style LoRA** to the Wan path and measure
    (speed + true-2D); fall back to AnimateDiff-SD1.5 only if needed.
+   - **Reusable technique — per-frame face detailer for FAR faces (proven in stills, carries to video):**
+     img2img/gen preserves identity from the *pixels available*, so when the subject is far from
+     camera the small face drifts to a generic one (confirmed on the hand-sign stills: closer =
+     more faithful, farther = needs more identity). The fix that worked on stills — crop the face
+     with a YOLO/SAM detector, re-render it at FULL resolution with the character LoRA, paste back
+     (`saga-detail.sh --detect face`) — is per-*image*, so it applies to video frame-by-frame.
+     Apply it on the **FLF keyframes** (not every tween — interpolation carries the corrected face
+     across the segment) as a polish pass, keeping the detailer LoRA weight modest so the face stays
+     anime. This is the video analogue of ADetailer-per-frame; it's a polish stage, not choreography.
 3. **Speed defaults:** fp8+tiled_vae (safe now); everything else measured before it becomes a default.
 
 Every "recommended default" above becomes a calibrated value in `modelRegistry` **only after we
