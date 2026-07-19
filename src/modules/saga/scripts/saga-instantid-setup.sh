@@ -36,7 +36,10 @@ dl(){ # <url> <dest>  (resumable, skip if present)
 if [ "${1:-}" = "--check" ]; then
   echo "=== InstantID install check ==="
   [ -d "$NODE/.git" ] && echo "node   : $NODE ✓" || echo "node   : ABSENT"
-  [ -x "$PY" ] && { echo -n "insightface: "; "$PY" -c 'import insightface;print(insightface.__version__)' 2>&1 | head -1; echo -n "onnxruntime: "; "$PY" -c 'import onnxruntime as o;print(o.__version__, o.get_available_providers())' 2>&1 | head -1; } || echo "venv   : ABSENT ($VENV)"
+  if [ -x "$PY" ]; then
+    echo -n "insightface: "; "$PY" -c 'import insightface;print(insightface.__version__)' 2>&1 | head -1
+    echo -n "onnxruntime: "; "$PY" -c 'import onnxruntime as o;print(o.__version__, o.get_available_providers())' 2>&1 | head -1
+  else echo "venv   : ABSENT ($VENV)"; fi
   have "$IID/ip-adapter.bin" && echo "ip-adapter : ✓ ($(du -h "$IID/ip-adapter.bin" | cut -f1))" || echo "ip-adapter : ABSENT"
   have "$CN/instantid_controlnet.safetensors" && echo "controlnet : ✓ ($(du -h "$CN/instantid_controlnet.safetensors" | cut -f1))" || echo "controlnet : ABSENT"
   local_n=$(find "$FACE" -name '*.onnx' 2>/dev/null | wc -l); echo "antelopev2 : $local_n/5 onnx files"
@@ -45,6 +48,16 @@ fi
 
 [ -x "$PY" ] || die "ComfyUI venv not found at $VENV (set COMFY_VENV)"
 command -v git >/dev/null || die "git required"
+
+# The ComfyUI venv is root-owned (saga-comfyui runs as root), so a non-root pip
+# install fails with EACCES. Verify writability up front with a clear fix.
+SITEPKG=$("$PY" -c 'import site;print(site.getsitepackages()[0])' 2>/dev/null || echo "$VENV/lib")
+if ! ( t="$SITEPKG/.saga_wtest.$$"; touch "$t" 2>/dev/null && rm -f "$t" ); then
+  die "the ComfyUI venv is not writable by $(whoami) (it's root-owned).
+   Fix once, then rerun this script (downloads are resumable):
+     sudo chown -R $(whoami):$(whoami) \"$VENV\"
+   ComfyUI still runs fine as root against a $(whoami)-owned venv."
+fi
 
 log "1/5 clone ComfyUI_InstantID node"
 if [ -d "$NODE/.git" ]; then git -C "$NODE" pull --ff-only 2>/dev/null || true; else
