@@ -17,12 +17,13 @@
 set -uo pipefail
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 
-RAW=""; TRIGGER=""; REPEATS=10; MAXRES=1536; OUT=""; EXTRA=""
+RAW=""; TRIGGER=""; REPEATS=10; MAXRES=1536; OUT=""; EXTRA=""; ROTATE=0
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
   --raw) RAW="$2"; shift 2;; --trigger) TRIGGER="$2"; shift 2;;
   --repeats) REPEATS="$2"; shift 2;; --maxres) MAXRES="$2"; shift 2;;
   --out) OUT="$2"; shift 2;; --caption) EXTRA="$2"; shift 2;;
+  --rotate) ROTATE="$2"; shift 2;;   # 0|90|180|270 clockwise, applied AFTER auto-orient
   -h|--help) sed -n '2,20p' "$0"; exit 0;;
   *) die "unknown arg: $1";;
 esac; done
@@ -52,12 +53,13 @@ mapfile -t SRC < <(find "$RAW" -maxdepth 1 -type f \( -iname '*.png' -o -iname '
 # and CRITICALLY apply EXIF orientation so phone photos aren't trained sideways.
 # ImageMagick -auto-orient is authoritative; recent ffmpeg auto-applies EXIF too.
 if command -v magick >/dev/null; then ORIENT="magick"; elif command -v convert >/dev/null; then ORIENT="convert"; else ORIENT="ffmpeg"; fi
-echo "  orientation: EXIF via $ORIENT"
-convert_img(){ # <src> <dst>
+echo "  orientation: EXIF via $ORIENT${ROTATE:+ + manual rotate ${ROTATE}°}"
+tpose(){ case "$1" in 90) echo "transpose=1,";; 180) echo "transpose=1,transpose=1,";; 270) echo "transpose=2,";; *) echo "";; esac; }
+convert_img(){ # <src> <dst>  — auto-orient (EXIF) THEN optional manual rotate
   case "$ORIENT" in
-    magick)  magick "$1" -auto-orient -resize "${MAXRES}x${MAXRES}>" -background black -flatten "$2" 2>/dev/null;;
-    convert) convert "$1" -auto-orient -resize "${MAXRES}x${MAXRES}>" -background black -flatten "$2" 2>/dev/null;;
-    *)       ffmpeg -y -autorotate 1 -i "$1" -vf "scale='min($MAXRES,iw)':-2,format=rgb24" "$2" >/dev/null 2>&1;;
+    magick)  magick "$1" -auto-orient -rotate "$ROTATE" -resize "${MAXRES}x${MAXRES}>" -background black -flatten "$2" 2>/dev/null;;
+    convert) convert "$1" -auto-orient -rotate "$ROTATE" -resize "${MAXRES}x${MAXRES}>" -background black -flatten "$2" 2>/dev/null;;
+    *)       ffmpeg -y -autorotate 1 -i "$1" -vf "$(tpose "$ROTATE")scale='min($MAXRES,iw)':-2,format=rgb24" "$2" >/dev/null 2>&1;;
   esac
 }
 n=0; bad=0
