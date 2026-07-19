@@ -21,7 +21,10 @@ CKPT="${LORA_CKPT:-animagine-xl-4.0.safetensors}"
 LORA=""; TRIGGER=""; WEIGHT=0.85; EXTRA=""; SEED=777; STEPS=28; CFG=5.5; W=1024; H=1024; OUT="loratest"
 # Default: clean GENERIC anime, bright so features read. Pass --style to change it.
 STYLE="anime, anime screencap, cel shading, clean lineart, detailed anime face, flat colors, soft even lighting, simple plain background, masterpiece, best quality"
-NEG="lowres, bad anatomy, bad hands, extra fingers, worst quality, blurry, multiple people, 2boys, watermark, text, dark, silhouette, underexposed"
+# NOTE: no "dark"/"underexposed" here — they suppress dark SKIN TONES (proven on a
+# dark-skinned character: the negative bleached him pale). Set brightness via --style.
+# Animagine XL is 1girl-biased: for a male character put "1boy"/"1man" in --prompt.
+NEG="lowres, bad anatomy, bad hands, extra fingers, worst quality, blurry, multiple people, 2boys, watermark, text"
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
   --lora) LORA="$2"; shift 2;; --trigger) TRIGGER="$2"; shift 2;;
