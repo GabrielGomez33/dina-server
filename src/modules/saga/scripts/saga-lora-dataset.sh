@@ -74,5 +74,5 @@ CNT=$(find "$DIR" -name '*.png' | wc -l)
 echo "✅ prepared $CNT images (${bad} skipped) in $DIR"
 [ "$CNT" -lt 8 ] && echo "⚠️ only $CNT images — a character LoRA wants 15-30 varied shots; below 8 the trainer will refuse"
 echo "  caption (each .txt): \"$CAP\""
-echo "  next: saga-lora-train.sh --dataset \"$OUT\" --trigger $TRIGGER --name Exodia"
+echo "  next: saga-lora-train.sh --dataset \"$OUT\" --trigger $TRIGGER --name $TRIGGER --rank 32 --steps 2800"
 echo "$OUT"
