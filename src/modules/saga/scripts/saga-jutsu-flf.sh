@@ -11,7 +11,7 @@
 # artifacts are reused unless --force). Drives saga-keyframe.sh + saga-flf.sh.
 #
 #   STEP 0  preflight  — tools, engine, nodes, models, inputs
-#   STEP 1  keyframes  — 8 pose stills
+#   STEP 1  keyframes  — 8 pose stills, hands (and optionally face) detailed in place
 #   STEP 2  motion     — 3 holds + 7 FLF transitions
 #   STEP 3  assemble   — concat → 20s master
 #   STEP 4  polish     — RIFE interpolate + ESRGAN 2K (if helper scripts present)
@@ -19,6 +19,10 @@
 # Usage:
 #   LORA=exodia.safetensors TRIGGER=exodia_saga ./saga-jutsu-flf.sh
 #   (add USE_CONTROL=1 + SEAL1..SEAL5=... to force seal poses via ControlNet)
+#   Identity source (keyframes):  IDENTITY=lora (default) | instantid
+#     LoRA-only:   LORA=animegabriel.safetensors TRIGGER=animegabriel LORAW=1.6 CFG=2.0 ./saga-jutsu-flf.sh
+#     InstantID:   IDENTITY=instantid FACE=/path/to/face.png LORA=animegabriel.safetensors TRIGGER=animegabriel ./saga-jutsu-flf.sh
+#   CFG= sets the keyframe guidance (low = the soft look); IIDW/IIDE tune InstantID.
 # Flags:
 #   --check     run STEP 0 preflight only, then exit
 #   --force     regenerate artifacts even if they already exist
@@ -28,7 +32,7 @@ set -uo pipefail
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 COMFY="${COMFY:-http://127.0.0.1:8188}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-KF="$HERE/saga-keyframe.sh"; FLF="$HERE/saga-flf.sh"
+KF="$HERE/saga-keyframe.sh"; FLF="$HERE/saga-flf.sh"; IIDKF="$HERE/saga-instantid-keyframe.sh"; DTL="$HERE/saga-detail.sh"
 
 # ── CONFIG (edit or pass via env) ───────────────────────────────────────────
 # Identity now comes from the trained LoRA (no IP-Adapter pose-prior fighting the
@@ -37,6 +41,11 @@ KF="$HERE/saga-keyframe.sh"; FLF="$HERE/saga-flf.sh"
 LORA="${LORA:-exodia.safetensors}"
 TRIGGER="${TRIGGER:-exodia_saga}"
 LORAW="${LORAW:-0.85}"
+CFG="${CFG:-}"                       # empty = keyframe default; set (e.g. 2.0) for the soft low-CFG identity look
+IDENTITY="${IDENTITY:-lora}"         # lora | instantid  (instantid keyframes need FACE + InstantID installed)
+FACE="${FACE:-}"                     # required when IDENTITY=instantid: a front-facing photo
+IIDW="${IIDW:-0.8}"; IIDE="${IIDE:-0.9}"   # InstantID face weight / end (only used when IDENTITY=instantid)
+DETAIL="${DETAIL:-hands}"           # none | hands | both — fix hands (and optionally face) on each keyframe BEFORE FLF
 USE_CONTROL="${USE_CONTROL:-0}"     # 1 = force seals via ControlNet from the crops below
 SEAL1="${SEAL1:-$SAGA_ROOT/tmp/seal_tiger.png}"
 SEAL2="${SEAL2:-$SAGA_ROOT/tmp/seal_serpent.png}"
@@ -105,6 +114,23 @@ done
 [ -f "$SAGA_ROOT/models/loras/$LORA" ] || fail "LoRA not found: models/loras/$LORA (train it: saga-lora-train.sh)"
 log "models ok (lora=$LORA, umt5=$FLF_T5)"
 
+if [ "$IDENTITY" = "instantid" ]; then
+  [ -x "$IIDKF" ] || fail "not executable: $IIDKF (chmod +x)"
+  { [ -n "$FACE" ] && [ -f "$FACE" ]; } || fail "IDENTITY=instantid needs FACE=<front-facing photo> (got: '${FACE:-unset}')"
+  for n in InstantIDModelLoader InstantIDFaceAnalysis ApplyInstantID ControlNetLoader; do need_node "$n"; done
+  have_model "ip-adapter.bin" || fail "InstantID model missing: ip-adapter.bin (run saga-instantid-setup.sh)"
+  have_model "instantid_controlnet.safetensors" || fail "InstantID controlnet missing (run saga-instantid-setup.sh)"
+  log "instantid ok (face=$(basename "$FACE"), iid=$IIDW[..$IIDE])"
+fi
+
+if [ "$DETAIL" != "none" ]; then
+  [ -x "$DTL" ] || fail "not executable: $DTL (chmod +x)"
+  for n in FaceDetailer UltralyticsDetectorProvider; do need_node "$n"; done
+  have_model "hand_yolov8s.pt" || fail "hand detector missing under models/: hand_yolov8s.pt (needed for DETAIL=$DETAIL)"
+  [ "$DETAIL" = "both" ] && { have_model "face_yolov8m.pt" || fail "face detector missing under models/: face_yolov8m.pt"; }
+  log "hand-fixer ok (--detect $DETAIL on each keyframe)"
+fi
+
 if [ "$USE_CONTROL" -eq 1 ]; then
   MISS=0
   for f in "$SEAL1" "$SEAL2" "$SEAL3" "$SEAL4" "$SEAL5"; do
@@ -123,11 +149,29 @@ CUR=1; step 1 "keyframes (8 pose stills)"
 gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.png
   local name="$1" extra="$2" ctrl="${3:-}" out="$SAGA_ROOT/tmp/${1}.png"
   if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse $name (exists; --force to redo)"; return 0; fi
-  # identity via the trained LoRA + trigger (no IP-Adapter pose prior)
-  local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -p "$BASE, $extra")
-  [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre canny --control-strength 0.85 --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
-  log "  gen $name ${ctrl:+${USE_CONTROL:+(control: $(basename "$ctrl"))}}"
-  "$KF" "${args[@]}" || fail "keyframe $name failed"
+  if [ "$IDENTITY" = "instantid" ]; then
+    # identity via InstantID (real face embedding) + LoRA for style; pose from prompt
+    local a=(--face "$FACE" -o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" --iid-weight "$IIDW" --iid-end "$IIDE" -p "$BASE, $extra")
+    [ -n "$CFG" ] && a+=(--cfg "$CFG")
+    log "  gen $name (instantid, face=$(basename "$FACE"))"
+    "$IIDKF" "${a[@]}" || fail "instantid keyframe $name failed"
+  else
+    # identity via the trained LoRA + trigger (no IP-Adapter pose prior)
+    local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -p "$BASE, $extra")
+    [ -n "$CFG" ] && args+=(--cfg "$CFG")
+    [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre canny --control-strength 0.85 --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
+    log "  gen $name ${ctrl:+${USE_CONTROL:+(control: $(basename "$ctrl"))}}"
+    "$KF" "${args[@]}" || fail "keyframe $name failed"
+  fi
+  # HAND FIX: re-render hands (and optionally the face) on the keyframe IN PLACE,
+  # before it feeds FLF — so clean hands are carried through the interpolation.
+  if [ "$DETAIL" != "none" ]; then
+    local dargs=(--image "$out" --detect "$DETAIL" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -o "$name")
+    [ -n "$CFG" ] && dargs+=(--cfg "$CFG")
+    log "  detail $name (--detect $DETAIL)"
+    "$DTL" "${dargs[@]}" >/dev/null || fail "detail $name failed"
+    have_file "$out" || fail "detail produced no output for $name"
+  fi
 }
 gen_kf jutsu_k1 "both hands forming a ninja hand seal, fingers interlocked, tiger seal, intense focus" "$SEAL1"; K1="$SAGA_ROOT/tmp/jutsu_k1.png"; verify_out "$K1"
 gen_kf jutsu_k2 "both hands forming a ninja hand seal, serpent seal, hands clasped" "$SEAL2"; K2="$SAGA_ROOT/tmp/jutsu_k2.png"; verify_out "$K2"
