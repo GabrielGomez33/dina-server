@@ -58,6 +58,7 @@ OUTFIT="${OUTFIT:-wearing a plain white short-sleeve shirt}"
 POLISH_FPS="${POLISH_FPS:-32}"      # STEP 4 interpolation target fps
 UPSCALE_MODE="${UPSCALE_MODE:-esrgan}"   # esrgan (crisp cel lines) | lanczos (soft/painterly — matches a low-CFG look)
 EYES="${EYES:-brown eyes}"          # PINNED eye color across ALL keyframes (prevents eye-color drift)
+GROOMING="${GROOMING:-buzz cut, very short hair, short trimmed beard}"   # PINNED hair/beard across keyframes
 # Visual style for keyframes — default leans rough/analog anime (Serial Experiments
 # Lain-ish): grainy, muted, hand-drawn — counters the smooth "3D" render look.
 STYLE="${STYLE:-retro 1990s anime, cel animation, rough sketchy linework, grainy, muted desaturated colors, film grain, hand-drawn, flat colors, 2d}"
@@ -105,7 +106,7 @@ frames_of(){ command -v ffprobe >/dev/null && ffprobe -v error -count_frames -se
 # BASE is just style + scene so the trigger isn't diluted.
 # Consistent framing/composition tags reduce inter-keyframe variance, so the FLF
 # segments read as one continuous scene instead of jump-cuts.
-BASE="solo, $OUTFIT, $EYES, $STYLE, medium shot, centered composition, consistent framing, eye level, dark background, embers, dramatic lighting"
+BASE="solo, $GROOMING, $OUTFIT, $EYES, $STYLE, medium shot, centered composition, consistent framing, eye level, dark background, embers, dramatic lighting"
 
 echo "════════════════════════════════════════════════════"
 echo " SAGA — 20s JUTSU (keyframe/FLF)   seed=$SEED  ${W}x${H}@${FPS}fps"

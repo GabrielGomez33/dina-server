@@ -239,6 +239,15 @@ The proven path to an on-model anime character LoRA is **bootstrapping**: real p
   swept into the same img2img→dataset loop. Output names are derived from the source path
   (collision-free), so multiple source folders can target one `anime_src/` safely.
 
+- **Per-frame / per-image prompt-driven cleanup (Phase-5 front end):** every generated still and
+  every frame used in a video needs a **user prompt field** to *clean up, regenerate, or alter* it in
+  place — e.g. "fix the left hand", "remove the artifact on the sleeve", "change the background". This
+  is the manual-override companion to the automatic detailer: the pipeline auto-fixes what it can, and
+  this field lets the user surgically re-render any frame (or restyle/alter a clip) with a targeted
+  prompt. Backed by the same img2img/detailer tools (saga-anime/saga-detail) applied to a single
+  frame or a frame range, writing the result back into the project's `content/` or `previews/` with a
+  new version. Applies to: curation-stage stills, keyframes before FLF, and finished-video frames.
+
 - **Registration-time contract (front end):** `uploads/curated/`, `datasets/anime_src/`, and
   `datasets/anime_curated/` are created **when a user is created and registered** — not lazily
   on first write — so the UI can address them immediately. `saga-user-init.sh` already scaffolds
