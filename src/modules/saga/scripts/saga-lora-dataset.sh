@@ -124,8 +124,14 @@ if [ "$AUTOTAG" = 1 ]; then
   # absent (e.g. a prior tensorflow-mode run left the dir without model.onnx).
   MODEL_ONNX="$SDROOT/wd14_tagger_model/$(printf '%s' "$WD14_REPO" | tr '/' '_')/model.onnx"
   FORCE=""; [ -f "$MODEL_ONNX" ] || FORCE="--force_download"
-  ( cd "$SDROOT" && "$SDPY" "$TAGGER" "$DIR" --onnx $FORCE --repo_id "$WD14_REPO" --thresh "$WD14_THRESH" \
-      --caption_extension .txt --remove_underscore --batch_size 4 ) \
+  # Put torch's bundled CUDA libs (nvrtc, cudnn, cublas, cuda_runtime, …) on the
+  # library path so onnxruntime's CUDAExecutionProvider LOADS instead of silently
+  # falling back to CPU (a real bottleneck at per-user scale). Auto-discovered from
+  # the venv so it works for any box without manual LD_LIBRARY_PATH setup.
+  NVLIBS=$("$SDPY" -c 'import os,glob,nvidia; b=os.path.dirname(nvidia.__file__); print(":".join(sorted(glob.glob(os.path.join(b,"*","lib")))))' 2>/dev/null || true)
+  ( cd "$SDROOT" && LD_LIBRARY_PATH="${NVLIBS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+      "$SDPY" "$TAGGER" "$DIR" --onnx $FORCE --repo_id "$WD14_REPO" --thresh "$WD14_THRESH" \
+      --caption_extension .txt --remove_underscore --batch_size 1 ) \
     || die "WD14 tagging failed. Keep it on GPU — pin onnxruntime-gpu to a CUDA-12
    build that matches this box (torch cu121). A too-new build wants a newer CUDA
    (libcudart.so.13). The CUDA-12 build links torch's already-bundled CUDA libs:
