@@ -22,6 +22,7 @@
 #      [--prompt "brown eyes, black hair, low cut waves"]    # detail hints only
 #      [--denoise 0.6]                 # single value instead of the sweep
 #      [--sweep "0.45 0.55 0.65 0.75"] # override the sweep points
+#      [--add-neg "stray hair, flyaway hair"]     # append to the default negatives
 #      [--lora F --lora-weight 0.5 --trigger T]   # optional identity booster
 #      [--style "..."] [--seed 777] [--steps 30] [--cfg 6.5] [-o NAME]
 #
@@ -35,7 +36,7 @@ COMFY="${COMFY:-http://127.0.0.1:8188}"
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 CKPT="${ANIME_CKPT:-animagine-xl-4.0.safetensors}"
 
-IMG=""; PROMPT=""; DENOISE=""; SWEEP="0.45 0.55 0.65 0.75"
+IMG=""; PROMPT=""; DENOISE=""; SWEEP="0.45 0.55 0.65 0.75"; ADDNEG=""
 LORA=""; LORAW=0.5; TRIGGER=""; SEED=777; STEPS=30; CFG=6.5; OUT="saga_anime"
 STYLE="anime, anime screencap, cel shading, clean lineart, flat colors, detailed anime, masterpiece, best quality"
 NEG="lowres, bad anatomy, bad hands, extra fingers, worst quality, blurry, deformed, multiple people, watermark, text, signature, photorealistic, 3d render"
@@ -44,12 +45,13 @@ while [ $# -gt 0 ]; do case "$1" in
   --image) IMG="$2"; shift 2;; --prompt) PROMPT="$2"; shift 2;;
   --denoise) DENOISE="$2"; shift 2;; --sweep) SWEEP="$2"; shift 2;;
   --lora) LORA="$2"; shift 2;; --lora-weight) LORAW="$2"; shift 2;; --trigger) TRIGGER="$2"; shift 2;;
-  --style) STYLE="$2"; shift 2;; -n|--neg) NEG="$2"; shift 2;;
+  --style) STYLE="$2"; shift 2;; -n|--neg) NEG="$2"; shift 2;; --add-neg) ADDNEG="$2"; shift 2;;
   --seed) SEED="$2"; shift 2;; --steps) STEPS="$2"; shift 2;; --cfg) CFG="$2"; shift 2;;
   -o|--out) OUT="$2"; shift 2;;
   -h|--help) sed -n '2,40p' "$0"; exit 0;;
   *) die "unknown arg: $1";;
 esac; done
+[ -n "$ADDNEG" ] && NEG="$NEG, $ADDNEG"   # append (keeps the tested defaults)
 [ -n "$IMG" ] && [ -f "$IMG" ] || die "need --image <your photo>"
 command -v jq >/dev/null || die "jq required"
 [ -z "$LORA" ] || [ -f "$SAGA_ROOT/models/loras/$LORA" ] || die "LoRA not found: models/loras/$LORA"
