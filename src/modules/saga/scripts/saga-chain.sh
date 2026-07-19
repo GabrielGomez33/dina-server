@@ -15,15 +15,15 @@
 #   --reanchor N : every Nth frame edits FRAME 1 instead of the previous frame
 #                  (caps drift accumulation). 0 = pure chain.
 #
-# Drives saga-keyframe.sh for frame 1; does the img2img edits inline (one engine,
-# clean sequential frame names). Assembles a low-fps preview so you can SEE the flow.
+# Drives saga-keyframe.sh for frame 1 and saga-edit.sh for each img2img edit (the
+# edit graph lives in ONE place — DRY). Assembles a low-fps preview to SEE the flow.
 # Env: SAGA_ROOT (required)  COMFY=http://127.0.0.1:8188  ANIME_CKPT=animagine-xl-4.0.safetensors
 # ============================================================================
 set -uo pipefail
 COMFY="${COMFY:-http://127.0.0.1:8188}"
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 CKPT="${ANIME_CKPT:-animagine-xl-4.0.safetensors}"
-HERE="$(cd "$(dirname "$0")" && pwd)"; KF="$HERE/saga-keyframe.sh"; GRADE_SH="$HERE/saga-grade.sh"
+HERE="$(cd "$(dirname "$0")" && pwd)"; KF="$HERE/saga-keyframe.sh"; GRADE_SH="$HERE/saga-grade.sh"; EDIT="$HERE/saga-edit.sh"
 
 LORA=""; TRIGGER=""; LORAW=2.0; DENOISE=0.45; REANCHOR=3; CFG=2.0; SEED=777; W=1280; H=704; PFX="chain"; FPS=4
 # CLEAN style for the generation loop. NEVER put grain/rough tags here — in an
@@ -50,37 +50,21 @@ esac; done
 command -v jq >/dev/null || die "jq required"; command -v ffmpeg >/dev/null || die "ffmpeg required"
 [ -f "$SAGA_ROOT/models/loras/$LORA" ] || die "LoRA not found: models/loras/$LORA"
 [ -x "$KF" ] || die "not executable: $KF"
+[ -x "$EDIT" ] || die "not executable: $EDIT (the img2img-edit primitive)"
 curl -sf "$COMFY/system_stats" >/dev/null 2>&1 || die "ComfyUI not reachable at $COMFY — start it: sudo pm2 restart saga-comfyui (wait ~15s)"
+# saga-edit re-renders each frame with this checkpoint; keep chain's ANIME_CKPT authoritative.
+export EDIT_CKPT="$CKPT"
 
 # shared consistency prefix on EVERY frame (identity/outfit/eyes/style pinned)
 BASE="solo, 1man, $TRIGGER, $GROOMING, $OUTFIT, $EYES, $STYLE, medium shot, centered composition, consistent framing, eye level, dark background, dramatic lighting"
 
-CID="sagachain-$$-$RANDOM"
-upload(){ curl -sf -F "image=@${1}" -F "overwrite=true" "$COMFY/upload/image" | jq -r '.name' || die "upload failed: $1"; }
-submit(){ curl -sf -X POST "$COMFY/prompt" --data "$(jq -nc --slurpfile g "$1" --arg c "$CID" '{prompt:$g[0], client_id:$c}')" | jq -r '.prompt_id' || die "submit rejected"; }
-wait_done(){ local id="$1" t=0 h st; while :; do h=$(curl -sf "$COMFY/history/$id"); if [ "$(jq -r --arg i "$id" 'has($i)' <<<"$h")" = "true" ]; then st=$(jq -r --arg i "$id" '.[$i].status.status_str // "ok"' <<<"$h"); if [ "$st" = "error" ]; then jq -r --arg i "$id" '.[$i].status.messages[]? | select(.[0]=="execution_error") | .[1] | "  ⤷ \(.node_type): \(.exception_message)"' <<<"$h" >&2; die "execution error for $id"; fi; echo "$h"; return 0; fi; t=$((t+3)); [ "$t" -gt 900 ] && die "timeout for $id"; sleep 3; done; }
-fetch_first(){ local h="$1" id="$2" dest="$3" line fn sf ty code base sub src; line=$(jq -r --arg i "$id" '.[$i].outputs[] | ((.images // [])[0]) | select(.!=null) | "\(.filename)\t\(.subfolder)\t\(.type)"' <<<"$h" | head -n1); [ -n "$line" ] || die "no output for $id"; IFS=$'\t' read -r fn sf ty <<<"$line"; code=$(curl -s -o "$dest" -w '%{http_code}' "$COMFY/view?filename=$(jq -rn --arg s "$fn" '$s|@uri')&subfolder=$(jq -rn --arg s "$sf" '$s|@uri')&type=${ty:-output}"); { [ "$code" = "200" ] && [ -s "$dest" ]; } && return 0; for base in "${COMFY_OUT:-}" "$SAGA_ROOT/engine/ComfyUI/output"; do [ -n "$base" ] || continue; sub="$base${sf:+/$sf}"; [ -f "$sub/$fn" ] && { cp -f "$sub/$fn" "$dest"; return 0; }; done; src=$(find "$SAGA_ROOT/engine" -name "$fn" -print -quit 2>/dev/null); [ -n "$src" ] && { cp -f "$src" "$dest"; return 0; }; die "could not retrieve $fn (http=$code)"; }
-
-# img2img EDIT: re-render <src> toward <pose> at DENOISE, keeping LoRA identity/style
-edit(){ # <src.png> <pose> <dest.png>
-  local src="$1" pose="$2" dest="$3" name G pid hist; name=$(upload "$src")
-  local POS="$BASE, $pose"
-  G=$(mktemp)
-  cat > "$G" <<JSON
-{
- "1":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"$CKPT"}},
- "40":{"class_type":"LoraLoader","inputs":{"model":["1",0],"clip":["1",1],"lora_name":"$LORA","strength_model":$LORAW,"strength_clip":$LORAW}},
- "2":{"class_type":"LoadImage","inputs":{"image":"$name"}},
- "4":{"class_type":"VAEEncode","inputs":{"pixels":["2",0],"vae":["1",2]}},
- "5":{"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$POS" '$s'),"clip":["40",1]}},
- "6":{"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$NEG" '$s'),"clip":["40",1]}},
- "7":{"class_type":"KSampler","inputs":{"seed":$SEED,"steps":30,"cfg":$CFG,"sampler_name":"dpmpp_2m","scheduler":"karras","denoise":$DENOISE,"model":["40",0],"positive":["5",0],"negative":["6",0],"latent_image":["4",0]}},
- "8":{"class_type":"VAEDecode","inputs":{"samples":["7",0],"vae":["1",2]}},
- "9":{"class_type":"SaveImage","inputs":{"filename_prefix":"chainedit","images":["8",0]}}
-}
-JSON
-  jq -e . "$G" >/dev/null || die "internal: invalid edit graph"
-  pid=$(submit "$G"); hist=$(wait_done "$pid"); fetch_first "$hist" "$pid" "$dest"; rm -f "$G"
+# img2img EDIT via the shared primitive: re-render <src> toward <pose> at DENOISE,
+# keeping LoRA identity/style. The graph + engine plumbing live in saga-edit.sh only.
+edit(){ # <src.png> <pose> <out-name>  → writes $SAGA_ROOT/tmp/<out-name>.png
+  local src="$1" pose="$2" name="$3"
+  "$EDIT" --image "$src" --prompt "$BASE, $pose" --denoise "$DENOISE" \
+    --lora "$LORA" --lora-weight "$LORAW" --cfg "$CFG" -s "$SEED" \
+    -W "$W" -H "$H" -n "$NEG" -o "$name" >/dev/null || die "edit $name failed"
 }
 
 IFS=';' read -ra P <<<"$POSES"
@@ -101,7 +85,7 @@ for ((i=2;i<=N;i++)); do
   src="$prev"; tag="edit(prev)"
   if [ "$REANCHOR" -gt 0 ] && [ $(( (i-1) % REANCHOR )) -eq 0 ]; then src="$F1"; tag="edit(anchor)"; fi
   echo "  [$idx] $tag: $pose"
-  edit "$src" "$pose" "$dest"
+  edit "$src" "$pose" "${PFX}_${idx}"
   [ -s "$dest" ] || die "frame $idx missing"
   prev="$dest"
 done
