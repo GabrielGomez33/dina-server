@@ -47,7 +47,7 @@ CKPT="${KF_CKPT:-animagine-xl-4.0.safetensors}"
 CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"
 
 OUT="saga_kf"; SEED=0; W=1280; H=704; STEPS=28; CFG=5.5
-PROMPT=""; NEG="lowres, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, worst quality, blurry, multiple people, 2boys"
+PROMPT=""; NEG="lowres, worst quality, blurry, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, extra limbs, extra arms, multiple people, 2boys, text, watermark, signature"
 REF=""; CONTROL=""; CPRE="canny"; CSTR=0.8; IPW=0.65; UTYPE="auto"
 LORA=""; LORAW=0.85; TRIGGER=""
 
@@ -91,9 +91,14 @@ upload(){ # <path> -> echoes uploaded name
     | jq -r '.name' || die "upload failed: $f"
 }
 submit(){ # <graph-json-file> -> echoes prompt_id
-  curl -sf -X POST "$COMFY/prompt" \
-    --data "$(jq -nc --slurpfile g "$1" --arg c "$CID" '{prompt:$g[0], client_id:$c}')" \
-    | jq -r '.prompt_id' || die "submit rejected — check node errors above"
+  curl -sf "$COMFY/system_stats" >/dev/null 2>&1 || die "ComfyUI not reachable at $COMFY (sudo pm2 restart saga-comfyui?)"
+  local resp id
+  resp=$(curl -s -X POST "$COMFY/prompt" --data "$(jq -nc --slurpfile g "$1" --arg c "$CID" '{prompt:$g[0], client_id:$c}')")
+  id=$(jq -r '.prompt_id // empty' <<<"$resp" 2>/dev/null)
+  [ -n "$id" ] && { echo "$id"; return 0; }
+  # surface the ACTUAL validation error instead of a blind "rejected"
+  jq -rc '.error // .node_errors // .' <<<"$resp" 2>/dev/null | head -c 600 | sed 's/^/  ⤷ ComfyUI: /' >&2
+  echo >&2; die "submit rejected"
 }
 wait_done(){ # <prompt_id>
   local id="$1" t=0

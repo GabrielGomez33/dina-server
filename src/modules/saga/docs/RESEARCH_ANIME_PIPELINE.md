@@ -105,7 +105,63 @@ changes *which profiles we add and validate*:
    stages as templates (all installed).
 2. **Video:** add a **LightX2V speed LoRA** + an **anime-style LoRA** to the Wan path and measure
    (speed + true-2D); fall back to AnimateDiff-SD1.5 only if needed.
+   - **Reusable technique — per-frame face detailer for FAR faces (proven in stills, carries to video):**
+     img2img/gen preserves identity from the *pixels available*, so when the subject is far from
+     camera the small face drifts to a generic one (confirmed on the hand-sign stills: closer =
+     more faithful, farther = needs more identity). The fix that worked on stills — crop the face
+     with a YOLO/SAM detector, re-render it at FULL resolution with the character LoRA, paste back
+     (`saga-detail.sh --detect face`) — is per-*image*, so it applies to video frame-by-frame.
+     Apply it on the **FLF keyframes** (not every tween — interpolation carries the corrected face
+     across the segment) as a polish pass, keeping the detailer LoRA weight modest so the face stays
+     anime. This is the video analogue of ADetailer-per-frame; it's a polish stage, not choreography.
 3. **Speed defaults:** fp8+tiled_vae (safe now); everything else measured before it becomes a default.
 
 Every "recommended default" above becomes a calibrated value in `modelRegistry` **only after we
 measure it on the box** — no unverified number ships as a default.
+
+## Prompt hygiene & the per-keyframe consistency layer (general, future-facing)
+
+Recurring keyframe failures were all the same shape — no *shared* layer enforcing consistency and
+suppressing artifact classes across every keyframe. The durable fixes (in `saga-jutsu-flf.sh`, and
+worth replicating in any multi-keyframe driver):
+
+- **Pose-words that name an entity summon that entity.** "boar seal / dragon seal" rendered ghostly
+  boars/dragons in the background. **Describe poses geometrically** (finger positions), keep the
+  entity name in a comment only. Force *exact* poses with ControlNet, never by naming them.
+- **A single shared NEGATIVE feeds every keyframe AND the detailer.** It guards failure *classes*,
+  not instances: hand mutations (`mutated/malformed hands, extra limbs`), entity bleed
+  (`animal, creature, <the seal animals>`), wrong eye color (`blue/green/glowing eyes, heterochromia`),
+  costume drift (`mask, hood, helmet`), wrong sex (`1girl`), `text/watermark`. Extend via `NEG=`.
+- **Character attributes are PINNED across all keyframes** via env (`OUTFIT`, `EYES`) prepended to a
+  shared BASE — so wardrobe/eye-color can't drift frame to frame. Keep the pin SIMPLE and matched to
+  what the LoRA learned; vague/exotic outfits make the model invent a new costume per keyframe
+  (`high-collar` → face mask).
+- **Global sub-script defaults** (`saga-keyframe`, `saga-detail`) carry the universal hand/anatomy
+  negatives so *every* generation benefits, not just the jutsu; scene-specific negatives layer on top.
+
+Principle: consistency and artifact-suppression belong in a **shared layer applied to every frame**,
+configurable per character/scene — not hand-patched per keyframe after the fact.
+
+### Keyframe generation modes: anchor-chain (default) vs independent
+
+Two ways to produce the keyframe set, selectable in `saga-jutsu-flf.sh` STEP 1 via
+`KEYFRAME_MODE` (`--independent` flag flips it):
+
+- **anchor-chain (default)** — "edit, don't redraw" (borrowed from Nano Banana / video content
+  anchors). Generate K1 fully from the LoRA, then make every other keyframe an **img2img EDIT of the
+  CLEAN K1** at `CHAIN_DENOISE` (~0.55): identity, outfit, framing and lighting are inherited from the
+  anchor and only the hand pose changes. Editing the *same clean anchor* each time (never the previous,
+  already-drifting frame) means error can't accumulate — the observed "no chaos" behavior. FLF still
+  supplies the motion *between* keyframes; the chain only makes the keyframes mutually consistent.
+- **independent (`--independent`)** — every keyframe generated from scratch (LoRA identity + pose
+  prompt). More pose freedom, but higher inter-keyframe variance (jump-cut risk between beats).
+
+Both modes share the *same* pose list (single source of truth) and the *same* `hand_fix` detailer,
+so the only thing that varies is how the pixels for each keyframe are produced.
+
+**One edit graph, three callers (DRY).** The img2img-edit graph lives in exactly one place —
+`saga-edit.sh`, a single-concern primitive ("re-render one image toward a prompt at a denoise").
+It is driven by (1) `saga-chain.sh` for keyframe chaining, (2) `saga-jutsu-flf.sh` anchor keyframes,
+and (3) the planned front-end per-frame cleanup (Phase 5). `--prompt` is the *complete* positive —
+the caller assembles identity/trigger/style; the primitive does not editorialize. This means a fix or
+tuning to the edit path (sampler, VAE routing, resize) happens once and every caller inherits it.

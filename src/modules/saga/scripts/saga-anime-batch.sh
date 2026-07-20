@@ -22,9 +22,11 @@
 #   saga-anime-batch.sh --user gabrielgomez1 [--autoland]
 #   saga-anime-batch.sh --raw DIR --out DIR [--autoland]      # explicit form
 #      [--denoise 0.46] [--prompt "..."] [--add-neg "..."]
-#      [--lora F --lora-weight 0.5 --trigger T] [--seed 777] [--limit N]
+#      [--lora F --lora-weight 0.5 --trigger T] [--seed 777] [--limit N] [--force]
 #
-# Idempotent: an image whose output already exists is skipped (safe to re-run).
+# The output name embeds the seed, so DIFFERENT --seed values COEXIST — run a few
+# seeds to collect variants, then curate the best. Re-running a seed that already
+# exists is skipped unless --force (overwrite, e.g. after changing prompt/lora).
 # Env: SAGA_ROOT (required)  COMFY=http://127.0.0.1:8188
 # ============================================================================
 set -uo pipefail
@@ -34,7 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENGINE="$SCRIPT_DIR/saga-anime.sh"
 
 # --- Locked d046 winning recipe (defaults; override with flags) ---------------
-USERTOK=""; RAW=""; OUT=""; DENOISE="0.46"; SEED=777; AUTOLAND=0; LIMIT=0
+USERTOK=""; RAW=""; OUT=""; DENOISE="0.46"; SEED=777; AUTOLAND=0; LIMIT=0; FORCE=0
 LORA=""; LORAW=0.5; TRIGGER=""
 PROMPT="brown eyes, black hair, low cut waves, clean grouped hair, smooth eyebrows, tidy trimmed beard, clean sharp lineart"
 ADDNEG="stray hair, flyaway hair, loose hairs, messy hair, frizzy hair, fuzzy edges, scattered hair strands, wispy hair, realistic hair texture, detailed hair strands"
@@ -45,7 +47,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --denoise) DENOISE="$2"; shift 2;; --seed) SEED="$2"; shift 2;;
   --prompt) PROMPT="$2"; shift 2;; --add-neg) ADDNEG="$2"; shift 2;;
   --lora) LORA="$2"; shift 2;; --lora-weight) LORAW="$2"; shift 2;; --trigger) TRIGGER="$2"; shift 2;;
-  --autoland) AUTOLAND=1; shift;; --limit) LIMIT="$2"; shift 2;;
+  --autoland) AUTOLAND=1; shift;; --limit) LIMIT="$2"; shift 2;; --force) FORCE=1; shift;;
   -h|--help) sed -n '2,30p' "$0"; exit 0;;
   *) die "unknown arg: $1";;
 esac; done
@@ -98,8 +100,8 @@ for f in "${SRC[@]}"; do
   # re-runs and SEPARATE runs into the same OUT (e.g. faces then hand-signs)
   # never collide or false-skip. A numeric index would restart at 001 each run.
   stem=$(basename "$f"); stem=$(echo "${stem%.*}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+|_+$//g')
-  hash=$(printf '%s' "$f" | cksum | cut -d' ' -f1); dest="$OUT/anime_${stem}_${hash}.png"
-  if [ -s "$dest" ]; then echo "  [$idx] skip (exists): $(basename "$dest")"; skipped=$((skipped+1)); continue; fi
+  hash=$(printf '%s' "$f" | cksum | cut -d' ' -f1); dest="$OUT/anime_${stem}_${hash}_s${SEED}.png"
+  if [ -s "$dest" ] && [ "$FORCE" != "1" ]; then echo "  [$idx] skip (exists, use --force or a new --seed): $(basename "$dest")"; skipped=$((skipped+1)); continue; fi
   src_oriented="$WORK/src_${idx}.png"
   orient "$f" "$src_oriented" || { echo "  [$idx] ⚠ orient failed: $(basename "$f")"; bad=$((bad+1)); continue; }
 
