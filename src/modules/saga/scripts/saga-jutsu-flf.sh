@@ -75,6 +75,10 @@ KEYFRAME_MODE="${KEYFRAME_MODE:-anchor}"
 # seal without snowballing: ~0.5–0.6 is the working range. Lower = more faithful to
 # the anchor (poses barely change); higher = stronger pose change, more departure.
 CHAIN_DENOISE="${CHAIN_DENOISE:-0.55}"
+# Anchor-mode edit SOURCE: anchor = edit the clean K1 every time (no drift accumulation,
+# max identity stability); prev = edit the PREVIOUS keyframe (smoother frame-to-frame
+# evolution → gentler FLF motion, slight drift-creep risk). Select prev with --chain-prev.
+CHAIN_FROM="${CHAIN_FROM:-anchor}"
 # PINNED across ALL keyframes for wardrobe continuity. Keep it SIMPLE and match
 # what the LoRA already learned (e.g. the shirt in the training photos) — vague or
 # exotic outfits ("high-collar", "gi", "armor") make the model invent a different
@@ -91,6 +95,14 @@ GROOMING="${GROOMING:-buzz cut, very short hair, short trimmed beard}"   # PINNE
 STYLE="${STYLE:-anime, cel shading, clean detailed lineart, flat colors, sharp focus, 2d}"
 GRADE="${GRADE:-lain}"              # none | grain | lain — post grade; also UNIFIES color across FLF segments (reduces visible seams)
 INTERPOLATE="${INTERPOLATE:-0}"     # 1 = interpolate to POLISH_FPS. OFF by default: minterpolate ghosts fast motion (the trailing light-rays)
+# Assembly (STEP 3): how the segments are joined. Every seam is between two clips that
+# SHARE the boundary keyframe, so a short crossfade removes the per-segment velocity
+# "pop" (decelerate-in / accelerate-out) without a visible dissolve → reads as one shot.
+ASSEMBLE="${ASSEMBLE:-xfade}"       # xfade = crossfade seams into one continuous scene | concat = hard cuts (old behavior)
+XFADE="${XFADE:-5}"                 # crossfade length in frames at each seam
+# Dwell frames on the anchor poses. LARGE holds read as "stuck doing nothing"; kept short
+# now (was 8/16/8). Set any to 0 to drop that hold entirely.
+HOLD1="${HOLD1:-4}"; HOLD6="${HOLD6:-6}"; HOLD8="${HOLD8:-8}"
 # Shared negative fed to EVERY keyframe AND the hand-fixer. Guards the recurring
 # FAILURE CLASSES (not just this scene): hand mutations, seal-name animals bleeding
 # into the background, wrong eye colors, mask/costume drift, wrong sex, text.
@@ -133,6 +145,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --check) CHECK_ONLY=1; shift;; --force) FORCE=1; shift;;
   --clean) CLEAN=1; shift;;
   --independent) KEYFRAME_MODE=independent; shift;;   # STEP 1: independent keyframes instead of the anchor chain
+  --chain-prev) CHAIN_FROM=prev; shift;;              # anchor mode: edit the PREVIOUS keyframe instead of the clean K1
   --no-polish) POLISH=0; shift;; -h|--help) sed -n '2,40p' "$0"; exit 0;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
@@ -222,8 +235,9 @@ if [ "$KEYFRAME_MODE" = "anchor" ]; then
   # saga-edit re-renders the anchor with this checkpoint; keep it in the model set.
   export EDIT_CKPT="${EDIT_CKPT:-animagine-xl-4.0.safetensors}"
   have_model "$EDIT_CKPT" || fail "anchor-edit checkpoint missing under models/: $EDIT_CKPT (set EDIT_CKPT= or use --independent)"
+  case "$CHAIN_FROM" in anchor|prev) ;; *) fail "CHAIN_FROM must be 'anchor' or 'prev' (got '$CHAIN_FROM')";; esac
   [ "$USE_CONTROL" -eq 1 ] && log "  anchor mode: ControlNet forces each sign (K1 via saga-keyframe, K2-K8 via saga-edit)"
-  log "anchor-chain ok (edit primitive, denoise=$CHAIN_DENOISE, ckpt=$EDIT_CKPT)"
+  log "anchor-chain ok (edit primitive, denoise=$CHAIN_DENOISE, source=$CHAIN_FROM, ckpt=$EDIT_CKPT)"
 elif [ "$KEYFRAME_MODE" != "independent" ]; then
   fail "KEYFRAME_MODE must be 'anchor' or 'independent' (got '$KEYFRAME_MODE')"
 fi
@@ -286,20 +300,20 @@ hand_fix(){ # <name> <out-path>
 # ANCHOR EDIT: img2img-EDIT the clean anchor ($ANCHOR) into a new pose via saga-edit.
 # The full positive is assembled here (trigger + pinned BASE + pose) — saga-edit does
 # not editorialize the prompt. Then the shared hand_fix runs, same as gen_kf.
-anchor_edit(){ # <name> <pose-extra> [control-ref]  → writes $SAGA_ROOT/tmp/<name>.png
-  local name="$1" extra="$2" ctrl="${3:-}" out="$SAGA_ROOT/tmp/${1}.png"
+anchor_edit(){ # <src-image> <name> <pose-extra> [control-ref]  → writes $SAGA_ROOT/tmp/<name>.png
+  local src="$1" name="$2" extra="$3" ctrl="${4:-}" out="$SAGA_ROOT/tmp/${2}.png"
   if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse $name (exists; --force to redo)"; return 0; fi
   local full="$TRIGGER, $BASE, $extra"
-  local a=(--image "$ANCHOR" --prompt "$full" --denoise "$CHAIN_DENOISE" \
+  local a=(--image "$src" --prompt "$full" --denoise "$CHAIN_DENOISE" \
            --lora "$LORA" --lora-weight "$LORAW" --cfg "${CFG:-2.0}" \
            -s "$SEED" -W "$W" -H "$H" -n "$NEG" -o "$name")
-  # combine with reference control: the anchor edit is pulled toward the reference pose
-  # (canny→Union Promax) while inheriting identity/framing from the clean anchor.
+  # combine with reference control: the edit is pulled toward the reference pose
+  # (canny→Union Promax) while inheriting identity/framing from the source ($src).
   if [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ]; then
     a+=(-c "$ctrl" --control-pre canny --control-strength "$CONTROL_STRENGTH" --control-end "$CONTROL_END" --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
-    log "  edit $name (anchor + ref: $(basename "$ctrl") @ $CONTROL_STRENGTH → denoise $CHAIN_DENOISE)"
+    log "  edit $name (from $(basename "$src") + ref: $(basename "$ctrl") @ $CONTROL_STRENGTH → denoise $CHAIN_DENOISE)"
   else
-    log "  edit $name (anchor: $(basename "$ANCHOR") → denoise $CHAIN_DENOISE)"
+    log "  edit $name (from $(basename "$src") → denoise $CHAIN_DENOISE)"
   fi
   "$EDIT" "${a[@]}" >/dev/null || fail "anchor edit $name failed"
   have_file "$out" || fail "anchor edit produced no output for $name"
@@ -385,9 +399,16 @@ if [ "$KEYFRAME_MODE" = "anchor" ]; then
   # only the pose. Editing the same clean anchor each time = no drift accumulation.
   gen_kf "${KF_NAME[0]}" "$(pose_for 0)" "${KF_CTRL[0]}"
   ANCHOR="$SAGA_ROOT/tmp/${KF_NAME[0]}.png"; verify_out "$ANCHOR"
+  prev="$ANCHOR"
   for i in 1 2 3 4 5 6 7; do
-    anchor_edit "${KF_NAME[$i]}" "$(pose_for "$i")" "${KF_CTRL[$i]}"
+    # CHAIN_FROM=anchor (default): every edit sources the CLEAN K1 → no drift accumulation.
+    # CHAIN_FROM=prev: source the PREVIOUS keyframe → smoother frame-to-frame evolution
+    # (closer consecutive keyframes → gentler FLF motion), at some drift-creep risk. The
+    # reference (when USE_CONTROL=1) re-pins the pose each frame, capping structural drift.
+    src="$ANCHOR"; [ "$CHAIN_FROM" = "prev" ] && src="$prev"
+    anchor_edit "$src" "${KF_NAME[$i]}" "$(pose_for "$i")" "${KF_CTRL[$i]}"
     verify_out "$SAGA_ROOT/tmp/${KF_NAME[$i]}.png"
+    prev="$SAGA_ROOT/tmp/${KF_NAME[$i]}.png"
   done
 else
   # INDEPENDENT: each keyframe generated from scratch (LoRA identity + pose prompt).
@@ -422,27 +443,48 @@ flf(){ # <name> <first> <last> <frames> <motion-prompt>  → writes $SAGA_ROOT/t
 # continuous take, so Wan doesn't invent pans/zooms/cuts (the "movements not asked for").
 CONT="the same man stays centered in frame, the camera is completely static, one continuous shot, smooth slow deliberate motion, consistent lighting"
 declare -a CLIPS
-hold "$K1" 8  "$WORK/s00_hold1.mp4";                                              CLIPS+=( "$WORK/s00_hold1.mp4" )
+[ "$HOLD1" -gt 0 ] && { hold "$K1" "$HOLD1" "$WORK/s00_hold1.mp4";                 CLIPS+=( "$WORK/s00_hold1.mp4" ); }
 flf s01 "$K1" "$K2" 40 "the man's hands smoothly shift from one hand sign to the next, the fingers rearrange from two fingers raised to a single pointed finger, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s01.mp4" )
 flf s02 "$K2" "$K3" 40 "the man's hands smoothly shift to the next hand sign, moving down and turning so the knuckles press together, the fingers rearrange, $CONT";       CLIPS+=( "$SAGA_ROOT/tmp/s02.mp4" )
 flf s03 "$K3" "$K4" 40 "the man's hands smoothly shift to the next hand sign, rising back up as the fingers interlock into a woven cage, $CONT";                          CLIPS+=( "$SAGA_ROOT/tmp/s03.mp4" )
 flf s04 "$K4" "$K5" 40 "the man brings both hands together into a flat prayer position at the center of his chest, palms pressing together, $CONT";                        CLIPS+=( "$SAGA_ROOT/tmp/s04.mp4" )
 flf s05 "$K5" "$K6" 40 "the man's pressed palms begin to separate slightly and a small bright orb of glowing light appears in the gap between them, $CONT";                CLIPS+=( "$SAGA_ROOT/tmp/s05.mp4" )
-hold "$K6" 16 "$WORK/s06_hold6.mp4";                                              CLIPS+=( "$WORK/s06_hold6.mp4" )
+[ "$HOLD6" -gt 0 ] && { hold "$K6" "$HOLD6" "$WORK/s06_hold6.mp4";                 CLIPS+=( "$WORK/s06_hold6.mp4" ); }
 flf s07 "$K6" "$K7" 40 "the man's hands draw further apart and the glowing orb of light between his palms grows larger and brighter as the hands separate, $CONT";        CLIPS+=( "$SAGA_ROOT/tmp/s07.mp4" )
 flf s08 "$K7" "$K8" 48 "the man's arms open out to shoulder width and the orb swells to full size, erupting into vivid swirling multicolored energy, radiant and intense, rays of light, $CONT"; CLIPS+=( "$SAGA_ROOT/tmp/s08.mp4" )
-hold "$K8" 8  "$WORK/s09_hold8.mp4";                                              CLIPS+=( "$WORK/s09_hold8.mp4" )
+[ "$HOLD8" -gt 0 ] && { hold "$K8" "$HOLD8" "$WORK/s09_hold8.mp4";                 CLIPS+=( "$WORK/s09_hold8.mp4" ); }
 TOT=0
 for c in "${CLIPS[@]}"; do verify_out "$c"; f=$(frames_of "$c"); [ "$f" != "?" ] && TOT=$((TOT+f)); done
 log "total frames (measured): ${TOT:-?} (expected 320 = 20.0s @ ${FPS}fps)"
 echo "✅ motion segments ready"
 
 # ── STEP 3 — ASSEMBLE ───────────────────────────────────────────────────────
-CUR=3; step 3 "assemble → master"
-LIST="$WORK/concat.txt"; : > "$LIST"
-for c in "${CLIPS[@]}"; do echo "file '$c'" >> "$LIST"; done
+CUR=3; step 3 "assemble → master ($ASSEMBLE)"
 MASTER="$WORK/jutsu_20s_master.mp4"
-ffmpeg -y -f concat -safe 0 -i "$LIST" -c:v libx264 -pix_fmt yuv420p -r "$FPS" "$MASTER" >/dev/null 2>&1 || fail "concat failed"
+if [ "$ASSEMBLE" = "xfade" ] && [ "${#CLIPS[@]}" -gt 1 ] && command -v ffprobe >/dev/null; then
+  # Crossfade every seam. Each seam joins two clips that share the boundary keyframe, so
+  # the fade blends near-identical frames — it erases the velocity "pop" without a visible
+  # dissolve. Inputs are normalized (fps/scale/sar) so xfade never rejects a mismatch.
+  xd=$(awk -v x="$XFADE" -v f="$FPS" 'BEGIN{printf "%.4f", x/f}')
+  inputs=(); norm=""; n=${#CLIPS[@]}
+  for ((i=0;i<n;i++)); do inputs+=(-i "${CLIPS[$i]}"); norm+="[$i:v]fps=$FPS,scale=$W:$H,setsar=1[c$i];"; done
+  acc=$(awk -v f="$(frames_of "${CLIPS[0]}")" -v r="$FPS" 'BEGIN{printf "%.4f", f/r}')
+  chain=""; label="[c0]"
+  for ((i=1;i<n;i++)); do
+    off=$(awk -v a="$acc" -v x="$xd" 'BEGIN{printf "%.4f", (a-x<0?0:a-x)}')
+    chain+="${label}[c$i]xfade=transition=fade:duration=$xd:offset=$off[v$i];"
+    acc=$(awk -v a="$acc" -v f="$(frames_of "${CLIPS[$i]}")" -v r="$FPS" -v x="$xd" 'BEGIN{printf "%.4f", a + f/r - x}')
+    label="[v$i]"
+  done
+  FILT="${norm}${chain}"; FILT="${FILT%;}"
+  ffmpeg -y "${inputs[@]}" -filter_complex "$FILT" -map "$label" -r "$FPS" -c:v libx264 -pix_fmt yuv420p "$MASTER" >/dev/null 2>&1 \
+    || fail "xfade assembly failed (retry with ASSEMBLE=concat)"
+else
+  [ "$ASSEMBLE" = "xfade" ] && log "  (xfade needs ffprobe + >1 clip; falling back to concat)"
+  LIST="$WORK/concat.txt"; : > "$LIST"
+  for c in "${CLIPS[@]}"; do echo "file '$c'" >> "$LIST"; done
+  ffmpeg -y -f concat -safe 0 -i "$LIST" -c:v libx264 -pix_fmt yuv420p -r "$FPS" "$MASTER" >/dev/null 2>&1 || fail "concat failed"
+fi
 verify_out "$MASTER"; log "master frames: $(frames_of "$MASTER"), duration ~$(awk -v t="$(frames_of "$MASTER")" -v f="$FPS" 'BEGIN{printf "%.1f", (t=="?"?0:t)/f}')s"
 echo "✅ master → $MASTER"
 
