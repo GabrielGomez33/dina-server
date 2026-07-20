@@ -33,12 +33,17 @@
 #     InstantID:   IDENTITY=instantid FACE=/path/to/face.png LORA=animegabriel.safetensors TRIGGER=animegabriel ./saga-jutsu-flf.sh
 #   CFG= sets the keyframe guidance (low = the soft look); IIDW/IIDE tune InstantID.
 # Flags:
-#   --check     run STEP 0 preflight only, then exit
-#   --force     regenerate artifacts even if they already exist
-#   --clean     delete THIS pipeline's prior artifacts (keyframes/segments/master/
-#               polish) before running — frees disk + guarantees a fresh render.
-#               Only touches jutsu_*/s0*/hold/master/2k/final; nothing else in tmp.
-#   --no-polish skip STEP 4
+#   --check       run STEP 0 preflight only, then exit
+#   --force       regenerate artifacts even if they already exist
+#   --clean       delete THIS pipeline's prior artifacts (keyframes/segments/master/
+#                 polish) before running — frees disk + guarantees a fresh render.
+#                 Only touches jutsu_*/s0*/hold/master/2k/final; nothing else in tmp.
+#   --independent generate each keyframe from scratch (default: anchor chain off K1)
+#   --chain-prev  anchor mode: edit the PREVIOUS keyframe instead of the clean K1
+#   --dwpose      reference control via pose SKELETON only (anime hands, no bleed) [enables control]
+#   --openpose    like --dwpose, OpenPose preprocessor                            [enables control]
+#   --canny       reference control via ALL edges of the ref (imports bg+realism)  [enables control]
+#   --no-polish   skip STEP 4
 # ============================================================================
 set -uo pipefail
 : "${SAGA_ROOT:?set SAGA_ROOT}"
@@ -111,10 +116,10 @@ HOLD1="${HOLD1:-4}"; HOLD6="${HOLD6:-6}"; HOLD8="${HOLD8:-8}"
 # to a keyframe's prompt.)
 NEG="${NEG:-lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, elongated fingers, extra limbs, extra arms, twisted arms, sideways arms, elongated arms, bent broken wrists, disconnected limbs, floating hands, boar, dragon, ram, serpent, tiger, snake, animal, creature, monster, mask, face covering, hood, helmet, white eyes, blank white eyes, solid white eyes, no pupils, rolled-back eyes, glowing eyes, blue eyes, green eyes, heterochromia, 1girl, woman, female, text, watermark, signature}"
 # ── Hand-sign REFERENCE control (prompt + reference, combined) ──────────────
-# USE_CONTROL=1 forces each of the 4 hand signs to match a REFERENCE image via
-# ControlNet (canny → Union Promax), while the LoRA supplies identity and the prompt
-# supplies everything else. This is the fix for finger geometry that words alone can't
-# achieve. Requires --independent (anchor mode's img2img edit can't route ControlNet).
+# USE_CONTROL=1 forces each hand pose to match a REFERENCE image via ControlNet, while the
+# LoRA supplies identity and the prompt supplies everything else. Works in BOTH anchor and
+# independent modes (anchor edits route control through saga-edit). The --dwpose/--openpose/
+# --canny flags set the preprocessor and enable control.
 USE_CONTROL="${USE_CONTROL:-0}"
 CONTROL_STRENGTH="${CONTROL_STRENGTH:-0.85}"   # ControlNet pose-forcing strength 0..1; lower lets the LoRA/prompt breathe
 CONTROL_END="${CONTROL_END:-0.9}"              # fraction of denoising control stays ON; LOWER (~0.5) locks the hand pose
@@ -125,8 +130,8 @@ CONTROL_END="${CONTROL_END:-0.9}"              # fraction of denoising control s
 # dwpose/openpose = only the body/hand SKELETON (pose only; the character is drawn purely
 # by the LoRA+prompt → anime hands, no bleed, no realism import). Full-scene realistic
 # refs → prefer dwpose. union-type must match the preprocessor family.
-CONTROL_PRE="${CONTROL_PRE:-canny}"            # canny | dwpose | openpose
-case "$CONTROL_PRE" in dwpose|openpose) CONTROL_UNION="${UNION_TYPE:-openpose/dwpose}";; *) CONTROL_UNION="${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}";; esac
+CONTROL_PRE="${CONTROL_PRE:-canny}"            # canny | dwpose | openpose (also set by --dwpose/--openpose/--canny)
+# NOTE: CONTROL_UNION is derived from CONTROL_PRE *after* flag parsing (a flag can change it).
 export KF_CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"   # union controlnet
 export EDIT_CN="$KF_CN"   # saga-edit (anchor edits) uses the SAME controlnet model preflight validates
 # Hand-pose REFERENCE images (anime-ified, curated one-per-sign). ControlNet uses only
@@ -153,9 +158,16 @@ while [ $# -gt 0 ]; do case "$1" in
   --clean) CLEAN=1; shift;;
   --independent) KEYFRAME_MODE=independent; shift;;   # STEP 1: independent keyframes instead of the anchor chain
   --chain-prev) CHAIN_FROM=prev; shift;;              # anchor mode: edit the PREVIOUS keyframe instead of the clean K1
+  # ControlNet preprocessor (all imply USE_CONTROL=1): dwpose/openpose = pose skeleton
+  # only (anime hands, no background/realism bleed); canny = trace all edges of the ref.
+  --dwpose) CONTROL_PRE=dwpose; USE_CONTROL=1; shift;;
+  --openpose) CONTROL_PRE=openpose; USE_CONTROL=1; shift;;
+  --canny) CONTROL_PRE=canny; USE_CONTROL=1; shift;;
   --no-polish) POLISH=0; shift;; -h|--help) sed -n '2,40p' "$0"; exit 0;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
+# Derive the union-net type from the FINAL preprocessor (env or flag). Must run post-flags.
+case "$CONTROL_PRE" in dwpose|openpose) CONTROL_UNION="${UNION_TYPE:-openpose/dwpose}";; *) CONTROL_UNION="${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}";; esac
 
 WORK="$SAGA_ROOT/tmp/jutsu"; mkdir -p "$WORK"
 LOG="$WORK/run_$(date +%Y%m%d_%H%M%S).log"
