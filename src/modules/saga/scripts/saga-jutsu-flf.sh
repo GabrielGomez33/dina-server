@@ -25,8 +25,9 @@
 #
 # Usage:
 #   LORA=exodia.safetensors TRIGGER=exodia_saga ./saga-jutsu-flf.sh
-#   (add USE_CONTROL=1 + SIGN_TIGER/SIGN_RAM/SIGN_BOAR/SIGN_DRAGON=<ref.png> to force
-#    the hand signs from reference images via ControlNet — needs --independent)
+#   (add USE_CONTROL=1 to force each pose from a reference image via ControlNet; refs
+#    default to the curated anime hand-signs, override with SIGN_DIR= or SIGN1..4/
+#    SIGN_PRAYER/SIGN_ORB_NEAR/SIGN_ORB_FAR. Works in both anchor and independent modes.)
 #   Identity source (keyframes):  IDENTITY=lora (default) | instantid
 #     LoRA-only:   LORA=animegabriel.safetensors TRIGGER=animegabriel LORAW=1.6 CFG=2.0 ./saga-jutsu-flf.sh
 #     InstantID:   IDENTITY=instantid FACE=/path/to/face.png LORA=animegabriel.safetensors TRIGGER=animegabriel ./saga-jutsu-flf.sh
@@ -106,12 +107,19 @@ USE_CONTROL="${USE_CONTROL:-0}"
 CONTROL_STRENGTH="${CONTROL_STRENGTH:-0.85}"   # ControlNet pose-forcing strength 0..1; lower lets the LoRA/prompt breathe
 export KF_CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"   # union controlnet
 export EDIT_CN="$KF_CN"   # saga-edit (anchor edits) uses the SAME controlnet model preflight validates
-# Anime-ified hand-sign reference images, one per sign (point these at your curated
-# refs). Only the 4 SIGNS use control; prayer + the 3 orb beats stay prompt-only.
-SIGN_TIGER="${SIGN_TIGER:-$SAGA_ROOT/tmp/sign_tiger.png}"
-SIGN_RAM="${SIGN_RAM:-$SAGA_ROOT/tmp/sign_ram.png}"
-SIGN_BOAR="${SIGN_BOAR:-$SAGA_ROOT/tmp/sign_boar.png}"
-SIGN_DRAGON="${SIGN_DRAGON:-$SAGA_ROOT/tmp/sign_dragon.png}"
+# Hand-pose REFERENCE images (anime-ified, curated one-per-sign). ControlNet uses only
+# the canny edge map, so these force the exact hand shape/position while the LoRA carries
+# identity. SEQUENCE: ram → boar → dragon → serpent (no tiger ref exists), then the hand-
+# separation stages drive the orb beats. K8 (apex, arms widest) has no exact ref →
+# prompt-only. All overridable via env; the front end will parameterize these per shot.
+SIGN_DIR="${SIGN_DIR:-$SAGA_ROOT/users/gabrielgomez1/datasets/anime_curated}"
+SIGN1="${SIGN1:-$SIGN_DIR/anime_gabrielhandsigns_ram_2748679270_s303.png}"                              # K1 ram
+SIGN2="${SIGN2:-$SIGN_DIR/anime_gabrielhandsigns_boar_2_1181337321_s101.png}"                           # K2 boar
+SIGN3="${SIGN3:-$SIGN_DIR/anime_gabrielhandsigns_dragon_2_1218743849_s202.png}"                         # K3 dragon
+SIGN4="${SIGN4:-$SIGN_DIR/anime_gabrielhandsigns_serpent_339339625_s101.png}"                           # K4 serpent
+SIGN_PRAYER="${SIGN_PRAYER:-$SIGN_DIR/anime_gabrielhandsigns_handstogether_1845580320_s202.png}"                       # K5 prayer
+SIGN_ORB_NEAR="${SIGN_ORB_NEAR:-$SIGN_DIR/anime_gabrielhandsigns_handsslightlyseperated_3_2479493325_s303.png}"        # K6 orb near
+SIGN_ORB_FAR="${SIGN_ORB_FAR:-$SIGN_DIR/anime_gabrielhandsigns_handsslightlyseperated_further_215320804_s303.png}"     # K7 orb far
 SEED="${SEED:-777}"; W="${W:-1280}"; H="${H:-704}"; FPS="${FPS:-16}"
 
 # confirmed installed filenames (audit 2026-07-18); saga-flf.sh reads these via env
@@ -232,12 +240,12 @@ if [ "$USE_CONTROL" -eq 1 ]; then
   # saga-keyframe, K2-K8 via saga-edit's ControlNet). Both need the same nodes + model.
   for n in ControlNetLoader ControlNetApplyAdvanced Canny SetUnionControlNetType; do need_node "$n"; done
   have_model "$KF_CN" || fail "ControlNet model missing under models/: $KF_CN (set KF_CN= or run USE_CONTROL=0)"
-  MISS=0
-  for f in "$SIGN_TIGER" "$SIGN_RAM" "$SIGN_BOAR" "$SIGN_DRAGON"; do
-    if have_file "$f"; then log "  sign ✓ $(basename "$f")"; else log "  sign ✗ MISSING $f"; MISS=1; fi
+  MISS=0; NREF=0
+  for f in "$SIGN1" "$SIGN2" "$SIGN3" "$SIGN4" "$SIGN_PRAYER" "$SIGN_ORB_NEAR" "$SIGN_ORB_FAR"; do
+    if have_file "$f"; then log "  ref ✓ $(basename "$f")"; NREF=$((NREF+1)); else log "  ref ✗ MISSING $f"; MISS=1; fi
   done
-  [ "$MISS" -eq 0 ] || fail "USE_CONTROL=1 needs the 4 hand-sign refs (set SIGN_TIGER/SIGN_RAM/SIGN_BOAR/SIGN_DRAGON)"
-  log "control ok (4 signs via $KF_CN @ strength $CONTROL_STRENGTH)"
+  [ "$MISS" -eq 0 ] || fail "USE_CONTROL=1 needs the reference images (set SIGN_DIR= or the individual SIGN* vars)"
+  log "control ok ($NREF refs via $KF_CN @ strength $CONTROL_STRENGTH)"
 fi
 log "inputs ok"
 echo "✅ preflight passed"
@@ -329,14 +337,14 @@ KF_NAME=( jutsu_k1 jutsu_k2 jutsu_k3 jutsu_k4 jutsu_k5 jutsu_k6 jutsu_k7 jutsu_k
 # animal names — those summon the animal) so the four signs read as four different
 # hand shapes, not four copies of the same steeple.
 KF_POSE=(
-  # K1 TIGER — palms together, index+middle of BOTH hands extended straight up
-  "both hands raised together in front of the chest, palms pressed flat together, the index and middle fingers of both hands extended straight upward and pressed together, the remaining fingers curled and interlocked, forearms vertical, focused expression"
-  # K2 RAM — hands clasped, only the two index fingers up as a single point
-  "both hands clasped together in front of the chest, only the two index fingers extended straight upward and pressed together into a single point, all other fingers laced together, forearms vertical"
-  # K3 BOAR — hands back-to-back low, knuckles pressed, wrists bent down
+  # K1 RAM — index+middle of both hands extended up, remaining interlocked
+  "both hands together in front of the chest, index and middle fingers of both hands extended straight upward and pressed together, the remaining fingers interlocked, forearms vertical, focused expression"
+  # K2 BOAR — hands back-to-back low, knuckles pressed, wrists bent down
   "both hands together in front of the stomach, backs of the hands facing outward, fingers curled inward with the knuckles pressed together, wrists bent downward, forearms angled down"
-  # K4 DRAGON — fingers fully interlocked into an upward woven cage
+  # K3 DRAGON — fingers fully interlocked into an upward woven cage
   "both hands in front of the chest, fingers fully interlocked with the fingertips pointing upward forming a woven cage shape, thumbs crossed at the base, forearms vertical"
+  # K4 SERPENT — hands clasped, fingers interlocked and flat, palms pressed
+  "both hands clasped together in front of the chest, fingers interlocked and flat, palms pressed together, forearms vertical"
   # K5 PRAYER — flat palm-to-palm at center of chest
   "both hands pressed flat together palm to palm in a prayer position at the center of the chest, fingers straight and together pointing upward, forearms vertical, calm focused expression"
   # K6 ORB FORMING — hands part slightly, small bright orb appears between palms
@@ -346,9 +354,13 @@ KF_POSE=(
   # K8 ORB APEX — hands at shoulder width, orb erupts vivid multicolor
   "both arms extended so the open hands are held apart at shoulder width, palms facing a large radiant sphere of energy between them, the orb glowing intensely with vivid swirling multicolored light, brilliant, powerful, rays of light"
 )
-# Reference images matched to the sign order (tiger, ram, boar, dragon); only used when
-# USE_CONTROL=1. Prayer + the 3 orb beats have no reference (prompt-only).
-KF_CTRL=( "$SIGN_TIGER" "$SIGN_RAM" "$SIGN_BOAR" "$SIGN_DRAGON" "" "" "" "" )
+# Which keyframes are pure hand SIGNS (shape fully owned by the reference → genericize the
+# prompt). Prayer/orb beats are 0: their reference forces the HAND POSITION but the prompt
+# must still describe the orb/energy the reference doesn't contain.
+KF_SIGN=( 1 1 1 1 0 0 0 0 )
+# References matched to the sequence: ram, boar, dragon, serpent, prayer, orb-near,
+# orb-far; K8 (apex) is prompt-only. Only used when USE_CONTROL=1.
+KF_CTRL=( "$SIGN1" "$SIGN2" "$SIGN3" "$SIGN4" "$SIGN_PRAYER" "$SIGN_ORB_NEAR" "$SIGN_ORB_FAR" "" )
 
 # EFFECTIVE pose text, reference-aware. When a ControlNet reference will drive the hand
 # SHAPE, we do NOT also describe the geometry in words: the model has no concept of a
@@ -359,7 +371,9 @@ KF_CTRL=( "$SIGN_TIGER" "$SIGN_RAM" "$SIGN_BOAR" "$SIGN_DRAGON" "" "" "" "" )
 SIGN_GENERIC="both hands raised together in front of the chest forming a hand sign, fingers together"
 pose_for(){ # <i> → the pose text keyframe i should actually be generated with
   local i="$1"
-  if [ "$USE_CONTROL" -eq 1 ] && [ -n "${KF_CTRL[$i]}" ]; then echo "$SIGN_GENERIC"; else echo "${KF_POSE[$i]}"; fi
+  # genericize ONLY a pure sign that has a reference (shape fully owned by the ref).
+  # Prayer/orb beats keep their full text — the ref sets the hands, the text sets the orb.
+  if [ "$USE_CONTROL" -eq 1 ] && [ -n "${KF_CTRL[$i]}" ] && [ "${KF_SIGN[$i]}" -eq 1 ]; then echo "$SIGN_GENERIC"; else echo "${KF_POSE[$i]}"; fi
 }
 
 if [ "$KEYFRAME_MODE" = "anchor" ]; then
