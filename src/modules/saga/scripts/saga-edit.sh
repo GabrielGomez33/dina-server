@@ -11,6 +11,11 @@
 #   saga-edit.sh --image SRC --prompt "full positive prompt"
 #      [--denoise 0.6] [--lora F --lora-weight 1.0] [--cfg 2.0] [--seed 777]
 #      [-W N -H N] [-n NEG] [-o NAME]
+#      [-c REF --control-strength 0.85 --control-pre canny --union-type T]
+#
+# Optional ControlNet: -c/--control REF forces structure (e.g. a hand-sign pose) from a
+# reference image via canny → Union Promax, while denoise still edits toward the source.
+# Env: EDIT_CN=controlnet-union-sdxl-promax.safetensors
 #
 # NOTE: --prompt is the COMPLETE positive (caller assembles identity/trigger/style);
 # this primitive does not editorialize it. No trigger auto-prepend.
@@ -20,8 +25,11 @@ set -uo pipefail
 COMFY="${COMFY:-http://127.0.0.1:8188}"
 : "${SAGA_ROOT:?set SAGA_ROOT}"
 CKPT="${EDIT_CKPT:-animagine-xl-4.0.safetensors}"
+CN="${EDIT_CN:-controlnet-union-sdxl-promax.safetensors}"
 
 IMG=""; PROMPT=""; DENOISE=0.6; LORA=""; LORAW=1.0; CFG=2.0; SEED=777; W=0; H=0; OUT="saga_edit"
+# optional ControlNet: force structure from a reference while editing (canny → Union Promax)
+CONTROL=""; CPRE="canny"; CSTR=0.85; UTYPE="canny/lineart/anime_lineart/mlsd"
 NEG="lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, mutated hands, extra limbs, text, watermark"
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
@@ -29,6 +37,8 @@ while [ $# -gt 0 ]; do case "$1" in
   --denoise) DENOISE="$2"; shift 2;; --lora) LORA="$2"; shift 2;; --lora-weight) LORAW="$2"; shift 2;;
   --cfg) CFG="$2"; shift 2;; -s|--seed) SEED="$2"; shift 2;;
   -W|--width) W="$2"; shift 2;; -H|--height) H="$2"; shift 2;;
+  -c|--control) CONTROL="$2"; shift 2;; --control-pre) CPRE="$2"; shift 2;;
+  --control-strength) CSTR="$2"; shift 2;; --union-type) UTYPE="$2"; shift 2;;
   -n|--neg) NEG="$2"; shift 2;; -o|--out) OUT="$2"; shift 2;;
   -h|--help) sed -n '2,20p' "$0"; exit 0;;
   *) die "unknown arg: $1";;
@@ -40,6 +50,10 @@ command -v jq >/dev/null || die "jq required"; command -v curl >/dev/null || die
 case "$DENOISE" in ''|*[!0-9.]*) die "--denoise must be a number (got '$DENOISE')";; esac
 awk -v d="$DENOISE" 'BEGIN{exit !(d>0 && d<=1)}' || die "--denoise must be in (0,1] (got $DENOISE)"
 [ -z "$LORA" ] || [ -f "$SAGA_ROOT/models/loras/$LORA" ] || die "LoRA not found: models/loras/$LORA"
+if [ -n "$CONTROL" ]; then
+  [ -f "$CONTROL" ] || die "--control image not found: $CONTROL"
+  find "$SAGA_ROOT/models" -name "$CN" -print -quit 2>/dev/null | grep -q . || die "ControlNet model not found under models/: $CN (set EDIT_CN=)"
+fi
 curl -sf "$COMFY/system_stats" >/dev/null 2>&1 || die "ComfyUI not reachable at $COMFY (sudo pm2 restart saga-comfyui?)"
 
 CID="sagaedit-$$-$RANDOM"
@@ -55,6 +69,20 @@ if [ "$W" -gt 0 ] && [ "$H" -gt 0 ]; then
 else SRC='["2",0]'; SCALE=""; fi
 if [ -n "$LORA" ]; then MODEL='["40",0]'; CLIP='["40",1]'; else MODEL='["1",0]'; CLIP='["1",1]'; fi
 
+# optional ControlNet: force structure from a reference image while editing. Positive/
+# negative are routed through ControlNetApplyAdvanced (nodes 20-24), else straight from
+# the CLIP encoders. Mirrors saga-keyframe's control subgraph so both paths behave identically.
+CTRL_NAME=""; KPOS='["5",0]'; KNEG='["6",0]'; CANNY_NODE=""; UNION_NODE=""
+if [ -n "$CONTROL" ]; then
+  CTRL_NAME=$(upload "$CONTROL")
+  case "$CPRE" in
+    none) PRE_SRC='["20",0]';;
+    *)    PRE_SRC='["21",0]'; CANNY_NODE="\"21\":{\"class_type\":\"Canny\",\"inputs\":{\"image\":[\"20\",0],\"low_threshold\":0.2,\"high_threshold\":0.5}},";;
+  esac
+  if [ "$UTYPE" = "none" ]; then CNSRC='["22",0]'; else CNSRC='["24",0]'; UNION_NODE="\"24\":{\"class_type\":\"SetUnionControlNetType\",\"inputs\":{\"control_net\":[\"22\",0],\"type\":\"$UTYPE\"}},"; fi
+  KPOS='["23",0]'; KNEG='["23",1]'
+fi
+
 G=$(mktemp)
 {
 cat <<JSON
@@ -69,14 +97,23 @@ cat <<JSON
  "4":{"class_type":"VAEEncode","inputs":{"pixels":$SRC,"vae":["1",2]}},
  "5":{"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$PROMPT" '$s'),"clip":$CLIP}},
  "6":{"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$NEG" '$s'),"clip":$CLIP}},
- "7":{"class_type":"KSampler","inputs":{"seed":$SEED,"steps":30,"cfg":$CFG,"sampler_name":"dpmpp_2m","scheduler":"karras","denoise":$DENOISE,"model":$MODEL,"positive":["5",0],"negative":["6",0],"latent_image":["4",0]}},
+JSON
+[ -n "$CONTROL" ] && cat <<JSON
+ "20":{"class_type":"LoadImage","inputs":{"image":"$CTRL_NAME"}},
+ $CANNY_NODE
+ "22":{"class_type":"ControlNetLoader","inputs":{"control_net_name":"$CN"}},
+ $UNION_NODE
+ "23":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["5",0],"negative":["6",0],"control_net":$CNSRC,"image":$PRE_SRC,"strength":$CSTR,"start_percent":0.0,"end_percent":0.9,"vae":["1",2]}},
+JSON
+cat <<JSON
+ "7":{"class_type":"KSampler","inputs":{"seed":$SEED,"steps":30,"cfg":$CFG,"sampler_name":"dpmpp_2m","scheduler":"karras","denoise":$DENOISE,"model":$MODEL,"positive":$KPOS,"negative":$KNEG,"latent_image":["4",0]}},
  "8":{"class_type":"VAEDecode","inputs":{"samples":["7",0],"vae":["1",2]}},
  "9":{"class_type":"SaveImage","inputs":{"filename_prefix":"$OUT","images":["8",0]}}
 }
 JSON
 } > "$G"
 jq -e . "$G" >/dev/null || die "internal: invalid edit graph"
-echo "▶ edit: $(basename "$IMG") → $OUT  denoise=$DENOISE  lora=${LORA:-none}@$LORAW"
+echo "▶ edit: $(basename "$IMG") → $OUT  denoise=$DENOISE  lora=${LORA:-none}@$LORAW${CONTROL:+  ctrl=$(basename "$CONTROL")@$CSTR}"
 PID=$(submit "$G"); HIST=$(wait_done "$PID")
 fetch_first "$HIST" "$PID" "$SAGA_ROOT/tmp/${OUT}.png"; rm -f "$G"
 echo "  ✅ $SAGA_ROOT/tmp/${OUT}.png"

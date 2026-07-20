@@ -104,7 +104,8 @@ NEG="${NEG:-lowres, worst quality, blurry, deformed, bad anatomy, bad hands, ext
 # achieve. Requires --independent (anchor mode's img2img edit can't route ControlNet).
 USE_CONTROL="${USE_CONTROL:-0}"
 CONTROL_STRENGTH="${CONTROL_STRENGTH:-0.85}"   # ControlNet pose-forcing strength 0..1; lower lets the LoRA/prompt breathe
-export KF_CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"   # union controlnet (saga-keyframe reads this)
+export KF_CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"   # union controlnet
+export EDIT_CN="$KF_CN"   # saga-edit (anchor edits) uses the SAME controlnet model preflight validates
 # Anime-ified hand-sign reference images, one per sign (point these at your curated
 # refs). Only the 4 SIGNS use control; prayer + the 3 orb beats stay prompt-only.
 SIGN_TIGER="${SIGN_TIGER:-$SAGA_ROOT/tmp/sign_tiger.png}"
@@ -210,7 +211,7 @@ if [ "$KEYFRAME_MODE" = "anchor" ]; then
   # saga-edit re-renders the anchor with this checkpoint; keep it in the model set.
   export EDIT_CKPT="${EDIT_CKPT:-animagine-xl-4.0.safetensors}"
   have_model "$EDIT_CKPT" || fail "anchor-edit checkpoint missing under models/: $EDIT_CKPT (set EDIT_CKPT= or use --independent)"
-  [ "$USE_CONTROL" -eq 1 ] && log "  ⚠ anchor mode: ControlNet shapes only K1 (the anchor); K2–K8 poses come from the edit prompt"
+  [ "$USE_CONTROL" -eq 1 ] && log "  anchor mode: ControlNet forces each sign (K1 via saga-keyframe, K2-K8 via saga-edit)"
   log "anchor-chain ok (edit primitive, denoise=$CHAIN_DENOISE, ckpt=$EDIT_CKPT)"
 elif [ "$KEYFRAME_MODE" != "independent" ]; then
   fail "KEYFRAME_MODE must be 'anchor' or 'independent' (got '$KEYFRAME_MODE')"
@@ -227,8 +228,8 @@ if [ "$POLISH" -eq 1 ]; then
 fi
 
 if [ "$USE_CONTROL" -eq 1 ]; then
-  # control routes through gen_kf (independent path); anchor's img2img edit can't apply it.
-  [ "$KEYFRAME_MODE" = "independent" ] || fail "USE_CONTROL=1 requires --independent (anchor mode can't apply ControlNet to K2–K8)"
+  # control works in BOTH modes: independent → saga-keyframe; anchor → saga-edit (K1 via
+  # saga-keyframe, K2-K8 via saga-edit's ControlNet). Both need the same nodes + model.
   for n in ControlNetLoader ControlNetApplyAdvanced Canny SetUnionControlNetType; do need_node "$n"; done
   have_model "$KF_CN" || fail "ControlNet model missing under models/: $KF_CN (set KF_CN= or run USE_CONTROL=0)"
   MISS=0
@@ -274,14 +275,21 @@ hand_fix(){ # <name> <out-path>
 # ANCHOR EDIT: img2img-EDIT the clean anchor ($ANCHOR) into a new pose via saga-edit.
 # The full positive is assembled here (trigger + pinned BASE + pose) — saga-edit does
 # not editorialize the prompt. Then the shared hand_fix runs, same as gen_kf.
-anchor_edit(){ # <name> <pose-extra>  → writes $SAGA_ROOT/tmp/<name>.png
-  local name="$1" extra="$2" out="$SAGA_ROOT/tmp/${1}.png"
+anchor_edit(){ # <name> <pose-extra> [control-ref]  → writes $SAGA_ROOT/tmp/<name>.png
+  local name="$1" extra="$2" ctrl="${3:-}" out="$SAGA_ROOT/tmp/${1}.png"
   if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse $name (exists; --force to redo)"; return 0; fi
   local full="$TRIGGER, $BASE, $extra"
   local a=(--image "$ANCHOR" --prompt "$full" --denoise "$CHAIN_DENOISE" \
            --lora "$LORA" --lora-weight "$LORAW" --cfg "${CFG:-2.0}" \
            -s "$SEED" -W "$W" -H "$H" -n "$NEG" -o "$name")
-  log "  edit $name (anchor: $(basename "$ANCHOR") → denoise $CHAIN_DENOISE)"
+  # combine with reference control: the anchor edit is pulled toward the reference pose
+  # (canny→Union Promax) while inheriting identity/framing from the clean anchor.
+  if [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ]; then
+    a+=(-c "$ctrl" --control-pre canny --control-strength "$CONTROL_STRENGTH" --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
+    log "  edit $name (anchor + ref: $(basename "$ctrl") @ $CONTROL_STRENGTH → denoise $CHAIN_DENOISE)"
+  else
+    log "  edit $name (anchor: $(basename "$ANCHOR") → denoise $CHAIN_DENOISE)"
+  fi
   "$EDIT" "${a[@]}" >/dev/null || fail "anchor edit $name failed"
   have_file "$out" || fail "anchor edit produced no output for $name"
   hand_fix "$name" "$out"
@@ -349,7 +357,7 @@ if [ "$KEYFRAME_MODE" = "anchor" ]; then
   gen_kf "${KF_NAME[0]}" "${KF_POSE[0]}" "${KF_CTRL[0]}"
   ANCHOR="$SAGA_ROOT/tmp/${KF_NAME[0]}.png"; verify_out "$ANCHOR"
   for i in 1 2 3 4 5 6 7; do
-    anchor_edit "${KF_NAME[$i]}" "${KF_POSE[$i]}"
+    anchor_edit "${KF_NAME[$i]}" "${KF_POSE[$i]}" "${KF_CTRL[$i]}"
     verify_out "$SAGA_ROOT/tmp/${KF_NAME[$i]}.png"
   done
 else
