@@ -256,6 +256,64 @@ The proven path to an on-model anime character LoRA is **bootstrapping**: real p
   curation UI writes the keep set into `uploads/curated/` (source photos) and
   `datasets/anime_curated/` (kept anime), and records the decision in `curation.json`.
 
+### 7.10 The shot data model: keyframes, references, and transitions
+
+The jutsu/FLF pipeline (`saga-jutsu-flf.sh`) is driven by a **shot spec**. The front end
+authors this object; the server walks it. It is the structured form of the positional
+`KF_NAME`/`KF_POSE`/`KF_CTRL` arrays in the script today — same shape, so the automation
+phase is a serialization, not a redesign.
+
+```jsonc
+{
+  "shot": "jutsu_20s",
+  "identity": { "lora": "animegabriel2.safetensors", "trigger": "animegabriel", "weight": 1.4 },
+  "keyframes": [
+    { "id": "k1", "label": "Tiger sign",
+      "prompt": "both hands raised together in front of the chest forming a hand sign, fingers together",
+      "reference": { "image_id": "up_9f3a", "strength": 0.85, "preprocessor": "canny" },
+      "seed": 777 },
+    { "id": "k5", "label": "Prayer",
+      "prompt": "both hands pressed flat together palm to palm in a prayer position ...",
+      "reference": null,              // prompt-only: no reference
+      "seed": 777 },
+    { "id": "k8", "label": "Orb apex",
+      "prompt": "arms extended to shoulder width, a large radiant multicolored orb ...",
+      "reference": null, "seed": 777 }
+  ],
+  "transitions": [
+    { "from": "k1", "to": "k2", "frames": 40,
+      "motion_prompt": "the hands smoothly shift from one hand sign to the next, ..." }
+  ]
+}
+```
+
+**How a reference binds to a scene + prompt.** A reference is a **field ON a keyframe
+object**, sitting next to that keyframe's prompt — they travel together as one record.
+There is no separate "reference stage." In the timeline UI, each keyframe card has a
+**prompt box** and a **reference drop-zone**; dropping an anime hand-sign image onto K1's
+card sets `keyframes[0].reference.image_id`. Binding is by keyframe identity, nothing more.
+
+**What the reference does, and where.** ControlNet extracts a **structure map** (canny
+edges) from the reference and forces the generated image's structure to match it, while
+the prompt supplies content:
+
+- **Prompt = WHAT** (identity, style, "a hand sign"). **Reference = WHERE / WHAT SHAPE**
+  (the exact hand outline and its position in frame). Strength (0.85) = how strictly the
+  outline is obeyed. The reference should be **framed like the target** (upper body, hands
+  in front of the chest) so its edge map lines up.
+- **References act in the KEYFRAME stage only (STEP 1), never in FLF (STEP 2).** FLF
+  interpolates between two finished keyframe *images* + a short motion prompt; it never
+  sees the references. Their influence reaches the video *through* the keyframe. This is
+  why keyframes must be correct before rendering — FLF can only move hands that are
+  already right.
+
+**Reference ⇒ neutral prompt (no named "seal" tokens).** The base model has no concept of
+a Naruto "ram/boar/dragon/tiger seal" — those tokens summon the *animal* (the ghostly-
+animal artifact). So a keyframe **with** a reference uses a neutral `"forming a hand sign"`
+prompt and lets the reference own the shape; a keyframe **without** a reference falls back
+to a full geometric description (fingers/positions the model actually understands). Never
+put animal/seal names in a generation prompt — geometry or a reference only.
+
 ### Design invariant across all of the above
 
 Every future path still resolves **under `tenants/<tenantId>/`** and through the same
