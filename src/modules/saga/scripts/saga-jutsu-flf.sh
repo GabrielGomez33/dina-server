@@ -167,7 +167,8 @@ while [ $# -gt 0 ]; do case "$1" in
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
 # Derive the union-net type from the FINAL preprocessor (env or flag). Must run post-flags.
-case "$CONTROL_PRE" in dwpose|openpose) CONTROL_UNION="${UNION_TYPE:-openpose/dwpose}";; *) CONTROL_UNION="${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}";; esac
+# Values must be valid SetUnionControlNetType enums: pose skeleton → "openpose".
+case "$CONTROL_PRE" in dwpose|openpose) CONTROL_UNION="${UNION_TYPE:-openpose}";; *) CONTROL_UNION="${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}";; esac
 
 WORK="$SAGA_ROOT/tmp/jutsu"; mkdir -p "$WORK"
 LOG="$WORK/run_$(date +%Y%m%d_%H%M%S).log"
