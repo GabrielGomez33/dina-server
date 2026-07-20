@@ -120,6 +120,13 @@ CONTROL_STRENGTH="${CONTROL_STRENGTH:-0.85}"   # ControlNet pose-forcing strengt
 CONTROL_END="${CONTROL_END:-0.9}"              # fraction of denoising control stays ON; LOWER (~0.5) locks the hand pose
                                                # early then RELEASES so the prompt reasserts background/style/face (kills
                                                # the reference's background bleed + softness). 0.9 = control on almost throughout.
+# Preprocessor: what canny extracts from the reference. canny = ALL edges (imports the
+# reference's background + realistic texture + composition — bleed + photoreal hands).
+# dwpose/openpose = only the body/hand SKELETON (pose only; the character is drawn purely
+# by the LoRA+prompt → anime hands, no bleed, no realism import). Full-scene realistic
+# refs → prefer dwpose. union-type must match the preprocessor family.
+CONTROL_PRE="${CONTROL_PRE:-canny}"            # canny | dwpose | openpose
+case "$CONTROL_PRE" in dwpose|openpose) CONTROL_UNION="${UNION_TYPE:-openpose/dwpose}";; *) CONTROL_UNION="${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}";; esac
 export KF_CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"   # union controlnet
 export EDIT_CN="$KF_CN"   # saga-edit (anchor edits) uses the SAME controlnet model preflight validates
 # Hand-pose REFERENCE images (anime-ified, curated one-per-sign). ControlNet uses only
@@ -255,14 +262,20 @@ fi
 if [ "$USE_CONTROL" -eq 1 ]; then
   # control works in BOTH modes: independent → saga-keyframe; anchor → saga-edit (K1 via
   # saga-keyframe, K2-K8 via saga-edit's ControlNet). Both need the same nodes + model.
-  for n in ControlNetLoader ControlNetApplyAdvanced Canny SetUnionControlNetType; do need_node "$n"; done
+  for n in ControlNetLoader ControlNetApplyAdvanced SetUnionControlNetType; do need_node "$n"; done
+  case "$CONTROL_PRE" in
+    canny)    need_node Canny;;
+    openpose) need_node OpenposePreprocessor;;
+    dwpose)   need_node DWPreprocessor;;
+    *) fail "CONTROL_PRE must be canny|dwpose|openpose (got '$CONTROL_PRE')";;
+  esac
   have_model "$KF_CN" || fail "ControlNet model missing under models/: $KF_CN (set KF_CN= or run USE_CONTROL=0)"
   MISS=0; NREF=0
   for f in "$SIGN1" "$SIGN2" "$SIGN3" "$SIGN4" "$SIGN_PRAYER" "$SIGN_ORB_NEAR" "$SIGN_ORB_FAR"; do
     if have_file "$f"; then log "  ref ✓ $(basename "$f")"; NREF=$((NREF+1)); else log "  ref ✗ MISSING $f"; MISS=1; fi
   done
   [ "$MISS" -eq 0 ] || fail "USE_CONTROL=1 needs the reference images (set SIGN_DIR= or the individual SIGN* vars)"
-  log "control ok ($NREF refs via $KF_CN @ strength $CONTROL_STRENGTH)"
+  log "control ok ($NREF refs via $KF_CN, pre=$CONTROL_PRE @ strength $CONTROL_STRENGTH, end $CONTROL_END)"
 fi
 log "inputs ok"
 echo "✅ preflight passed"
@@ -310,7 +323,7 @@ anchor_edit(){ # <src-image> <name> <pose-extra> [control-ref]  → writes $SAGA
   # combine with reference control: the edit is pulled toward the reference pose
   # (canny→Union Promax) while inheriting identity/framing from the source ($src).
   if [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ]; then
-    a+=(-c "$ctrl" --control-pre canny --control-strength "$CONTROL_STRENGTH" --control-end "$CONTROL_END" --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
+    a+=(-c "$ctrl" --control-pre "$CONTROL_PRE" --control-strength "$CONTROL_STRENGTH" --control-end "$CONTROL_END" --union-type "$CONTROL_UNION")
     log "  edit $name (from $(basename "$src") + ref: $(basename "$ctrl") @ $CONTROL_STRENGTH → denoise $CHAIN_DENOISE)"
   else
     log "  edit $name (from $(basename "$src") → denoise $CHAIN_DENOISE)"
@@ -333,7 +346,7 @@ gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.pn
     # identity via the trained LoRA + trigger (no IP-Adapter pose prior)
     local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -n "$NEG" -p "$BASE, $extra")
     [ -n "$CFG" ] && args+=(--cfg "$CFG")
-    [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre canny --control-strength "$CONTROL_STRENGTH" --control-end "$CONTROL_END" --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
+    [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre "$CONTROL_PRE" --control-strength "$CONTROL_STRENGTH" --control-end "$CONTROL_END" --union-type "$CONTROL_UNION")
     if [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ]; then log "  gen $name (ref: $(basename "$ctrl") @ $CONTROL_STRENGTH)"; else log "  gen $name"; fi
     "$KF" "${args[@]}" || fail "keyframe $name failed"
   fi

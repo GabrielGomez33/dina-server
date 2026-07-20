@@ -72,12 +72,17 @@ if [ -n "$LORA" ]; then MODEL='["40",0]'; CLIP='["40",1]'; else MODEL='["1",0]';
 # optional ControlNet: force structure from a reference image while editing. Positive/
 # negative are routed through ControlNetApplyAdvanced (nodes 20-24), else straight from
 # the CLIP encoders. Mirrors saga-keyframe's control subgraph so both paths behave identically.
-CTRL_NAME=""; KPOS='["5",0]'; KNEG='["6",0]'; CANNY_NODE=""; UNION_NODE=""
+CTRL_NAME=""; KPOS='["5",0]'; KNEG='["6",0]'; PRE_NODE=""; UNION_NODE=""
 if [ -n "$CONTROL" ]; then
   CTRL_NAME=$(upload "$CONTROL")
+  # preprocessor: canny = trace ALL edges (imports background+texture+realism);
+  # openpose/dwpose = extract only the body/hand SKELETON (pose only, nothing else);
+  # none = feed the control image raw. Mirrors saga-keyframe.
   case "$CPRE" in
-    none) PRE_SRC='["20",0]';;
-    *)    PRE_SRC='["21",0]'; CANNY_NODE="\"21\":{\"class_type\":\"Canny\",\"inputs\":{\"image\":[\"20\",0],\"low_threshold\":0.2,\"high_threshold\":0.5}},";;
+    none)     PRE_SRC='["20",0]';;
+    canny)    PRE_SRC='["21",0]'; PRE_NODE="\"21\":{\"class_type\":\"Canny\",\"inputs\":{\"image\":[\"20\",0],\"low_threshold\":0.2,\"high_threshold\":0.5}},";;
+    openpose) PRE_SRC='["21",0]'; PRE_NODE="\"21\":{\"class_type\":\"OpenposePreprocessor\",\"inputs\":{\"image\":[\"20\",0],\"detect_hand\":\"enable\",\"detect_body\":\"enable\",\"detect_face\":\"disable\",\"resolution\":768}},";;
+    *)        PRE_SRC='["21",0]'; PRE_NODE="\"21\":{\"class_type\":\"DWPreprocessor\",\"inputs\":{\"image\":[\"20\",0],\"detect_hand\":\"enable\",\"detect_body\":\"enable\",\"detect_face\":\"disable\",\"resolution\":768}},";;
   esac
   if [ "$UTYPE" = "none" ]; then CNSRC='["22",0]'; else CNSRC='["24",0]'; UNION_NODE="\"24\":{\"class_type\":\"SetUnionControlNetType\",\"inputs\":{\"control_net\":[\"22\",0],\"type\":\"$UTYPE\"}},"; fi
   KPOS='["23",0]'; KNEG='["23",1]'
@@ -100,7 +105,7 @@ cat <<JSON
 JSON
 [ -n "$CONTROL" ] && cat <<JSON
  "20":{"class_type":"LoadImage","inputs":{"image":"$CTRL_NAME"}},
- $CANNY_NODE
+ $PRE_NODE
  "22":{"class_type":"ControlNetLoader","inputs":{"control_net_name":"$CN"}},
  $UNION_NODE
  "23":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["5",0],"negative":["6",0],"control_net":$CNSRC,"image":$PRE_SRC,"strength":$CSTR,"start_percent":0.0,"end_percent":$CEND,"vae":["1",2]}},
