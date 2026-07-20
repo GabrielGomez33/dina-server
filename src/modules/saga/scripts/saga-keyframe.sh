@@ -48,7 +48,7 @@ CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"
 
 OUT="saga_kf"; SEED=0; W=1280; H=704; STEPS=28; CFG=5.5
 PROMPT=""; NEG="lowres, worst quality, blurry, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, extra limbs, extra arms, multiple people, 2boys, text, watermark, signature"
-REF=""; CONTROL=""; CPRE="canny"; CSTR=0.8; IPW=0.65; UTYPE="auto"
+REF=""; CONTROL=""; CPRE="canny"; CSTR=0.8; CEND=0.9; IPW=0.65; UTYPE="auto"
 LORA=""; LORAW=0.85; TRIGGER=""
 
 die(){ echo "❌ $*" >&2; exit 1; }
@@ -65,6 +65,7 @@ while [ $# -gt 0 ]; do case "$1" in
   -c|--control) CONTROL="$2"; shift 2;;
   --control-pre) CPRE="$2"; shift 2;;
   --control-strength) CSTR="$2"; shift 2;;
+  --control-end) CEND="$2"; shift 2;;
   --union-type) UTYPE="$2"; shift 2;;
   --ip-weight) IPW="$2"; shift 2;;
   --lora) LORA="$2"; shift 2;;
@@ -187,7 +188,7 @@ if [ -n "$CTRL_NAME" ]; then
 cat <<JSON
  "20":{"class_type":"LoadImage","inputs":{"image":"$CTRL_NAME"}},
  "22":{"class_type":"ControlNetLoader","inputs":{"control_net_name":"$CN"}},
- "23":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["2",0],"negative":["3",0],"control_net":$CNSRC,"image":$PRE_SRC,"strength":$CSTR,"start_percent":0.0,"end_percent":0.9,"vae":["1",2]}},
+ "23":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["2",0],"negative":["3",0],"control_net":$CNSRC,"image":$PRE_SRC,"strength":$CSTR,"start_percent":0.0,"end_percent":$CEND,"vae":["1",2]}},
 JSON
   POS='["23",0]'; NEGC='["23",1]'
 else

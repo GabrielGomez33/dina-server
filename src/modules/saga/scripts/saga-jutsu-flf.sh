@@ -105,6 +105,9 @@ NEG="${NEG:-lowres, worst quality, blurry, deformed, bad anatomy, bad hands, ext
 # achieve. Requires --independent (anchor mode's img2img edit can't route ControlNet).
 USE_CONTROL="${USE_CONTROL:-0}"
 CONTROL_STRENGTH="${CONTROL_STRENGTH:-0.85}"   # ControlNet pose-forcing strength 0..1; lower lets the LoRA/prompt breathe
+CONTROL_END="${CONTROL_END:-0.9}"              # fraction of denoising control stays ON; LOWER (~0.5) locks the hand pose
+                                               # early then RELEASES so the prompt reasserts background/style/face (kills
+                                               # the reference's background bleed + softness). 0.9 = control on almost throughout.
 export KF_CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"   # union controlnet
 export EDIT_CN="$KF_CN"   # saga-edit (anchor edits) uses the SAME controlnet model preflight validates
 # Hand-pose REFERENCE images (anime-ified, curated one-per-sign). ControlNet uses only
@@ -293,7 +296,7 @@ anchor_edit(){ # <name> <pose-extra> [control-ref]  → writes $SAGA_ROOT/tmp/<n
   # combine with reference control: the anchor edit is pulled toward the reference pose
   # (canny→Union Promax) while inheriting identity/framing from the clean anchor.
   if [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ]; then
-    a+=(-c "$ctrl" --control-pre canny --control-strength "$CONTROL_STRENGTH" --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
+    a+=(-c "$ctrl" --control-pre canny --control-strength "$CONTROL_STRENGTH" --control-end "$CONTROL_END" --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
     log "  edit $name (anchor + ref: $(basename "$ctrl") @ $CONTROL_STRENGTH → denoise $CHAIN_DENOISE)"
   else
     log "  edit $name (anchor: $(basename "$ANCHOR") → denoise $CHAIN_DENOISE)"
@@ -316,7 +319,7 @@ gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.pn
     # identity via the trained LoRA + trigger (no IP-Adapter pose prior)
     local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -n "$NEG" -p "$BASE, $extra")
     [ -n "$CFG" ] && args+=(--cfg "$CFG")
-    [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre canny --control-strength "$CONTROL_STRENGTH" --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
+    [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre canny --control-strength "$CONTROL_STRENGTH" --control-end "$CONTROL_END" --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
     if [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ]; then log "  gen $name (ref: $(basename "$ctrl") @ $CONTROL_STRENGTH)"; else log "  gen $name"; fi
     "$KF" "${args[@]}" || fail "keyframe $name failed"
   fi
