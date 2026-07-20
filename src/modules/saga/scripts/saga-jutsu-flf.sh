@@ -25,7 +25,8 @@
 #
 # Usage:
 #   LORA=exodia.safetensors TRIGGER=exodia_saga ./saga-jutsu-flf.sh
-#   (add USE_CONTROL=1 + SEAL1..SEAL5=... to force seal poses via ControlNet)
+#   (add USE_CONTROL=1 + SIGN_TIGER/SIGN_RAM/SIGN_BOAR/SIGN_DRAGON=<ref.png> to force
+#    the hand signs from reference images via ControlNet — needs --independent)
 #   Identity source (keyframes):  IDENTITY=lora (default) | instantid
 #     LoRA-only:   LORA=animegabriel.safetensors TRIGGER=animegabriel LORAW=1.6 CFG=2.0 ./saga-jutsu-flf.sh
 #     InstantID:   IDENTITY=instantid FACE=/path/to/face.png LORA=animegabriel.safetensors TRIGGER=animegabriel ./saga-jutsu-flf.sh
@@ -96,12 +97,20 @@ INTERPOLATE="${INTERPOLATE:-0}"     # 1 = interpolate to POLISH_FPS. OFF by defa
 # animals as an intentional effect? Drop the animal words from NEG and add them
 # to a keyframe's prompt.)
 NEG="${NEG:-lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, elongated fingers, extra limbs, extra arms, twisted arms, sideways arms, elongated arms, bent broken wrists, disconnected limbs, floating hands, boar, dragon, ram, serpent, tiger, snake, animal, creature, monster, mask, face covering, hood, helmet, white eyes, blank white eyes, solid white eyes, no pupils, rolled-back eyes, glowing eyes, blue eyes, green eyes, heterochromia, 1girl, woman, female, text, watermark, signature}"
-USE_CONTROL="${USE_CONTROL:-0}"     # 1 = force seals via ControlNet from the crops below
-SEAL1="${SEAL1:-$SAGA_ROOT/tmp/seal_tiger.png}"
-SEAL2="${SEAL2:-$SAGA_ROOT/tmp/seal_serpent.png}"
-SEAL3="${SEAL3:-$SAGA_ROOT/tmp/seal_dragon.png}"
-SEAL4="${SEAL4:-$SAGA_ROOT/tmp/seal_ram.png}"
-SEAL5="${SEAL5:-$SAGA_ROOT/tmp/seal_boar.png}"
+# ── Hand-sign REFERENCE control (prompt + reference, combined) ──────────────
+# USE_CONTROL=1 forces each of the 4 hand signs to match a REFERENCE image via
+# ControlNet (canny → Union Promax), while the LoRA supplies identity and the prompt
+# supplies everything else. This is the fix for finger geometry that words alone can't
+# achieve. Requires --independent (anchor mode's img2img edit can't route ControlNet).
+USE_CONTROL="${USE_CONTROL:-0}"
+CONTROL_STRENGTH="${CONTROL_STRENGTH:-0.85}"   # ControlNet pose-forcing strength 0..1; lower lets the LoRA/prompt breathe
+export KF_CN="${KF_CN:-controlnet-union-sdxl-promax.safetensors}"   # union controlnet (saga-keyframe reads this)
+# Anime-ified hand-sign reference images, one per sign (point these at your curated
+# refs). Only the 4 SIGNS use control; prayer + the 3 orb beats stay prompt-only.
+SIGN_TIGER="${SIGN_TIGER:-$SAGA_ROOT/tmp/sign_tiger.png}"
+SIGN_RAM="${SIGN_RAM:-$SAGA_ROOT/tmp/sign_ram.png}"
+SIGN_BOAR="${SIGN_BOAR:-$SAGA_ROOT/tmp/sign_boar.png}"
+SIGN_DRAGON="${SIGN_DRAGON:-$SAGA_ROOT/tmp/sign_dragon.png}"
 SEED="${SEED:-777}"; W="${W:-1280}"; H="${H:-704}"; FPS="${FPS:-16}"
 
 # confirmed installed filenames (audit 2026-07-18); saga-flf.sh reads these via env
@@ -218,11 +227,16 @@ if [ "$POLISH" -eq 1 ]; then
 fi
 
 if [ "$USE_CONTROL" -eq 1 ]; then
+  # control routes through gen_kf (independent path); anchor's img2img edit can't apply it.
+  [ "$KEYFRAME_MODE" = "independent" ] || fail "USE_CONTROL=1 requires --independent (anchor mode can't apply ControlNet to K2–K8)"
+  for n in ControlNetLoader ControlNetApplyAdvanced Canny SetUnionControlNetType; do need_node "$n"; done
+  have_model "$KF_CN" || fail "ControlNet model missing under models/: $KF_CN (set KF_CN= or run USE_CONTROL=0)"
   MISS=0
-  for f in "$SEAL1" "$SEAL2" "$SEAL3" "$SEAL4" "$SEAL5"; do
-    if have_file "$f"; then log "  seal ✓ $f"; else log "  seal ✗ MISSING $f"; MISS=1; fi
+  for f in "$SIGN_TIGER" "$SIGN_RAM" "$SIGN_BOAR" "$SIGN_DRAGON"; do
+    if have_file "$f"; then log "  sign ✓ $(basename "$f")"; else log "  sign ✗ MISSING $f"; MISS=1; fi
   done
-  [ "$MISS" -eq 0 ] || fail "USE_CONTROL=1 needs the 5 seal crops (set SEAL1..SEAL5)"
+  [ "$MISS" -eq 0 ] || fail "USE_CONTROL=1 needs the 4 hand-sign refs (set SIGN_TIGER/SIGN_RAM/SIGN_BOAR/SIGN_DRAGON)"
+  log "control ok (4 signs via $KF_CN @ strength $CONTROL_STRENGTH)"
 fi
 log "inputs ok"
 echo "✅ preflight passed"
@@ -286,8 +300,8 @@ gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.pn
     # identity via the trained LoRA + trigger (no IP-Adapter pose prior)
     local args=(-o "$name" -s "$SEED" -W "$W" -H "$H" --lora "$LORA" --lora-weight "$LORAW" --trigger "$TRIGGER" -n "$NEG" -p "$BASE, $extra")
     [ -n "$CFG" ] && args+=(--cfg "$CFG")
-    [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre canny --control-strength 0.85 --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
-    log "  gen $name ${ctrl:+${USE_CONTROL:+(control: $(basename "$ctrl"))}}"
+    [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ] && args+=(-c "$ctrl" --control-pre canny --control-strength "$CONTROL_STRENGTH" --union-type "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}")
+    if [ "$USE_CONTROL" -eq 1 ] && [ -n "$ctrl" ]; then log "  gen $name (ref: $(basename "$ctrl") @ $CONTROL_STRENGTH)"; else log "  gen $name"; fi
     "$KF" "${args[@]}" || fail "keyframe $name failed"
   fi
   # HAND FIX (in place, before FLF) — shared with anchor mode.
@@ -324,9 +338,9 @@ KF_POSE=(
   # K8 ORB APEX — hands at shoulder width, orb erupts vivid multicolor
   "both arms extended so the open hands are held apart at shoulder width, palms facing a large radiant sphere of energy between them, the orb glowing intensely with vivid swirling multicolored light, brilliant, powerful, rays of light"
 )
-# ControlNet crops matched to the sign order (tiger, ram, boar, dragon); only used when
-# USE_CONTROL=1. SEAL1=tiger SEAL4=ram SEAL5=boar SEAL3=dragon (see SEAL* defaults).
-KF_CTRL=( "$SEAL1" "$SEAL4" "$SEAL5" "$SEAL3" "" "" "" "" )
+# Reference images matched to the sign order (tiger, ram, boar, dragon); only used when
+# USE_CONTROL=1. Prayer + the 3 orb beats have no reference (prompt-only).
+KF_CTRL=( "$SIGN_TIGER" "$SIGN_RAM" "$SIGN_BOAR" "$SIGN_DRAGON" "" "" "" "" )
 
 if [ "$KEYFRAME_MODE" = "anchor" ]; then
   # ANCHOR-CHAIN: K1 via the full generator (identity + pose + hand-fix), then every
