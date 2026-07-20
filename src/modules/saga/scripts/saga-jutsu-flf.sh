@@ -371,27 +371,21 @@ KF_POSE=(
   # K8 ORB APEX — hands at shoulder width, orb erupts vivid multicolor
   "both arms extended so the open hands are held apart at shoulder width, palms facing a large radiant sphere of energy between them, the orb glowing intensely with vivid swirling multicolored light, brilliant, powerful, rays of light"
 )
-# Which keyframes are pure hand SIGNS (shape fully owned by the reference → genericize the
-# prompt). Prayer/orb beats are 0: their reference forces the HAND POSITION but the prompt
-# must still describe the orb/energy the reference doesn't contain.
-KF_SIGN=( 1 1 1 1 0 0 0 0 )
 # References matched to the sequence: ram, boar, dragon, serpent, prayer, orb-near,
 # orb-far; K8 (apex) is prompt-only. Only used when USE_CONTROL=1.
 KF_CTRL=( "$SIGN1" "$SIGN2" "$SIGN3" "$SIGN4" "$SIGN_PRAYER" "$SIGN_ORB_NEAR" "$SIGN_ORB_FAR" "" )
 
-# EFFECTIVE pose text, reference-aware. When a ControlNet reference will drive the hand
-# SHAPE, we do NOT also describe the geometry in words: the model has no concept of a
-# named "seal" (it maps ram/boar/dragon/tiger to the ANIMAL), and verbose geometry can
-# CONFLICT with whatever reference the user supplies. So a referenced sign gets a neutral
-# "forming a hand sign" and the reference is the sole authority on shape. Prompt-only
-# keyframes (no reference — e.g. the orb beats) keep their full geometric description.
-SIGN_GENERIC="both hands raised together in front of the chest forming a hand sign, fingers together"
-pose_for(){ # <i> → the pose text keyframe i should actually be generated with
-  local i="$1"
-  # genericize ONLY a pure sign that has a reference (shape fully owned by the ref).
-  # Prayer/orb beats keep their full text — the ref sets the hands, the text sets the orb.
-  if [ "$USE_CONTROL" -eq 1 ] && [ -n "${KF_CTRL[$i]}" ] && [ "${KF_SIGN[$i]}" -eq 1 ]; then echo "$SIGN_GENERIC"; else echo "${KF_POSE[$i]}"; fi
-}
+# EFFECTIVE pose text. ALWAYS the specific geometric description (never a generic
+# "forming a hand sign"). Two reasons this must stay specific:
+#   1. It DIFFERENTIATES the keyframes — a shared generic prompt makes all 4 signs
+#      identical, so they collapse to the same pose.
+#   2. It HOLDS the seal through the CONTROL_END release — once ControlNet lets go
+#      (second half of denoising), the prompt is the only thing describing the pose;
+#      if it's generic, the model draws a generic sign. The specific text keeps the
+#      correct seal while the anime style repaints it.
+# It is pure GEOMETRY (finger positions) with no animal/seal names, so it can't summon
+# animals and it reinforces (never fights) the matching reference.
+pose_for(){ echo "${KF_POSE[$1]}"; }
 
 if [ "$KEYFRAME_MODE" = "anchor" ]; then
   # ANCHOR-CHAIN: K1 via the full generator (identity + pose + hand-fix), then every
@@ -444,10 +438,12 @@ flf(){ # <name> <first> <last> <frames> <motion-prompt>  → writes $SAGA_ROOT/t
 CONT="the same man stays centered in frame, the camera is completely static, one continuous shot, smooth slow deliberate motion, consistent lighting"
 declare -a CLIPS
 [ "$HOLD1" -gt 0 ] && { hold "$K1" "$HOLD1" "$WORK/s00_hold1.mp4";                 CLIPS+=( "$WORK/s00_hold1.mp4" ); }
-flf s01 "$K1" "$K2" 40 "the man's hands smoothly shift from one hand sign to the next, the fingers rearrange from two fingers raised to a single pointed finger, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s01.mp4" )
-flf s02 "$K2" "$K3" 40 "the man's hands smoothly shift to the next hand sign, moving down and turning so the knuckles press together, the fingers rearrange, $CONT";       CLIPS+=( "$SAGA_ROOT/tmp/s02.mp4" )
-flf s03 "$K3" "$K4" 40 "the man's hands smoothly shift to the next hand sign, rising back up as the fingers interlock into a woven cage, $CONT";                          CLIPS+=( "$SAGA_ROOT/tmp/s03.mp4" )
-flf s04 "$K4" "$K5" 40 "the man brings both hands together into a flat prayer position at the center of his chest, palms pressing together, $CONT";                        CLIPS+=( "$SAGA_ROOT/tmp/s04.mp4" )
+# Seal→seal transitions: describe the CHANGE, not specific finger counts (the two
+# keyframe images define the exact start/end pose; over-specifying fingers forces errors).
+flf s01 "$K1" "$K2" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s01.mp4" )
+flf s02 "$K2" "$K3" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s02.mp4" )
+flf s03 "$K3" "$K4" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s03.mp4" )
+flf s04 "$K4" "$K5" 40 "the man brings both hands together into a flat prayer position at the center of his chest, palms pressing together, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s04.mp4" )
 flf s05 "$K5" "$K6" 40 "the man's pressed palms begin to separate slightly and a small bright orb of glowing light appears in the gap between them, $CONT";                CLIPS+=( "$SAGA_ROOT/tmp/s05.mp4" )
 [ "$HOLD6" -gt 0 ] && { hold "$K6" "$HOLD6" "$WORK/s06_hold6.mp4";                 CLIPS+=( "$WORK/s06_hold6.mp4" ); }
 flf s07 "$K6" "$K7" 40 "the man's hands draw further apart and the glowing orb of light between his palms grows larger and brighter as the hands separate, $CONT";        CLIPS+=( "$SAGA_ROOT/tmp/s07.mp4" )
