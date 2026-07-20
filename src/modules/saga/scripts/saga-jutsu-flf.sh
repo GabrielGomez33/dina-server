@@ -80,11 +80,13 @@ CHAIN_DENOISE="${CHAIN_DENOISE:-0.55}"
 OUTFIT="${OUTFIT:-wearing a plain white short-sleeve shirt}"
 POLISH_FPS="${POLISH_FPS:-32}"      # STEP 4 interpolation target fps
 UPSCALE_MODE="${UPSCALE_MODE:-esrgan}"   # esrgan (crisp cel lines) | lanczos (soft/painterly — matches a low-CFG look)
-EYES="${EYES:-brown eyes}"          # PINNED eye color across ALL keyframes (prevents eye-color drift)
+EYES="${EYES:-dark brown eyes, clearly visible round irises and pupils, sharp detailed eyes}"   # PINNED — explicit irises/pupils fight the blown-out "white eyes" failure
 GROOMING="${GROOMING:-buzz cut, very short hair, short trimmed beard}"   # PINNED hair/beard across keyframes
-# Visual style for keyframes — default leans rough/analog anime (Serial Experiments
-# Lain-ish): grainy, muted, hand-drawn — counters the smooth "3D" render look.
-STYLE="${STYLE:-retro 1990s anime, cel animation, rough sketchy linework, grainy, muted desaturated colors, film grain, hand-drawn, flat colors, 2d}"
+# Visual style for keyframes — CLEAN generation. Roughness/grain/analog-Lain look is
+# applied ONCE in post (GRADE=lain-bloom), never here: grain baked into generation
+# muddies the linework and shows up as speckled artifacts on skin/arms. Clean in →
+# detailer gets clean hands → grade adds the aesthetic on top.
+STYLE="${STYLE:-anime, cel shading, clean detailed lineart, flat colors, sharp focus, 2d}"
 GRADE="${GRADE:-lain}"              # none | grain | lain — post grade; also UNIFIES color across FLF segments (reduces visible seams)
 INTERPOLATE="${INTERPOLATE:-0}"     # 1 = interpolate to POLISH_FPS. OFF by default: minterpolate ghosts fast motion (the trailing light-rays)
 # Shared negative fed to EVERY keyframe AND the hand-fixer. Guards the recurring
@@ -93,7 +95,7 @@ INTERPOLATE="${INTERPOLATE:-0}"     # 1 = interpolate to POLISH_FPS. OFF by defa
 # Extend/override per scene or character via NEG=.  (Want the ghostly seal-spirit
 # animals as an intentional effect? Drop the animal words from NEG and add them
 # to a keyframe's prompt.)
-NEG="${NEG:-lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, extra limbs, extra arms, boar, dragon, ram, serpent, tiger, snake, animal, creature, monster, mask, face covering, hood, helmet, blue eyes, green eyes, glowing eyes, heterochromia, 1girl, woman, female, text, watermark, signature}"
+NEG="${NEG:-lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, missing fingers, mutated hands, malformed hands, elongated fingers, extra limbs, extra arms, twisted arms, sideways arms, elongated arms, bent broken wrists, disconnected limbs, floating hands, boar, dragon, ram, serpent, tiger, snake, animal, creature, monster, mask, face covering, hood, helmet, white eyes, blank white eyes, solid white eyes, no pupils, rolled-back eyes, glowing eyes, blue eyes, green eyes, heterochromia, 1girl, woman, female, text, watermark, signature}"
 USE_CONTROL="${USE_CONTROL:-0}"     # 1 = force seals via ControlNet from the crops below
 SEAL1="${SEAL1:-$SAGA_ROOT/tmp/seal_tiger.png}"
 SEAL2="${SEAL2:-$SAGA_ROOT/tmp/seal_serpent.png}"
@@ -130,7 +132,15 @@ frames_of(){ command -v ffprobe >/dev/null && ffprobe -v error -count_frames -se
 # BASE is just style + scene so the trigger isn't diluted.
 # Consistent framing/composition tags reduce inter-keyframe variance, so the FLF
 # segments read as one continuous scene instead of jump-cuts.
-BASE="solo, $GROOMING, $OUTFIT, $EYES, $STYLE, medium shot, centered composition, consistent framing, eye level, dark background, embers, dramatic lighting"
+# NOTE on lighting: the previous "dark background, embers, dramatic lighting" cast a
+# hard top-light that blew the eyes out solid white. Replaced with soft, even frontal
+# light + explicit face/eye visibility so the brown irises actually render. "1man"
+# anchors the correct sex (Animagine biases 1girl). "both hands visible … in front of
+# the chest" keeps the seal hands framed and stops the sideways/cut-off arms.
+# Arm/hand POSTURE is owned by each pose string (seals = forearms vertical; orb apex =
+# arms extended wide), so BASE only pins framing/identity/lighting — otherwise a bent-
+# arms pin in BASE would fight the shoulder-width orb finale.
+BASE="solo, 1man, adult man, $GROOMING, $OUTFIT, $EYES, detailed face, both eyes open looking forward, $STYLE, upper body medium shot from the waist up, both hands visible in frame, centered composition, consistent framing, eye level, plain dark muted background, soft even frontal lighting"
 
 echo "════════════════════════════════════════════════════"
 echo " SAGA — 20s JUTSU (keyframe/FLF)   seed=$SEED  ${W}x${H}@${FPS}fps"
@@ -291,17 +301,32 @@ gen_kf(){ # <name> <prompt-extra> [control]  → writes $SAGA_ROOT/tmp/<name>.pn
 # script never diverges between anchor and independent generation.
 declare -a KF_NAME KF_POSE KF_CTRL
 KF_NAME=( jutsu_k1 jutsu_k2 jutsu_k3 jutsu_k4 jutsu_k5 jutsu_k6 jutsu_k7 jutsu_k8 )
+# THE SEQUENCE (per the brief): 4 hand signs (tiger, ram, boar, dragon) → prayer →
+# orb of light grows as the hands separate → at shoulder width the orb boosts into
+# vivid multicolor energy. Each seal is described GEOMETRICALLY and DISTINCTLY (no
+# animal names — those summon the animal) so the four signs read as four different
+# hand shapes, not four copies of the same steeple.
 KF_POSE=(
-  "both hands forming a ninja hand seal, fingers interlocked in front of chest, intense focus"                       # tiger
-  "both hands forming a ninja hand seal, hands clasped together, fingers laced"                                      # serpent
-  "both hands forming a ninja hand seal, palms together, fingers crossed"                                            # dragon
-  "both hands forming a ninja hand seal, both index fingers raised and pressed together, remaining fingers folded"   # ram
-  "both hands forming a ninja hand seal, fists pressed together, knuckles touching"                                  # boar
-  "both hands pressed flat together in prayer position at center, gathering purple energy, faint glow between the palms"
-  "hands slightly apart, a small swirling purple energy orb forming between the palms, rasengan, glowing"
-  "hands held wide apart, a large swirling purple energy sphere between the palms, rasengan, crackling purple lightning, energy flowing, radiant glow"
+  # K1 TIGER — palms together, index+middle of BOTH hands extended straight up
+  "both hands raised together in front of the chest, palms pressed flat together, the index and middle fingers of both hands extended straight upward and pressed together, the remaining fingers curled and interlocked, forearms vertical, focused expression"
+  # K2 RAM — hands clasped, only the two index fingers up as a single point
+  "both hands clasped together in front of the chest, only the two index fingers extended straight upward and pressed together into a single point, all other fingers laced together, forearms vertical"
+  # K3 BOAR — hands back-to-back low, knuckles pressed, wrists bent down
+  "both hands together in front of the stomach, backs of the hands facing outward, fingers curled inward with the knuckles pressed together, wrists bent downward, forearms angled down"
+  # K4 DRAGON — fingers fully interlocked into an upward woven cage
+  "both hands in front of the chest, fingers fully interlocked with the fingertips pointing upward forming a woven cage shape, thumbs crossed at the base, forearms vertical"
+  # K5 PRAYER — flat palm-to-palm at center of chest
+  "both hands pressed flat together palm to palm in a prayer position at the center of the chest, fingers straight and together pointing upward, forearms vertical, calm focused expression"
+  # K6 ORB FORMING — hands part slightly, small bright orb appears between palms
+  "both hands a few inches apart at the center of the chest, palms facing each other, a small bright glowing sphere of white-blue light beginning to form in the gap between the open palms"
+  # K7 ORB GROWING — hands wider, larger swirling orb
+  "both hands held further apart at chest height, palms open and facing each other, a larger bright glowing sphere of swirling light suspended in the space between the palms"
+  # K8 ORB APEX — hands at shoulder width, orb erupts vivid multicolor
+  "both arms extended so the open hands are held apart at shoulder width, palms facing a large radiant sphere of energy between them, the orb glowing intensely with vivid swirling multicolored light, brilliant, powerful, rays of light"
 )
-KF_CTRL=( "$SEAL1" "$SEAL2" "$SEAL3" "$SEAL4" "$SEAL5" "" "" "" )   # ControlNet crops (seals only)
+# ControlNet crops matched to the sign order (tiger, ram, boar, dragon); only used when
+# USE_CONTROL=1. SEAL1=tiger SEAL4=ram SEAL5=boar SEAL3=dragon (see SEAL* defaults).
+KF_CTRL=( "$SEAL1" "$SEAL4" "$SEAL5" "$SEAL3" "" "" "" "" )
 
 if [ "$KEYFRAME_MODE" = "anchor" ]; then
   # ANCHOR-CHAIN: K1 via the full generator (identity + pose + hand-fix), then every
@@ -342,17 +367,19 @@ flf(){ # <name> <first> <last> <frames> <motion-prompt>  → writes $SAGA_ROOT/t
   log "  flf $name  ${n}f  ($(basename "$a") → $(basename "$b"))"
   "$FLF" -o "$name" -a "$a" -b "$b" -L "$n" --fps "$FPS" -W "$W" -H "$H" -s "$SEED" -p "$mp" || fail "flf $name failed"
 }
-SEAL_MOTION="both hands smoothly change to the next ninja hand seal, precise finger movement"
+# Shared continuity suffix on EVERY motion prompt: the camera never moves and it's one
+# continuous take, so Wan doesn't invent pans/zooms/cuts (the "movements not asked for").
+CONT="the same man stays centered in frame, the camera is completely static, one continuous shot, smooth slow deliberate motion, consistent lighting"
 declare -a CLIPS
 hold "$K1" 8  "$WORK/s00_hold1.mp4";                                              CLIPS+=( "$WORK/s00_hold1.mp4" )
-flf s01 "$K1" "$K2" 40 "$SEAL_MOTION";                                            CLIPS+=( "$SAGA_ROOT/tmp/s01.mp4" )
-flf s02 "$K2" "$K3" 40 "$SEAL_MOTION";                                            CLIPS+=( "$SAGA_ROOT/tmp/s02.mp4" )
-flf s03 "$K3" "$K4" 40 "$SEAL_MOTION";                                            CLIPS+=( "$SAGA_ROOT/tmp/s03.mp4" )
-flf s04 "$K4" "$K5" 40 "$SEAL_MOTION";                                            CLIPS+=( "$SAGA_ROOT/tmp/s04.mp4" )
-flf s05 "$K5" "$K6" 40 "both hands come together into prayer position, energy gathering at the center"; CLIPS+=( "$SAGA_ROOT/tmp/s05.mp4" )
+flf s01 "$K1" "$K2" 40 "the man's hands smoothly shift from one hand sign to the next, the fingers rearrange from two fingers raised to a single pointed finger, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s01.mp4" )
+flf s02 "$K2" "$K3" 40 "the man's hands smoothly shift to the next hand sign, moving down and turning so the knuckles press together, the fingers rearrange, $CONT";       CLIPS+=( "$SAGA_ROOT/tmp/s02.mp4" )
+flf s03 "$K3" "$K4" 40 "the man's hands smoothly shift to the next hand sign, rising back up as the fingers interlock into a woven cage, $CONT";                          CLIPS+=( "$SAGA_ROOT/tmp/s03.mp4" )
+flf s04 "$K4" "$K5" 40 "the man brings both hands together into a flat prayer position at the center of his chest, palms pressing together, $CONT";                        CLIPS+=( "$SAGA_ROOT/tmp/s04.mp4" )
+flf s05 "$K5" "$K6" 40 "the man's pressed palms begin to separate slightly and a small bright orb of glowing light appears in the gap between them, $CONT";                CLIPS+=( "$SAGA_ROOT/tmp/s05.mp4" )
 hold "$K6" 16 "$WORK/s06_hold6.mp4";                                              CLIPS+=( "$WORK/s06_hold6.mp4" )
-flf s07 "$K6" "$K7" 40 "the hands separate, a purple energy orb forms and swirls between the palms"; CLIPS+=( "$SAGA_ROOT/tmp/s07.mp4" )
-flf s08 "$K7" "$K8" 48 "the purple energy orb grows larger, swirling and flowing with crackling energy, radiant"; CLIPS+=( "$SAGA_ROOT/tmp/s08.mp4" )
+flf s07 "$K6" "$K7" 40 "the man's hands draw further apart and the glowing orb of light between his palms grows larger and brighter as the hands separate, $CONT";        CLIPS+=( "$SAGA_ROOT/tmp/s07.mp4" )
+flf s08 "$K7" "$K8" 48 "the man's arms open out to shoulder width and the orb swells to full size, erupting into vivid swirling multicolored energy, radiant and intense, rays of light, $CONT"; CLIPS+=( "$SAGA_ROOT/tmp/s08.mp4" )
 hold "$K8" 8  "$WORK/s09_hold8.mp4";                                              CLIPS+=( "$WORK/s09_hold8.mp4" )
 TOT=0
 for c in "${CLIPS[@]}"; do verify_out "$c"; f=$(frames_of "$c"); [ "$f" != "?" ] && TOT=$((TOT+f)); done
