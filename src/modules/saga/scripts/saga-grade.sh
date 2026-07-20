@@ -9,6 +9,8 @@
 #   saga-grade.sh <input.mp4> [--preset lain|lain-bloom|bloom|grain|none] [-o out.mp4]
 #     lain-bloom = the cohesive analog look: sharpen→soft-glow (Orton) + muted + grain.
 #                  The uniform glow layer masks per-segment seams → reads as one scene.
+#     lain-heavy = DIRTY degrade: strong desaturation + gamma crush + soft bloom + analog
+#                  chromatic aberration + heavy grain + vignette (max Lain, least "real").
 #     bloom = sharpen→soft-glow only (Orton effect: crisp base + blurred screen layer)
 #     lain  = desaturated, muted, contrasty + grain (Serial Experiments Lain vibe)
 #     grain = grain only, palette untouched
@@ -34,13 +36,19 @@ command -v ffmpeg >/dev/null || die "ffmpeg required"
 OUT="${OUT:-${IN%.*}_${PRESET}.mp4}"
 
 BLOOM="split=2[a][b];[a]unsharp=5:5:1.0[s];[b]gblur=sigma=6[g];[s][g]blend=all_mode=screen:all_opacity=0.35"
+# Softer, wider bloom for the heavy analog look (less crisp base, more glow).
+BLOOM_SOFT="split=2[a][b];[a]unsharp=5:5:0.7[s];[b]gblur=sigma=9[g];[s][g]blend=all_mode=screen:all_opacity=0.42"
 case "$PRESET" in
   lain-bloom) VF="${BLOOM}[bl];[bl]eq=saturation=0.72:contrast=1.08:brightness=-0.01,noise=alls=12:allf=t+u";;
+  # lain-heavy = the DIRTY analog degrade: strong desaturation + gamma crush + soft bloom
+  # + analog chromatic aberration (rgbashift) + heavy film grain + vignette. Pushes hard
+  # toward Serial Experiments Lain / degraded VHS anime, away from clean-real.
+  lain-heavy) VF="${BLOOM_SOFT}[bl];[bl]eq=saturation=0.50:contrast=1.14:brightness=-0.03:gamma=0.92,rgbashift=rh=-2:bh=2,noise=alls=26:allf=t+u,vignette=PI/5";;
   bloom)      VF="$BLOOM";;
   lain)       VF="eq=saturation=0.68:contrast=1.10:brightness=-0.015,noise=alls=14:allf=t+u";;
   grain)      VF="noise=alls=12:allf=t+u";;
   none)       cp -f "$IN" "$OUT"; echo "$OUT"; exit 0;;
-  *) die "unknown --preset: $PRESET (lain-bloom|bloom|lain|grain|none)";;
+  *) die "unknown --preset: $PRESET (lain-bloom|lain-heavy|bloom|lain|grain|none)";;
 esac
 
 echo "▶ grade $(basename "$IN") [$PRESET]" >&2

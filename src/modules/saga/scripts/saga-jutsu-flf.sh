@@ -93,11 +93,11 @@ POLISH_FPS="${POLISH_FPS:-32}"      # STEP 4 interpolation target fps
 UPSCALE_MODE="${UPSCALE_MODE:-esrgan}"   # esrgan (crisp cel lines) | lanczos (soft/painterly — matches a low-CFG look)
 EYES="${EYES:-dark brown eyes, clearly visible round irises and pupils, sharp detailed eyes}"   # PINNED — explicit irises/pupils fight the blown-out "white eyes" failure
 GROOMING="${GROOMING:-buzz cut, very short hair, short trimmed beard}"   # PINNED hair/beard across keyframes
-# Visual style for keyframes — CLEAN generation. Roughness/grain/analog-Lain look is
-# applied ONCE in post (GRADE=lain-bloom), never here: grain baked into generation
-# muddies the linework and shows up as speckled artifacts on skin/arms. Clean in →
-# detailer gets clean hands → grade adds the aesthetic on top.
-STYLE="${STYLE:-anime, cel shading, clean detailed lineart, flat colors, sharp focus, 2d}"
+# Visual style for keyframes — pushed toward rough analog anime (Serial Experiments Lain):
+# retro 90s cel look, muted/desaturated, grainy, hand-drawn, low-fi. This drives the
+# generation toward "less real, more anime"; the GRADE (lain-heavy) then degrades the whole
+# video uniformly on top. (Earlier this was clean to protect hands; the aesthetic wins.)
+STYLE="${STYLE:-retro 1990s anime screencap, cel shading, muted desaturated colors, visible film grain, rough hand-drawn linework, flat colors, 2d, moody, low fidelity, serial experiments lain style}"
 GRADE="${GRADE:-lain}"              # none | grain | lain — post grade; also UNIFIES color across FLF segments (reduces visible seams)
 INTERPOLATE="${INTERPOLATE:-0}"     # 1 = interpolate to POLISH_FPS. OFF by default: minterpolate ghosts fast motion (the trailing light-rays)
 # Assembly (STEP 3): how the segments are joined. Every seam is between two clips that
