@@ -350,20 +350,32 @@ KF_POSE=(
 # USE_CONTROL=1. Prayer + the 3 orb beats have no reference (prompt-only).
 KF_CTRL=( "$SIGN_TIGER" "$SIGN_RAM" "$SIGN_BOAR" "$SIGN_DRAGON" "" "" "" "" )
 
+# EFFECTIVE pose text, reference-aware. When a ControlNet reference will drive the hand
+# SHAPE, we do NOT also describe the geometry in words: the model has no concept of a
+# named "seal" (it maps ram/boar/dragon/tiger to the ANIMAL), and verbose geometry can
+# CONFLICT with whatever reference the user supplies. So a referenced sign gets a neutral
+# "forming a hand sign" and the reference is the sole authority on shape. Prompt-only
+# keyframes (no reference — e.g. the orb beats) keep their full geometric description.
+SIGN_GENERIC="both hands raised together in front of the chest forming a hand sign, fingers together"
+pose_for(){ # <i> → the pose text keyframe i should actually be generated with
+  local i="$1"
+  if [ "$USE_CONTROL" -eq 1 ] && [ -n "${KF_CTRL[$i]}" ]; then echo "$SIGN_GENERIC"; else echo "${KF_POSE[$i]}"; fi
+}
+
 if [ "$KEYFRAME_MODE" = "anchor" ]; then
   # ANCHOR-CHAIN: K1 via the full generator (identity + pose + hand-fix), then every
   # other keyframe is an EDIT of the clean K1 — inherit identity/outfit/framing, change
   # only the pose. Editing the same clean anchor each time = no drift accumulation.
-  gen_kf "${KF_NAME[0]}" "${KF_POSE[0]}" "${KF_CTRL[0]}"
+  gen_kf "${KF_NAME[0]}" "$(pose_for 0)" "${KF_CTRL[0]}"
   ANCHOR="$SAGA_ROOT/tmp/${KF_NAME[0]}.png"; verify_out "$ANCHOR"
   for i in 1 2 3 4 5 6 7; do
-    anchor_edit "${KF_NAME[$i]}" "${KF_POSE[$i]}" "${KF_CTRL[$i]}"
+    anchor_edit "${KF_NAME[$i]}" "$(pose_for "$i")" "${KF_CTRL[$i]}"
     verify_out "$SAGA_ROOT/tmp/${KF_NAME[$i]}.png"
   done
 else
   # INDEPENDENT: each keyframe generated from scratch (LoRA identity + pose prompt).
   for i in 0 1 2 3 4 5 6 7; do
-    gen_kf "${KF_NAME[$i]}" "${KF_POSE[$i]}" "${KF_CTRL[$i]}"
+    gen_kf "${KF_NAME[$i]}" "$(pose_for "$i")" "${KF_CTRL[$i]}"
     verify_out "$SAGA_ROOT/tmp/${KF_NAME[$i]}.png"
   done
 fi
