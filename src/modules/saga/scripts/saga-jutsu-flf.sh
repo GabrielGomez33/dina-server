@@ -147,6 +147,10 @@ SIGN4="${SIGN4:-$SIGN_DIR/anime_gabrielhandsigns_serpent_339339625_s101.png}"   
 SIGN_PRAYER="${SIGN_PRAYER:-$SIGN_DIR/anime_gabrielhandsigns_handstogether_1845580320_s202.png}"                       # K5 prayer
 SIGN_ORB_NEAR="${SIGN_ORB_NEAR:-$SIGN_DIR/anime_gabrielhandsigns_handsslightlyseperated_3_2479493325_s303.png}"        # K6 orb near
 SIGN_ORB_FAR="${SIGN_ORB_FAR:-$SIGN_DIR/anime_gabrielhandsigns_handsslightlyseperated_further_215320804_s303.png}"     # K7 orb far
+# K8 apex: no dedicated arms-wide reference exists, so reuse the widest available (orb-far)
+# so K8 is REFERENCE-ANCHORED (identity + framing come from a real ref) instead of being a
+# prompt-only generation that drifts into a stranger. Override with a true arms-wide ref.
+SIGN_ORB_APEX="${SIGN_ORB_APEX:-$SIGN_ORB_FAR}"                                                                        # K8 apex
 SEED="${SEED:-777}"; W="${W:-1280}"; H="${H:-704}"; FPS="${FPS:-16}"
 
 # confirmed installed filenames (audit 2026-07-18); saga-flf.sh reads these via env
@@ -284,7 +288,7 @@ if [ "$USE_CONTROL" -eq 1 ]; then
   esac
   have_model "$KF_CN" || fail "ControlNet model missing under models/: $KF_CN (set KF_CN= or run USE_CONTROL=0)"
   MISS=0; NREF=0
-  for f in "$SIGN1" "$SIGN2" "$SIGN3" "$SIGN4" "$SIGN_PRAYER" "$SIGN_ORB_NEAR" "$SIGN_ORB_FAR"; do
+  for f in "$SIGN1" "$SIGN2" "$SIGN3" "$SIGN4" "$SIGN_PRAYER" "$SIGN_ORB_NEAR" "$SIGN_ORB_FAR" "$SIGN_ORB_APEX"; do
     if have_file "$f"; then log "  ref ✓ $(basename "$f")"; NREF=$((NREF+1)); else log "  ref ✗ MISSING $f"; MISS=1; fi
   done
   [ "$MISS" -eq 0 ] || fail "USE_CONTROL=1 needs the reference images (set SIGN_DIR= or the individual SIGN* vars)"
@@ -394,12 +398,14 @@ KF_POSE=(
   "both hands a few inches apart at the center of the chest, palms facing each other, a small bright glowing sphere of white-blue light beginning to form in the gap between the open palms"
   # K7 ORB GROWING — hands wider, larger swirling orb
   "both hands held further apart at chest height, palms open and facing each other, a larger bright glowing sphere of swirling light suspended in the space between the palms"
-  # K8 ORB APEX — hands at shoulder width, orb erupts vivid multicolor
-  "both arms extended so the open hands are held apart at shoulder width, palms facing a large radiant sphere of energy between them, the orb glowing intensely with vivid swirling multicolored light, brilliant, powerful, rays of light"
+  # K8 ORB APEX — hands apart, big orb. Energy words TRIMMED: "radiant/brilliant/powerful/
+  # rays of light" drowned the identity trigger → generated a stranger. Keep it minimal so
+  # the LoRA identity dominates; the glow/rays are added in POST (grade), not the prompt.
+  "both hands held apart with a large glowing orb of swirling multicolored energy between the open palms"
 )
 # References matched to the sequence: ram, boar, dragon, serpent, prayer, orb-near,
-# orb-far; K8 (apex) is prompt-only. Only used when USE_CONTROL=1.
-KF_CTRL=( "$SIGN1" "$SIGN2" "$SIGN3" "$SIGN4" "$SIGN_PRAYER" "$SIGN_ORB_NEAR" "$SIGN_ORB_FAR" "" )
+# orb-far, apex. Every keyframe is now reference-anchored (K8 no longer prompt-only).
+KF_CTRL=( "$SIGN1" "$SIGN2" "$SIGN3" "$SIGN4" "$SIGN_PRAYER" "$SIGN_ORB_NEAR" "$SIGN_ORB_FAR" "$SIGN_ORB_APEX" )
 
 # EFFECTIVE pose text. ALWAYS the specific geometric description (never a generic
 # "forming a hand sign"). Two reasons this must stay specific:
