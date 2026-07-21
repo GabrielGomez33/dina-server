@@ -1,0 +1,31 @@
+# diffusion-pipe WAN 2.x video-LoRA config (template). Native identity in Wan → no drift.
+# VERIFY-LIVE: set model paths to your installed Wan files; confirm [model].type/keys against
+# the diffusion-pipe release you cloned (`examples/` in that repo is the source of truth).
+output_dir = '@OUTPUT_DIR@'
+dataset = '@DATASET_TOML@'
+
+epochs = @EPOCHS@
+micro_batch_size_per_gpu = 1
+gradient_accumulation_steps = 4
+gradient_clipping = 1.0
+warmup_steps = 100
+save_every_n_epochs = @SAVE_EVERY@
+checkpoint_every_n_minutes = 30
+blocks_to_swap = 20            # 3090 Ti (24GB): swap transformer blocks to CPU to fit; tune
+
+[model]
+type = 'wan'
+ckpt_path = '@MODEL_ROOT@/Wan2.2-T2V-A14B'      # dir with the Wan weights (set to your install)
+transformer_dtype = 'float8'                    # float8 to fit 24GB; bfloat16 if VRAM allows
+timestep_sample_method = 'logit_normal'
+
+[adapter]
+type = 'lora'
+rank = @RANK@
+dtype = 'bfloat16'
+
+[optimizer]
+type = 'adamw_optimi'
+lr = @LR@
+betas = [0.9, 0.99]
+weight_decay = 0.01

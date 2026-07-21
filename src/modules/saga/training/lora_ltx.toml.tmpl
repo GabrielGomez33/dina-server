@@ -1,0 +1,30 @@
+# diffusion-pipe LTX-VIDEO video-LoRA config (template) — used by the LTX backend.
+# VERIFY-LIVE: set model path to your installed LTXV checkpoint; confirm [model] keys against
+# the diffusion-pipe release (`examples/ltx_video.toml` there is authoritative).
+output_dir = '@OUTPUT_DIR@'
+dataset = '@DATASET_TOML@'
+
+epochs = @EPOCHS@
+micro_batch_size_per_gpu = 1
+gradient_accumulation_steps = 4
+gradient_clipping = 1.0
+warmup_steps = 100
+save_every_n_epochs = @SAVE_EVERY@
+checkpoint_every_n_minutes = 30
+
+[model]
+type = 'ltx-video'
+ckpt_path = '@MODEL_ROOT@/ltx-video-2b-v0.9.5.safetensors'   # set to your installed LTXV file
+dtype = 'bfloat16'
+# LTX is light — a 3090 Ti usually fits without block-swap; add blocks_to_swap if needed.
+
+[adapter]
+type = 'lora'
+rank = @RANK@
+dtype = 'bfloat16'
+
+[optimizer]
+type = 'adamw_optimi'
+lr = @LR@
+betas = [0.9, 0.99]
+weight_decay = 0.01

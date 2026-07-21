@@ -1,0 +1,35 @@
+# diffusion-pipe HUNYUAN-VIDEO video-LoRA config (template) — used by the FramePack backend.
+# VERIFY-LIVE: set model paths to your installed HunyuanVideo files; confirm [model] keys
+# against the diffusion-pipe release (`examples/hunyuan_video.toml` there is authoritative).
+output_dir = '@OUTPUT_DIR@'
+dataset = '@DATASET_TOML@'
+
+epochs = @EPOCHS@
+micro_batch_size_per_gpu = 1
+gradient_accumulation_steps = 4
+gradient_clipping = 1.0
+warmup_steps = 100
+save_every_n_epochs = @SAVE_EVERY@
+checkpoint_every_n_minutes = 30
+blocks_to_swap = 20            # fit 24GB by swapping blocks to CPU; tune down if VRAM allows
+
+[model]
+type = 'hunyuan-video'
+# Point these at your installed HunyuanVideo weights (the same the FramePack backend loads):
+transformer_path = '@MODEL_ROOT@/hunyuan_video_720_cfgdistill_fp8.safetensors'
+vae_path = '@MODEL_ROOT@/hunyuan_video_vae_bf16.safetensors'
+llm_path = '@MODEL_ROOT@/llava-llama-3-8b'
+clip_path = '@MODEL_ROOT@/clip-vit-large-patch14'
+dtype = 'bfloat16'
+transformer_dtype = 'float8'
+
+[adapter]
+type = 'lora'
+rank = @RANK@
+dtype = 'bfloat16'
+
+[optimizer]
+type = 'adamw_optimi'
+lr = @LR@
+betas = [0.9, 0.99]
+weight_decay = 0.01
