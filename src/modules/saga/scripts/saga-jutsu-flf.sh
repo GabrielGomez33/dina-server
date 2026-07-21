@@ -43,6 +43,8 @@
 #   --dwpose      reference control via pose SKELETON only (anime hands, no bleed) [enables control]
 #   --openpose    like --dwpose, OpenPose preprocessor                            [enables control]
 #   --canny       reference control via ALL edges of the ref (imports bg+realism)  [enables control]
+#   --cuts        seal sequence as anime CUTS (hold+hard-cut, no Wan morph → no melted
+#                 hands); orb beats still use FLF motion. Implies hard-cut assembly.
 #   --no-polish   skip STEP 4
 # ============================================================================
 set -uo pipefail
@@ -108,6 +110,12 @@ XFADE="${XFADE:-5}"                 # crossfade length in frames at each seam
 # Dwell frames on the anchor poses. LARGE holds read as "stuck doing nothing"; kept short
 # now (was 8/16/8). Set any to 0 to drop that hold entirely.
 HOLD1="${HOLD1:-4}"; HOLD6="${HOLD6:-6}"; HOLD8="${HOLD8:-8}"
+# Motion for the SEAL sequence (K1→K5): flf = Wan morphs between seals (but Wan melts hands
+# mid-morph); cuts = hold each seal + HARD CUT to the next (anime-authentic, no morph → no
+# melted hands). The ORB beats (K5→K8) always use FLF (open hands interpolate cleanly).
+# Select cuts with --cuts. HOLD_SEAL = frames each seal is held in cut mode.
+MOTION_MODE="${MOTION_MODE:-flf}"   # flf | cuts
+HOLD_SEAL="${HOLD_SEAL:-8}"
 # Shared negative fed to EVERY keyframe AND the hand-fixer. Guards the recurring
 # FAILURE CLASSES (not just this scene): hand mutations, seal-name animals bleeding
 # into the background, wrong eye colors, mask/costume drift, wrong sex, text.
@@ -167,6 +175,8 @@ while [ $# -gt 0 ]; do case "$1" in
   --dwpose) CONTROL_PRE=dwpose; USE_CONTROL=1; shift;;
   --openpose) CONTROL_PRE=openpose; USE_CONTROL=1; shift;;
   --canny) CONTROL_PRE=canny; USE_CONTROL=1; shift;;
+  # anime cuts for the seal sequence (no Wan morph → no melted hands); implies hard cuts
+  --cuts) MOTION_MODE=cuts; ASSEMBLE=concat; shift;;
   --no-polish) POLISH=0; shift;; -h|--help) sed -n '2,40p' "$0"; exit 0;;
   *) echo "unknown arg: $1"; exit 2;;
 esac; done
@@ -304,7 +314,7 @@ if [ "$CLEAN" -eq 1 ]; then
   log "clean: removing prior jutsu artifacts (keyframes, FLF segments, holds, master, polish)…"
   rm -f "$SAGA_ROOT"/tmp/jutsu_k[1-8].png 2>/dev/null
   rm -f "$SAGA_ROOT"/tmp/s0[1-8].mp4 2>/dev/null
-  rm -f "$WORK"/s0*_hold*.mp4 "$WORK"/jutsu_20s_master.mp4 "$WORK"/jutsu_2k.mp4 "$WORK"/jutsu_final.mp4 "$WORK"/concat.txt 2>/dev/null
+  rm -f "$WORK"/s0*_hold*.mp4 "$WORK"/cut_k*.mp4 "$WORK"/jutsu_20s_master.mp4 "$WORK"/jutsu_2k.mp4 "$WORK"/jutsu_graded.mp4 "$WORK"/jutsu_final.mp4 "$WORK"/concat.txt 2>/dev/null
   rm -rf "$SAGA_ROOT"/tmp/.esrgan_vid_* 2>/dev/null   # stale per-frame upscale temps from killed runs
   log "  cleaned."
 fi
@@ -469,13 +479,24 @@ flf(){ # <name> <first> <last> <frames> <motion-prompt>  → writes $SAGA_ROOT/t
 # continuous take, so Wan doesn't invent pans/zooms/cuts (the "movements not asked for").
 CONT="the same man stays centered in frame, the camera is completely static, one continuous shot, smooth slow deliberate motion, consistent lighting"
 declare -a CLIPS
-[ "$HOLD1" -gt 0 ] && { hold "$K1" "$HOLD1" "$WORK/s00_hold1.mp4";                 CLIPS+=( "$WORK/s00_hold1.mp4" ); }
-# Seal→seal transitions: describe the CHANGE, not specific finger counts (the two
-# keyframe images define the exact start/end pose; over-specifying fingers forces errors).
-flf s01 "$K1" "$K2" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s01.mp4" )
-flf s02 "$K2" "$K3" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s02.mp4" )
-flf s03 "$K3" "$K4" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s03.mp4" )
-flf s04 "$K4" "$K5" 40 "the man brings both hands together into a flat prayer position at the center of his chest, palms pressing together, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s04.mp4" )
+if [ "$MOTION_MODE" = "cuts" ]; then
+  # SEAL SEQUENCE — anime cuts: hold each seal, HARD CUT to the next. No Wan morph between
+  # seals → none of the melted/glued-finger mush. K5 (prayer) is held too, then flows into
+  # the orb FLF below.
+  log "  seal sequence: anime cuts (hold ${HOLD_SEAL}f + hard cut), K1→K5"
+  for kf in K1 K2 K3 K4 K5; do
+    hold "${!kf}" "$HOLD_SEAL" "$WORK/cut_${kf,,}.mp4";                             CLIPS+=( "$WORK/cut_${kf,,}.mp4" )
+  done
+else
+  [ "$HOLD1" -gt 0 ] && { hold "$K1" "$HOLD1" "$WORK/s00_hold1.mp4";               CLIPS+=( "$WORK/s00_hold1.mp4" ); }
+  # Seal→seal FLF transitions: describe the CHANGE, not specific finger counts (the two
+  # keyframe images define the exact start/end pose; over-specifying fingers forces errors).
+  flf s01 "$K1" "$K2" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s01.mp4" )
+  flf s02 "$K2" "$K3" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s02.mp4" )
+  flf s03 "$K3" "$K4" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s03.mp4" )
+  flf s04 "$K4" "$K5" 40 "the man brings both hands together into a flat prayer position at the center of his chest, palms pressing together, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s04.mp4" )
+fi
+# ORB SEQUENCE (shared) — always FLF: open hands + a growing orb interpolate cleanly.
 flf s05 "$K5" "$K6" 40 "the man's pressed palms begin to separate slightly and a small bright orb of glowing light appears in the gap between them, $CONT";                CLIPS+=( "$SAGA_ROOT/tmp/s05.mp4" )
 [ "$HOLD6" -gt 0 ] && { hold "$K6" "$HOLD6" "$WORK/s06_hold6.mp4";                 CLIPS+=( "$WORK/s06_hold6.mp4" ); }
 flf s07 "$K6" "$K7" 40 "the man's hands draw further apart and the glowing orb of light between his palms grows larger and brighter as the hands separate, $CONT";        CLIPS+=( "$SAGA_ROOT/tmp/s07.mp4" )
