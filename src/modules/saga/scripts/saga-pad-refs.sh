@@ -11,20 +11,22 @@
 # margin freely from the prompt. Output keeps the SAME filenames so you can point
 # SIGN_DIR= at the padded folder with no other change.
 #
-#   saga-pad-refs.sh --in DIR [--out DIR] [--scale 0.6] [-W 1280 -H 704] [--bg gray]
-#     --scale  fraction of the canvas the subject fills (0.4–0.8; smaller = wider shot)
+#   saga-pad-refs.sh --in DIR [--out DIR] [--scale 0.72] [-W 1280 -H 704] [--fill blur]
+#     --scale  fraction of the canvas the subject fills (0.5–0.9; smaller = wider shot)
+#     --fill   blur (default: margin = blurred scene, no hard edge) | a color (flat fill)
 #     --out    default: <in>_padded
 #
 # Env: SAGA_ROOT (required)
 # ============================================================================
 set -uo pipefail
 : "${SAGA_ROOT:?set SAGA_ROOT}"
-IN=""; OUT=""; SCALE="0.6"; W=1280; H=704; BG="gray50"
+IN=""; OUT=""; SCALE="0.72"; W=1280; H=704; FILL="blur"
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
   --in) IN="$2"; shift 2;; --out) OUT="$2"; shift 2;;
   --scale) SCALE="$2"; shift 2;; -W|--width) W="$2"; shift 2;; -H|--height) H="$2"; shift 2;;
-  --bg) BG="$2"; shift 2;; -h|--help) sed -n '2,22p' "$0"; exit 0;;
+  --fill) FILL="$2"; shift 2;;   # blur (default, no hard edge) | a color name (flat fill)
+  -h|--help) sed -n '2,22p' "$0"; exit 0;;
   *) die "unknown arg: $1";;
 esac; done
 
@@ -45,13 +47,26 @@ shopt -s nullglob
 mapfile -t FILES < <(printf '%s\n' "$IN"/*.png "$IN"/*.jpg "$IN"/*.jpeg 2>/dev/null | sort -u)
 [ "${#FILES[@]}" -gt 0 ] || die "no images (*.png/*.jpg) found in $IN"
 
-echo "▶ pad ${#FILES[@]} refs → $OUT  (subject ${SCALE} of ${W}x${H}, bg=$BG)"
+echo "▶ pad ${#FILES[@]} refs → $OUT  (subject ${SCALE} of ${W}x${H}, fill=$FILL)"
+pad_one(){ # <src> <dst> — subject fit SWxSH, centered on WxH
+  local src="$1" dst="$2"
+  if [ "$FILL" = "blur" ]; then
+    # margin = a stretched, heavily-blurred copy of the scene → NO hard rectangular edge
+    # for canny to trace; the sharp subject (silhouette + hands) sits on top.
+    convert \( "$src" -resize "${W}x${H}!" -blur 0x60 \) \
+            \( "$src" -resize "${SW}x${SH}" \) \
+            -gravity center -composite "$dst" 2>/dev/null
+  else
+    # flat color fill (leaves a hard rectangle edge; only if you want the prompt to own
+    # the margin and don't mind canny drawing the frame — generally prefer blur).
+    convert "$src" -resize "${SW}x${SH}" -background "$FILL" -gravity center -extent "${W}x${H}" "$dst" 2>/dev/null
+  fi
+}
 n=0; fail=0
 for src in "${FILES[@]}"; do
   [ -f "$src" ] || continue
   dst="$OUT/$(basename "$src")"
-  # resize to fit inside SWxSH (no upscale past it), pad to WxH centered on neutral bg
-  if convert "$src" -resize "${SW}x${SH}" -background "$BG" -gravity center -extent "${W}x${H}" "$dst" 2>/dev/null; then
+  if pad_one "$src" "$dst"; then
     [ -s "$dst" ] && { n=$((n+1)); echo "  ✓ $(basename "$dst")"; } || { fail=$((fail+1)); echo "  ✗ empty output: $(basename "$src")" >&2; }
   else
     fail=$((fail+1)); echo "  ✗ convert failed: $(basename "$src")" >&2
