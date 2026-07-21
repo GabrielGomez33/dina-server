@@ -105,8 +105,10 @@ INTERPOLATE="${INTERPOLATE:-0}"     # 1 = interpolate to POLISH_FPS. OFF by defa
 # Assembly (STEP 3): how the segments are joined. Every seam is between two clips that
 # SHARE the boundary keyframe, so a short crossfade removes the per-segment velocity
 # "pop" (decelerate-in / accelerate-out) without a visible dissolve → reads as one shot.
-ASSEMBLE="${ASSEMBLE:-xfade}"       # xfade = crossfade seams into one continuous scene | concat = hard cuts (old behavior)
-XFADE="${XFADE:-5}"                 # crossfade length in frames at each seam
+ASSEMBLE="${ASSEMBLE:-concat}"      # concat = ONE continuous take (FLF segments share endpoint
+                                    # keyframes, so motion flows through with no dissolve) | xfade
+                                    # = crossfade seams (NOT wanted — reads as a dissolve, not continuous)
+XFADE="${XFADE:-5}"                 # crossfade length in frames at each seam (xfade mode only)
 # Dwell frames on the anchor poses. LARGE holds read as "stuck doing nothing"; kept short
 # now (was 8/16/8). Set any to 0 to drop that hold entirely.
 HOLD1="${HOLD1:-4}"; HOLD6="${HOLD6:-6}"; HOLD8="${HOLD8:-8}"
@@ -116,6 +118,18 @@ HOLD1="${HOLD1:-4}"; HOLD6="${HOLD6:-6}"; HOLD8="${HOLD8:-8}"
 # Select cuts with --cuts. HOLD_SEAL = frames each seal is held in cut mode.
 MOTION_MODE="${MOTION_MODE:-flf}"   # flf | cuts
 HOLD_SEAL="${HOLD_SEAL:-8}"
+# Seal-transition SPEED (flf mode): frames per seal→seal morph. Real jutsu flash through
+# all the seals in ~1s, so keep these SHORT — a fast continuous flurry, not a slow morph.
+# Short morphs also give Wan little room to melt hands. 4 ≈ all seals in ~1s; 6 ≈ ~1.5s.
+SEAL_FRAMES="${SEAL_FRAMES:-6}"
+# Orb-growth length (flf mode): the SLOW, continuous, dramatic part. Bump for a longer clip.
+ORB_FRAMES="${ORB_FRAMES:-48}"
+# STEP-4 identity + camera (polish):
+# FACE_RESTORE=1 re-renders the face on EVERY frame with the LoRA → locks YOUR identity
+# across Wan's drifted frames (fixes the "random guy"). Per-frame → SLOW but the real fix.
+FACE_RESTORE="${FACE_RESTORE:-0}"; FACE_DENOISE="${FACE_DENOISE:-0.45}"
+# CAMERA_SHAKE = handheld tremble amplitude in px (0 = off; ~12 = action/cinematic). Post.
+CAMERA_SHAKE="${CAMERA_SHAKE:-0}"
 # Shared negative fed to EVERY keyframe AND the hand-fixer. Guards the recurring
 # FAILURE CLASSES (not just this scene): hand mutations, seal-name animals bleeding
 # into the background, wrong eye colors, mask/costume drift, wrong sex, text.
@@ -283,6 +297,18 @@ if [ "$POLISH" -eq 1 ]; then
     for n in UpscaleModelLoader ImageUpscaleWithModel ImageScale; do need_node "$n"; done
     have_model "4x-AnimeSharp.pth" || fail "upscale model missing under models/: 4x-AnimeSharp.pth (use UPSCALE_MODE=lanczos or --no-polish)"
   fi
+  if [ "$FACE_RESTORE" -eq 1 ]; then
+    [ -x "$HERE/saga-face-restore.sh" ] || fail "not executable: saga-face-restore.sh (chmod +x)"
+    [ -x "$DTL" ] || fail "FACE_RESTORE needs saga-detail.sh executable"
+    for n in FaceDetailer UltralyticsDetectorProvider; do need_node "$n"; done
+    have_model "face_yolov8m.pt" || fail "FACE_RESTORE needs the face detector under models/: face_yolov8m.pt"
+    log "  face-restore ON (per-frame identity lock @ denoise $FACE_DENOISE — this is slow)"
+  fi
+  if [ "$CAMERA_SHAKE" -gt 0 ]; then
+    [ -x "$HERE/saga-shake.sh" ] || fail "not executable: saga-shake.sh (chmod +x)"
+    case "$CAMERA_SHAKE" in ''|*[!0-9]*) fail "CAMERA_SHAKE must be an integer px";; esac
+    log "  camera shake ON (amp ${CAMERA_SHAKE}px)"
+  fi
   log "polish ok (${UPSCALE_MODE} 2K upscale + ${POLISH_FPS}fps interpolate)"
 fi
 
@@ -314,7 +340,7 @@ if [ "$CLEAN" -eq 1 ]; then
   log "clean: removing prior jutsu artifacts (keyframes, FLF segments, holds, master, polish)…"
   rm -f "$SAGA_ROOT"/tmp/jutsu_k[1-8].png 2>/dev/null
   rm -f "$SAGA_ROOT"/tmp/s0[1-8].mp4 2>/dev/null
-  rm -f "$WORK"/s0*_hold*.mp4 "$WORK"/cut_k*.mp4 "$WORK"/jutsu_20s_master.mp4 "$WORK"/jutsu_2k.mp4 "$WORK"/jutsu_graded.mp4 "$WORK"/jutsu_final.mp4 "$WORK"/concat.txt 2>/dev/null
+  rm -f "$WORK"/s0*_hold*.mp4 "$WORK"/cut_k*.mp4 "$WORK"/jutsu_20s_master.mp4 "$WORK"/jutsu_2k.mp4 "$WORK"/jutsu_graded.mp4 "$WORK"/jutsu_face.mp4 "$WORK"/jutsu_shake.mp4 "$WORK"/jutsu_final.mp4 "$WORK"/concat.txt 2>/dev/null
   rm -rf "$SAGA_ROOT"/tmp/.esrgan_vid_* 2>/dev/null   # stale per-frame upscale temps from killed runs
   log "  cleaned."
 fi
@@ -491,16 +517,17 @@ else
   [ "$HOLD1" -gt 0 ] && { hold "$K1" "$HOLD1" "$WORK/s00_hold1.mp4";               CLIPS+=( "$WORK/s00_hold1.mp4" ); }
   # Seal→seal FLF transitions: describe the CHANGE, not specific finger counts (the two
   # keyframe images define the exact start/end pose; over-specifying fingers forces errors).
-  flf s01 "$K1" "$K2" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s01.mp4" )
-  flf s02 "$K2" "$K3" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s02.mp4" )
-  flf s03 "$K3" "$K4" 40 "the man's hands smoothly and continuously rearrange from one ninja hand seal into the next, the fingers reshaping, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s03.mp4" )
-  flf s04 "$K4" "$K5" 40 "the man brings both hands together into a flat prayer position at the center of his chest, palms pressing together, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s04.mp4" )
+  # FAST seal flurry (SEAL_FRAMES each) — a quick continuous action beat, not a slow morph.
+  flf s01 "$K1" "$K2" "$SEAL_FRAMES" "the man rapidly flicks his hands from one ninja hand seal to the next, fast decisive motion, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s01.mp4" )
+  flf s02 "$K2" "$K3" "$SEAL_FRAMES" "the man rapidly flicks his hands from one ninja hand seal to the next, fast decisive motion, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s02.mp4" )
+  flf s03 "$K3" "$K4" "$SEAL_FRAMES" "the man rapidly flicks his hands from one ninja hand seal to the next, fast decisive motion, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s03.mp4" )
+  flf s04 "$K4" "$K5" "$SEAL_FRAMES" "the man snaps both hands together into a flat prayer position at his chest, fast decisive motion, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s04.mp4" )
 fi
 # ORB SEQUENCE (shared) — always FLF: open hands + a growing orb interpolate cleanly.
 flf s05 "$K5" "$K6" 40 "the man's pressed palms begin to separate slightly and a small bright orb of glowing light appears in the gap between them, $CONT";                CLIPS+=( "$SAGA_ROOT/tmp/s05.mp4" )
 [ "$HOLD6" -gt 0 ] && { hold "$K6" "$HOLD6" "$WORK/s06_hold6.mp4";                 CLIPS+=( "$WORK/s06_hold6.mp4" ); }
 flf s07 "$K6" "$K7" 40 "the man's hands draw further apart and the glowing orb of light between his palms grows larger and brighter as the hands separate, $CONT";        CLIPS+=( "$SAGA_ROOT/tmp/s07.mp4" )
-flf s08 "$K7" "$K8" 48 "the man's arms open out to shoulder width and the orb swells to full size, erupting into vivid swirling multicolored energy, radiant and intense, rays of light, $CONT"; CLIPS+=( "$SAGA_ROOT/tmp/s08.mp4" )
+flf s08 "$K7" "$K8" "$ORB_FRAMES" "the man's arms open out to shoulder width and the orb swells to full size, erupting into vivid swirling multicolored energy, radiant and intense, rays of light, $CONT"; CLIPS+=( "$SAGA_ROOT/tmp/s08.mp4" )
 [ "$HOLD8" -gt 0 ] && { hold "$K8" "$HOLD8" "$WORK/s09_hold8.mp4";                 CLIPS+=( "$WORK/s09_hold8.mp4" ); }
 TOT=0
 for c in "${CLIPS[@]}"; do verify_out "$c"; f=$(frames_of "$c"); [ "$f" != "?" ] && TOT=$((TOT+f)); done
@@ -541,6 +568,14 @@ echo "✅ master → $MASTER"
 CUR=4; step 4 "polish (2K upscale → grade → interpolate?)"
 FINAL="$MASTER"
 if [ "$POLISH" -eq 0 ]; then log "(--no-polish) skipped"; else
+  # FACE RESTORE (before upscale): re-render the face on every frame with the LoRA so
+  # Wan's drifted frames carry YOUR identity — the fix for the "random guy at the end".
+  if [ "$FACE_RESTORE" -eq 1 ]; then
+    FRV="$WORK/jutsu_face.mp4"
+    log "face-restore (per-frame face → LoRA identity, denoise $FACE_DENOISE)… [slow]"
+    "$HERE/saga-face-restore.sh" "$MASTER" --lora "$LORA" --trigger "$TRIGGER" --denoise "$FACE_DENOISE" -n "$NEG" -o "$FRV" || fail "face-restore failed"
+    verify_out "$FRV"; MASTER="$FRV"
+  fi
   UP="$WORK/jutsu_2k.mp4"
   log "2K upscale ($UPSCALE_MODE)…"
   "$HERE/saga-esrgan-video.sh" "$MASTER" --method "$UPSCALE_MODE" -o "$UP" >/dev/null || fail "2K upscale failed"
@@ -560,6 +595,13 @@ if [ "$POLISH" -eq 0 ]; then log "(--no-polish) skipped"; else
     verify_out "$POL"; FINAL="$POL"
   else
     log "interpolation OFF (minterpolate ghosts fast motion → trailing rays; set INTERPOLATE=1 to enable)"
+  fi
+  # CAMERA SHAKE (last): handheld tremble for action/cinematic energy.
+  if [ "$CAMERA_SHAKE" -gt 0 ]; then
+    SHK="$WORK/jutsu_shake.mp4"
+    log "camera shake (amp ${CAMERA_SHAKE}px)…"
+    "$HERE/saga-shake.sh" "$FINAL" --amp "$CAMERA_SHAKE" -o "$SHK" >/dev/null || fail "camera shake failed"
+    verify_out "$SHK"; FINAL="$SHK"
   fi
   log "polished → $FINAL ($(frames_of "$FINAL") frames)"
 fi
