@@ -329,6 +329,7 @@ What the front end will require (all additive):
 | Area | File(s) | What to add |
 |---|---|---|
 | Backend + LoRA registry | `core/modelRegistry.ts`, `core/methodRegistry.ts` | register `framepack`+`ltx` as selectable video backends; surface `models/loras_video/<backend>/*.safetensors` |
+| **Identity method** selector | `core/methodRegistry.ts` + jutsu `--identity` | expose **`lora`** (trained per-user identity) vs **`instantid`** (`--zero-shot --face <photo>`, no training). LoRA = strongest, one train per user; zero-shot = instant, **the path that scales to many users**. Already wired in `saga-jutsu-flf.sh`; the UI just picks which. |
 | Dispatch | `core/pipeline.ts`, `systems/workflowTemplates.ts`, `systems/generationWorker.ts` | pass `VIDEO_BACKEND`/`VIDEO_LORA`/`TAKE_SECONDS` env and call `saga-framepack.sh`/`saga-ltx.sh` (already spawns `saga-*.sh`) |
 | Video-LoRA training | `core/loraTraining.ts` | new job type: `saga-dp-setup.sh` → `saga-hunyuan-fetch.sh` → `saga-video-lora-train.sh` (alongside the SDXL flow) |
 | Queue / GPU | `systems/jobQueue.ts` + GPU arbiter | register video-LoRA training as a **long, GPU-exclusive** job (serialize vs render + Ollama) |

@@ -205,6 +205,13 @@ while [ $# -gt 0 ]; do case "$1" in
   --dwpose) CONTROL_PRE=dwpose; USE_CONTROL=1; shift;;
   --openpose) CONTROL_PRE=openpose; USE_CONTROL=1; shift;;
   --canny) CONTROL_PRE=canny; USE_CONTROL=1; shift;;
+  # Identity method for the keyframes (who the character is):
+  #   lora      = per-user TRAINED identity (default; strongest, but a train per user)
+  #   instantid = ZERO-SHOT identity from one reference FACE photo, NO training — the
+  #               path that scales to many users. Needs FACE=<photo> + InstantID installed.
+  --identity) IDENTITY="$2"; shift 2;;
+  --zero-shot) IDENTITY=instantid; shift;;            # alias: --identity instantid
+  --face) FACE="$2"; shift 2;;                          # reference photo for --zero-shot
   # anime cuts for the seal sequence (no Wan morph → no melted hands); implies hard cuts
   --cuts) MOTION_MODE=cuts; ASSEMBLE=concat; shift;;
   --no-polish) POLISH=0; shift;; -h|--help) sed -n '2,40p' "$0"; exit 0;;
@@ -213,6 +220,8 @@ esac; done
 # Derive the union-net type from the FINAL preprocessor (env or flag). Must run post-flags.
 # Values must be valid SetUnionControlNetType enums: pose skeleton → "openpose".
 case "$CONTROL_PRE" in dwpose|openpose) CONTROL_UNION="${UNION_TYPE:-openpose}";; *) CONTROL_UNION="${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}";; esac
+# Identity method must be a known value (fail early on a typo, not deep in STEP 1).
+case "$IDENTITY" in lora|instantid) ;; *) echo "❌ IDENTITY must be lora|instantid (got '$IDENTITY'); instantid = zero-shot reference-face, needs --face"; exit 2;; esac
 
 WORK="$SAGA_ROOT/tmp/jutsu"; mkdir -p "$WORK"
 LOG="$WORK/run_$(date +%Y%m%d_%H%M%S).log"
