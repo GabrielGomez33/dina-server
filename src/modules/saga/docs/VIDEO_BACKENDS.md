@@ -25,22 +25,22 @@ diffusion-pipe (training) gets its **own separate venv** — see §4. Run node i
 user that owns the venv (`dina`), not `administrator`/root, so packages land with the right
 perms. Restart after installing nodes:  `sudo pm2 restart saga-comfyui` (wait ~15s).
 
-**The `saga-*.sh` scripts are NOT on `PATH`.** They live in the repo checkout, not under
-`$SAGA_ROOT` (which is the runtime data tree). Put the scripts dir on `PATH` once per shell,
-then the bare `saga-…` commands below work:
+**The `saga-*.sh` tools are NOT on `PATH` by default.** They live in the repo checkout
+(`/var/www/dina-server/src/modules/saga/scripts` on this box), not under `$SAGA_ROOT` (the
+runtime data tree). Publish them ONCE to a stable run location with the installer, then add
+that ONE dir to `PATH`:
 ```bash
-# On this box the checkout is /var/www/dina-server, so:
-export SAGA_BIN="/var/www/dina-server/src/modules/saga/scripts"
-export PATH="$SAGA_BIN:$PATH"
-# (persist it: append that PATH export to ~/.bashrc)
-#
-# If the checkout ever moves, auto-discover it (searches the dirs it's likely under):
-#   export SAGA_BIN="$(dirname "$(find /var/www /mnt /home /opt /srv ~ -type f \
-#     -name saga-jutsu-flf.sh -path '*modules/saga/scripts*' 2>/dev/null | head -1)")"
-#   [ -x "$SAGA_BIN/saga-jutsu-flf.sh" ] && export PATH="$SAGA_BIN:$PATH" || echo "not found"
+# one-time: publish the tools to $SAGA_ROOT/bin (thin wrappers that run the repo scripts in
+# place — they track the repo, so `git pull` updates the tools with NO re-install):
+/var/www/dina-server/src/modules/saga/scripts/saga-install.sh
+export PATH="$SAGA_ROOT/bin:$PATH"
+echo 'export PATH="'"$SAGA_ROOT"'/bin:$PATH"' >> ~/.bashrc   # persist
+
+saga-install.sh --check     # report install state (count, stale/broken, on-PATH)
 ```
-Every `saga-…` command in this doc assumes `$SAGA_BIN` is on `PATH`; otherwise call it as
-`"$SAGA_BIN/saga-….sh"`.
+After a `git pull` the wrappers already point at the updated scripts — no action needed. (Use
+`saga-install.sh --copy` only if you want a frozen physical snapshot; it drifts and must be
+re-run after every pull.) Every `saga-…` command below assumes `$SAGA_ROOT/bin` is on `PATH`.
 
 ---
 
