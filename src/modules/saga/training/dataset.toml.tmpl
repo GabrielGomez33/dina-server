@@ -1,0 +1,16 @@
+# diffusion-pipe DATASET config (template — tokens filled by saga-video-lora-train.sh)
+# Shared across all video-model LoRA trains. Reuses the SAME curated image dataset that
+# trains the SDXL identity LoRA — character identity trains fine from stills.
+# VERIFY-LIVE: confirm keys against the diffusion-pipe version you cloned (schema can move).
+
+resolutions = [@RESOLUTIONS@]
+enable_ar_bucket = true
+min_ar = 0.5
+max_ar = 2.0
+num_ar_buckets = 7
+
+# Caption handling: if a per-image .txt caption exists it's used; else this prefix is applied.
+# Keep the trigger first so identity welds to it (same convention as the SDXL LoRA).
+[[directory]]
+path = '@DATASET@'
+num_repeats = @REPEATS@

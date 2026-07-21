@@ -29,7 +29,7 @@ CN="${EDIT_CN:-controlnet-union-sdxl-promax.safetensors}"
 
 IMG=""; PROMPT=""; DENOISE=0.6; LORA=""; LORAW=1.0; CFG=2.0; SEED=777; W=0; H=0; OUT="saga_edit"
 # optional ControlNet: force structure from a reference while editing (canny → Union Promax)
-CONTROL=""; CPRE="canny"; CSTR=0.85; UTYPE="canny/lineart/anime_lineart/mlsd"
+CONTROL=""; CPRE="canny"; CSTR=0.85; CEND=0.9; UTYPE="canny/lineart/anime_lineart/mlsd"
 NEG="lowres, worst quality, blurry, deformed, bad anatomy, bad hands, extra fingers, fused fingers, mutated hands, extra limbs, text, watermark"
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
@@ -38,7 +38,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --cfg) CFG="$2"; shift 2;; -s|--seed) SEED="$2"; shift 2;;
   -W|--width) W="$2"; shift 2;; -H|--height) H="$2"; shift 2;;
   -c|--control) CONTROL="$2"; shift 2;; --control-pre) CPRE="$2"; shift 2;;
-  --control-strength) CSTR="$2"; shift 2;; --union-type) UTYPE="$2"; shift 2;;
+  --control-strength) CSTR="$2"; shift 2;; --control-end) CEND="$2"; shift 2;; --union-type) UTYPE="$2"; shift 2;;
   -n|--neg) NEG="$2"; shift 2;; -o|--out) OUT="$2"; shift 2;;
   -h|--help) sed -n '2,20p' "$0"; exit 0;;
   *) die "unknown arg: $1";;
@@ -72,12 +72,17 @@ if [ -n "$LORA" ]; then MODEL='["40",0]'; CLIP='["40",1]'; else MODEL='["1",0]';
 # optional ControlNet: force structure from a reference image while editing. Positive/
 # negative are routed through ControlNetApplyAdvanced (nodes 20-24), else straight from
 # the CLIP encoders. Mirrors saga-keyframe's control subgraph so both paths behave identically.
-CTRL_NAME=""; KPOS='["5",0]'; KNEG='["6",0]'; CANNY_NODE=""; UNION_NODE=""
+CTRL_NAME=""; KPOS='["5",0]'; KNEG='["6",0]'; PRE_NODE=""; UNION_NODE=""
 if [ -n "$CONTROL" ]; then
   CTRL_NAME=$(upload "$CONTROL")
+  # preprocessor: canny = trace ALL edges (imports background+texture+realism);
+  # openpose/dwpose = extract only the body/hand SKELETON (pose only, nothing else);
+  # none = feed the control image raw. Mirrors saga-keyframe.
   case "$CPRE" in
-    none) PRE_SRC='["20",0]';;
-    *)    PRE_SRC='["21",0]'; CANNY_NODE="\"21\":{\"class_type\":\"Canny\",\"inputs\":{\"image\":[\"20\",0],\"low_threshold\":0.2,\"high_threshold\":0.5}},";;
+    none)     PRE_SRC='["20",0]';;
+    canny)    PRE_SRC='["21",0]'; PRE_NODE="\"21\":{\"class_type\":\"Canny\",\"inputs\":{\"image\":[\"20\",0],\"low_threshold\":0.2,\"high_threshold\":0.5}},";;
+    openpose) PRE_SRC='["21",0]'; PRE_NODE="\"21\":{\"class_type\":\"OpenposePreprocessor\",\"inputs\":{\"image\":[\"20\",0],\"detect_hand\":\"enable\",\"detect_body\":\"enable\",\"detect_face\":\"disable\",\"resolution\":768}},";;
+    *)        PRE_SRC='["21",0]'; PRE_NODE="\"21\":{\"class_type\":\"DWPreprocessor\",\"inputs\":{\"image\":[\"20\",0],\"detect_hand\":\"enable\",\"detect_body\":\"enable\",\"detect_face\":\"disable\",\"resolution\":768}},";;
   esac
   if [ "$UTYPE" = "none" ]; then CNSRC='["22",0]'; else CNSRC='["24",0]'; UNION_NODE="\"24\":{\"class_type\":\"SetUnionControlNetType\",\"inputs\":{\"control_net\":[\"22\",0],\"type\":\"$UTYPE\"}},"; fi
   KPOS='["23",0]'; KNEG='["23",1]'
@@ -100,10 +105,10 @@ cat <<JSON
 JSON
 [ -n "$CONTROL" ] && cat <<JSON
  "20":{"class_type":"LoadImage","inputs":{"image":"$CTRL_NAME"}},
- $CANNY_NODE
+ $PRE_NODE
  "22":{"class_type":"ControlNetLoader","inputs":{"control_net_name":"$CN"}},
  $UNION_NODE
- "23":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["5",0],"negative":["6",0],"control_net":$CNSRC,"image":$PRE_SRC,"strength":$CSTR,"start_percent":0.0,"end_percent":0.9,"vae":["1",2]}},
+ "23":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["5",0],"negative":["6",0],"control_net":$CNSRC,"image":$PRE_SRC,"strength":$CSTR,"start_percent":0.0,"end_percent":$CEND,"vae":["1",2]}},
 JSON
 cat <<JSON
  "7":{"class_type":"KSampler","inputs":{"seed":$SEED,"steps":30,"cfg":$CFG,"sampler_name":"dpmpp_2m","scheduler":"karras","denoise":$DENOISE,"model":$MODEL,"positive":$KPOS,"negative":$KNEG,"latent_image":["4",0]}},
