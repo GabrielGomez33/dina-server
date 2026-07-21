@@ -16,6 +16,7 @@ updates the tools with no re-install). Then `export PATH="$SAGA_ROOT/bin:$PATH"`
 | `saga-flf.sh` | Render ONE first-last-frame clip (Wan 2.2 FLF2V-A14B lightning) | `-a first` `-b last` `-d durationS`\|`-L frames` `--fps` `--shift` |
 | `saga-framepack.sh` | Render ONE continuous take (FramePack/HunyuanVideo I2V, up to 120s); `--check`/`--dump-graph` | `-a first` `-L frames`\|`-d durationS` `--fps` `--lora` `--lora-weight` |
 | `saga-ltx.sh` | Render ONE continuous take (LTX-Video I2V, native nodes, 8k+1 frames); `--check`/`--dump-graph` | `-a first` `-L frames`\|`-d durationS` `--fps` `--lora` `--lora-weight` |
+| `saga-dp-setup.sh` | Make diffusion-pipe trainable on the box (idempotent): pin transformers<5, ensure torch-family deps, patch reduction.py + attenion.py (SDPA fallback), CUDA check | `[--check]` |
 | `saga-hunyuan-fetch.sh` | Provision HunyuanVideo TRAINING base weights (dit+vae+llava+clip) into `ckpt_path`; version-proof CPU llava extraction; idempotent/resumable | `[--dest DIR] [--check] [--skip-download] [--force]` |
 | `saga-video-lora-train.sh` | Train a VIDEO-model LoRA (wan\|hunyuan\|ltx) via diffusion-pipe from the curated image set | `--user U --model M [--dry-run] [--rank] [--lr] [--epochs]` |
 | `saga-jutsu-flf.sh` | The jutsu A–Z orchestrator: preflight → 8 keyframes → motion (Wan FLF stitch **or** single-take on framepack/ltx) → assemble → polish, timestamped log + idempotent resume | env: `VIDEO_BACKEND=wan\|framepack\|ltx`, `VIDEO_LORA`, `TAKE_SECONDS`, `REF`, `SEED`; flags: `--check`, `--force`, `--no-polish` |
