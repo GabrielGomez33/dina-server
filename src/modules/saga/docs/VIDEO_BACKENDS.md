@@ -89,10 +89,15 @@ git clone https://github.com/kijai/ComfyUI-FramePackWrapper
 "$COMFY_PY" -m pip install -r ComfyUI-FramePackWrapper/requirements.txt   # into ComfyUI's venv
 sudo pm2 restart saga-comfyui                              # reload nodes (wait ~15s)
 ```
-**Models** (HuggingFace — verify exact filenames against the repos, versions move):
+**Models for INFERENCE** (what the `saga-framepack.sh` driver loads — distinct from the
+TRAINING weights in §4; verify exact filenames against the repos, versions move):
 - FramePack transformer: `lllyasviel/FramePackI2V_HY` → `$SAGA_ROOT/models/diffusion_models/`
 - HunyuanVideo VAE: `hunyuan_video_vae_bf16.safetensors` → `models/vae/`
 - Text encoders: `llava-llama-3-8b-v1_1` (llm) + `clip-l` → `models/text_encoders/` (or `clip/`)
+
+> ⚠️ Inference weights ≠ training weights. FramePack I2V single-files here let you *generate*
+> video; training a HunyuanVideo LoRA needs the full-precision **base** HunyuanVideo tree —
+> see §4. They're separate downloads.
 
 **Verify after install:**
 ```bash
@@ -149,6 +154,51 @@ python3 -m venv .venv-dp
 **Reuse the existing curated dataset** — no re-shoot:
 `users/gabrielgomez1/datasets/anime_curated` (the same anime images that trained
 `animegabriel2`). diffusion-pipe takes a dataset TOML pointing at that folder + captions.
+
+### 4a. HunyuanVideo base weights (required to train the hunyuan LoRA)
+
+**VERIFIED against `models/hunyuan_video.py` in the installed diffusion-pipe:** this version
+loads the **original Tencent HunyuanVideo layout** via a single `ckpt_path` base dir (NOT the
+Kijai ComfyUI single-files). The loader hard-derives every sub-path, so you download the
+official tree into one folder and the template's `ckpt_path` points at it:
+```
+$SAGA_ROOT/models/hunyuan-video/          ← ckpt_path
+  hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt   (bf16 DiT, ~25GB)
+  hunyuan-video-t2v-720p/vae/                                      (default vae_path)
+  text_encoder/                            (llava, PREPROCESSED — default llm_path)
+  text_encoder_2/                          (clip-l — default clip_path)
+```
+**One command provisions the whole tree** — `saga-hunyuan-fetch.sh` (idempotent, resumable):
+```bash
+. $SAGA_ROOT/engine/.venv-dp/bin/activate      # the venv with torch+transformers
+$SAGA_ROOT/engine/.venv-dp/bin/python -m pip install -U "huggingface_hub[cli]"  # provides `hf`
+# (if the tencent repo is gated:  hf auth login  with a token that accepted its terms)
+
+saga-hunyuan-fetch.sh            # downloads dit+vae+llava+clip, extracts llava, verifies tree
+saga-hunyuan-fetch.sh --check    # re-verify anytime (✓/✗ per component; exit 0 = ready)
+```
+It handles the two sharp edges we hit by hand:
+- **`hf` `--include` takes ONE pattern** → it fetches the transformer as an exact filename and
+  the vae dir with a single `--include`.
+- **The vendored HunyuanVideo llava-preprocess script is broken against newer `transformers`**
+  (`AttributeError: LlavaForConditionalGeneration has no attribute 'language_model'` — the
+  backbone moved to `model.model.language_model`) **and forces the 16GB model onto the GPU
+  (OOM on a shared card)**. The tool extracts the backbone *wherever the installed transformers
+  exposes it*, **on CPU** — so it survives version drift and never fights Ollama/ComfyUI for VRAM.
+
+The resulting tree (what `models/hunyuan_video.py` loads via `ckpt_path`):
+```
+$SAGA_ROOT/models/hunyuan-video/          ← ckpt_path (what lora_hunyuan.toml.tmpl points at)
+  hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt   (bf16 DiT, ~25GB)
+  hunyuan-video-t2v-720p/vae/                                      (default vae_path)
+  text_encoder/                            (llava backbone, extracted — default llm_path)
+  text_encoder_2/                          (clip-l — default clip_path)
+```
+> GPU: the llava extraction and the train itself want the card free — stop ComfyUI
+> (`sudo pm2 stop saga-comfyui`) and unload Ollama first; `nvidia-smi` should show ~full VRAM.
+
+(LTX and Wan LoRAs likewise need their own full-precision base weights — the GGUF you use for
+Wan *inference* cannot train. Get those before `--model ltx` / `--model wan`.)
 
 **Do not hand-write the configs** — `saga-video-lora-train.sh` fills the per-model TOML
 templates (`src/modules/saga/training/{dataset,lora_wan,lora_hunyuan,lora_ltx}.toml.tmpl`)

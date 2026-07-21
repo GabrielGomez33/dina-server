@@ -1,6 +1,13 @@
 # diffusion-pipe HUNYUAN-VIDEO video-LoRA config (template) — used by the FramePack backend.
-# VERIFY-LIVE: set model paths to your installed HunyuanVideo files; confirm [model] keys
-# against the diffusion-pipe release (`examples/hunyuan_video.toml` there is authoritative).
+# VERIFY-LIVE (verified against models/hunyuan_video.py in the installed diffusion-pipe):
+#   THIS version loads the ORIGINAL Tencent HunyuanVideo layout via a single `ckpt_path` base
+#   dir — NOT Kijai single-file safetensors. The loader hard-derives:
+#     transformer := <ckpt_path>/hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt
+#     vae         := <ckpt_path>/hunyuan-video-t2v-720p/vae            (default; or set vae_path)
+#     llm (llava) := <ckpt_path>/text_encoder                          (default; or set llm_path)
+#     clip-l      := <ckpt_path>/text_encoder_2                        (default; or set clip_path)
+#   So the ONLY required model key is `ckpt_path`. Download the tree with the commands in
+#   docs/VIDEO_BACKENDS.md §2 (official Tencent flow + the llava text-encoder preprocess step).
 output_dir = '@OUTPUT_DIR@'
 dataset = '@DATASET_TOML@'
 
@@ -15,13 +22,14 @@ blocks_to_swap = 20            # fit 24GB by swapping blocks to CPU; tune down i
 
 [model]
 type = 'hunyuan-video'
-# Point these at your installed HunyuanVideo weights (the same the FramePack backend loads):
-transformer_path = '@MODEL_ROOT@/hunyuan_video_720_cfgdistill_fp8.safetensors'
-vae_path = '@MODEL_ROOT@/hunyuan_video_vae_bf16.safetensors'
-llm_path = '@MODEL_ROOT@/llava-llama-3-8b'
-clip_path = '@MODEL_ROOT@/clip-vit-large-patch14'
+# Base dir containing hunyuan-video-t2v-720p/{transformers,vae}/, text_encoder/, text_encoder_2/
+ckpt_path = '@MODEL_ROOT@/hunyuan-video'
 dtype = 'bfloat16'
-transformer_dtype = 'float8'
+transformer_dtype = 'float8'   # loads the bf16 transformer, quantizes to fp8 in-memory for 24GB
+# Optional explicit overrides — only if you placed encoders/vae outside the ckpt tree above:
+# vae_path  = '@MODEL_ROOT@/hunyuan-video/hunyuan-video-t2v-720p/vae'
+# llm_path  = '@MODEL_ROOT@/hunyuan-video/text_encoder'
+# clip_path = '@MODEL_ROOT@/hunyuan-video/text_encoder_2'
 
 [adapter]
 type = 'lora'
