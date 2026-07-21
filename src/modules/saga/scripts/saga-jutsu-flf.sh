@@ -116,6 +116,10 @@ HOLD1="${HOLD1:-4}"; HOLD6="${HOLD6:-6}"; HOLD8="${HOLD8:-8}"
 # mid-morph); cuts = hold each seal + HARD CUT to the next (anime-authentic, no morph → no
 # melted hands). The ORB beats (K5→K8) always use FLF (open hands interpolate cleanly).
 # Select cuts with --cuts. HOLD_SEAL = frames each seal is held in cut mode.
+# Swappable video motion backend (see docs/VIDEO_BACKENDS.md). wan = current keyframe+FLF
+# stitching. framepack/ltx = single-take long continuous gen (built after those models +
+# their video LoRAs are installed). Only 'wan' is wired today; others fail preflight cleanly.
+VIDEO_BACKEND="${VIDEO_BACKEND:-wan}"
 MOTION_MODE="${MOTION_MODE:-flf}"   # flf | cuts
 HOLD_SEAL="${HOLD_SEAL:-8}"
 # Seal-transition SPEED (flf mode): frames per seal→seal morph. Real jutsu flash through
@@ -235,7 +239,12 @@ for t in jq curl ffmpeg; do command -v "$t" >/dev/null || fail "missing tool: $t
 command -v ffprobe >/dev/null || log "  ⚠ ffprobe absent — frame-count checks will be skipped"
 [ -x "$KF" ] || fail "not executable: $KF (chmod +x)"
 [ -x "$FLF" ] || fail "not executable: $FLF (chmod +x)"
-log "tools ok"
+case "$VIDEO_BACKEND" in
+  wan) ;;
+  framepack|ltx) fail "VIDEO_BACKEND=$VIDEO_BACKEND not wired yet — install per docs/VIDEO_BACKENDS.md, then the driver is built against its /object_info. Use VIDEO_BACKEND=wan for now.";;
+  *) fail "VIDEO_BACKEND must be wan|framepack|ltx (got '$VIDEO_BACKEND')";;
+esac
+log "tools ok (video backend: $VIDEO_BACKEND)"
 
 curl -sf "$COMFY/system_stats" >/dev/null || fail "ComfyUI not reachable at $COMFY (is saga-comfyui up?)"
 log "engine reachable at $COMFY"
