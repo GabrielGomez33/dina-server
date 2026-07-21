@@ -52,6 +52,8 @@ set -uo pipefail
 COMFY="${COMFY:-http://127.0.0.1:8188}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 KF="$HERE/saga-keyframe.sh"; FLF="$HERE/saga-flf.sh"; IIDKF="$HERE/saga-instantid-keyframe.sh"; DTL="$HERE/saga-detail.sh"; GRADE_SH="$HERE/saga-grade.sh"; EDIT="$HERE/saga-edit.sh"
+# Single-take backend drivers (VIDEO_BACKEND=framepack|ltx). Same common interface as saga-flf.sh.
+FRAMEPACK="$HERE/saga-framepack.sh"; LTX="$HERE/saga-ltx.sh"
 
 # ── CONFIG (edit or pass via env) ───────────────────────────────────────────
 # Identity now comes from the trained LoRA (no IP-Adapter pose-prior fighting the
@@ -120,6 +122,16 @@ HOLD1="${HOLD1:-4}"; HOLD6="${HOLD6:-6}"; HOLD8="${HOLD8:-8}"
 # stitching. framepack/ltx = single-take long continuous gen (built after those models +
 # their video LoRAs are installed). Only 'wan' is wired today; others fail preflight cleanly.
 VIDEO_BACKEND="${VIDEO_BACKEND:-wan}"
+# Single-take backends (framepack|ltx): ONE continuous generation from the start keyframe (K1)
+# + a full-jutsu motion prompt — the "one scene, one gen" path (no FLF stitching, no seams).
+# These read a VIDEO-model LoRA (architecture-specific; train with saga-video-lora-train.sh)
+# so identity is native → no face-restore hack. Knobs:
+VIDEO_LORA="${VIDEO_LORA:-}"                   # e.g. gabrielgomez1.safetensors under models/loras_video/<backend>
+VIDEO_LORA_WEIGHT="${VIDEO_LORA_WEIGHT:-0.9}"
+TAKE_SECONDS="${TAKE_SECONDS:-15}"             # target length of the single continuous take
+# The whole jutsu in ONE prompt (single-take backends narrate the sequence rather than pinning
+# per-seal keyframes). Overridable via env for other scenes/characters.
+TAKE_PROMPT="${TAKE_PROMPT:-the man rapidly performs a flurry of ninja hand seals in about one second, hands flicking fast and precise, then snaps both palms together in a prayer position at his chest, then slowly draws his hands apart as a small bright orb of glowing light appears between his palms and grows larger and brighter, finally his arms open to shoulder width and the orb erupts into vivid swirling multicolored energy, dramatic action scene, subtle handheld camera shake, cinematic, the same man stays centered in frame, one continuous shot, consistent lighting}"
 MOTION_MODE="${MOTION_MODE:-flf}"   # flf | cuts
 HOLD_SEAL="${HOLD_SEAL:-8}"
 # Seal-transition SPEED (flf mode): frames per seal→seal morph. Real jutsu flash through
@@ -241,9 +253,24 @@ command -v ffprobe >/dev/null || log "  ⚠ ffprobe absent — frame-count check
 [ -x "$FLF" ] || fail "not executable: $FLF (chmod +x)"
 case "$VIDEO_BACKEND" in
   wan) ;;
-  framepack|ltx) fail "VIDEO_BACKEND=$VIDEO_BACKEND not wired yet — install per docs/VIDEO_BACKENDS.md, then the driver is built against its /object_info. Use VIDEO_BACKEND=wan for now.";;
+  framepack) BACKEND_DRV="$FRAMEPACK";;
+  ltx)       BACKEND_DRV="$LTX";;
   *) fail "VIDEO_BACKEND must be wan|framepack|ltx (got '$VIDEO_BACKEND')";;
 esac
+# Single-take backends: driver must exist + its node classes must be live on this engine.
+# Run the driver's own /object_info preflight now (fail fast, before any keyframe GPU time).
+if [ "$VIDEO_BACKEND" != "wan" ]; then
+  [ -x "$BACKEND_DRV" ] || fail "not executable: $BACKEND_DRV (chmod +x)"
+  ARG=(); [ -n "$VIDEO_LORA" ] && ARG=(--lora "$VIDEO_LORA")
+  COMFY="$COMFY" "$BACKEND_DRV" --check "${ARG[@]}" \
+    || fail "$VIDEO_BACKEND preflight failed — install nodes/models per docs/VIDEO_BACKENDS.md §2/§3, then restart saga-comfyui"
+  if [ -n "$VIDEO_LORA" ]; then
+    find "$SAGA_ROOT/models/loras_video/$VIDEO_BACKEND" -name "$VIDEO_LORA" -print -quit 2>/dev/null | grep -q . \
+      || log "  ⚠ VIDEO_LORA '$VIDEO_LORA' not found under models/loras_video/$VIDEO_BACKEND — identity will drift; train it: saga-video-lora-train.sh --model $([ "$VIDEO_BACKEND" = framepack ] && echo hunyuan || echo ltx)"
+  else
+    log "  ⚠ no VIDEO_LORA set for $VIDEO_BACKEND — the take will NOT carry the trained identity (the 'random guy'); set VIDEO_LORA=<file> once trained"
+  fi
+fi
 log "tools ok (video backend: $VIDEO_BACKEND)"
 
 curl -sf "$COMFY/system_stats" >/dev/null || fail "ComfyUI not reachable at $COMFY (is saga-comfyui up?)"
@@ -252,18 +279,25 @@ log "engine reachable at $COMFY"
 OI=$(mktemp); curl -sf "$COMFY/object_info" -o "$OI" || fail "cannot fetch /object_info"
 KEYS=$(jq -r 'keys[]' "$OI"); rm -f "$OI"
 need_node(){ grep -qx "$1" <<<"$KEYS" || fail "required ComfyUI node MISSING: $1"; }
-NODES="CheckpointLoaderSimple LoraLoader UnetLoaderGGUF CLIPLoader WanFirstLastFrameToVideo VHS_VideoCombine"
+# Keyframe stack (SDXL) is needed for EVERY backend — it authors K1..K8 that seed motion.
+NODES="CheckpointLoaderSimple LoraLoader CLIPLoader VHS_VideoCombine"
+# Wan FLF nodes only when the Wan backend actually stitches keyframe pairs. Single-take
+# backends (framepack/ltx) validated their OWN nodes via the driver --check above.
+[ "$VIDEO_BACKEND" = "wan" ] && NODES="$NODES UnetLoaderGGUF WanFirstLastFrameToVideo"
 [ "$USE_CONTROL" -eq 1 ] && NODES="$NODES ControlNetLoader ControlNetApplyAdvanced Canny"
 [ "$USE_CONTROL" -eq 1 ] && [ "${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}" != "none" ] && NODES="$NODES SetUnionControlNetType"
 for n in $NODES; do need_node "$n"; done
-log "nodes ok (incl. LoraLoader, WanFirstLastFrameToVideo)"
+log "nodes ok (backend=$VIDEO_BACKEND)"
 
 have_model(){ find "$SAGA_ROOT/models" -name "$1" -print -quit 2>/dev/null | grep -q .; }
-for m in animagine-xl-4.0.safetensors \
-         Wan2.2-I2V-A14B-HighNoise-Q6_K.gguf Wan2.2-I2V-A14B-LowNoise-Q6_K.gguf \
-         "$FLF_T5" wan_2.1_vae.safetensors CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors; do
-  have_model "$m" || fail "required model file MISSING under models/: $m"
-done
+# Keyframe checkpoint is always required. Wan motion models only for the Wan backend.
+have_model "animagine-xl-4.0.safetensors" || fail "required model file MISSING under models/: animagine-xl-4.0.safetensors"
+if [ "$VIDEO_BACKEND" = "wan" ]; then
+  for m in Wan2.2-I2V-A14B-HighNoise-Q6_K.gguf Wan2.2-I2V-A14B-LowNoise-Q6_K.gguf \
+           "$FLF_T5" wan_2.1_vae.safetensors CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors; do
+    have_model "$m" || fail "required model file MISSING under models/: $m"
+  done
+fi
 [ -f "$SAGA_ROOT/models/loras/$LORA" ] || fail "LoRA not found: models/loras/$LORA (train it: saga-lora-train.sh)"
 log "models ok (lora=$LORA, umt5=$FLF_T5)"
 
@@ -514,7 +548,24 @@ flf(){ # <name> <first> <last> <frames> <motion-prompt>  → writes $SAGA_ROOT/t
 # continuous take, so Wan doesn't invent pans/zooms/cuts (the "movements not asked for").
 CONT="the same man stays centered in frame, the camera is completely static, one continuous shot, smooth slow deliberate motion, consistent lighting"
 declare -a CLIPS
-if [ "$MOTION_MODE" = "cuts" ]; then
+if [ "$VIDEO_BACKEND" != "wan" ]; then
+  # SINGLE-TAKE (framepack|ltx): ONE continuous generation from K1 + the whole-jutsu prompt.
+  # No FLF stitching, no holds, no seams — the "one scene, one gen" path. Identity comes from
+  # the VIDEO_LORA (native to the video model), not keyframe pinning; K1 seeds the start frame
+  # + composition, then the model narrates seals → prayer → orb growth → apex in a single gen.
+  TAKE_FRAMES=$(awk -v s="$TAKE_SECONDS" -v f="$FPS" 'BEGIN{printf "%d",(s*f)+0.5}')
+  ONE="$SAGA_ROOT/tmp/jutsu_take.mp4"
+  log "  single-take ($VIDEO_BACKEND): ${TAKE_SECONDS}s (~${TAKE_FRAMES}f @ ${FPS}fps) from K1${VIDEO_LORA:+, lora=$VIDEO_LORA@$VIDEO_LORA_WEIGHT}"
+  if [ "$FORCE" -eq 0 ] && have_file "$ONE"; then
+    log "  reuse take $(basename "$ONE")"
+  else
+    LARG=(); [ -n "$VIDEO_LORA" ] && LARG=(--lora "$VIDEO_LORA" --lora-weight "$VIDEO_LORA_WEIGHT")
+    COMFY="$COMFY" "$BACKEND_DRV" -a "$K1" -p "$TAKE_PROMPT" -n "$NEG" \
+      -L "$TAKE_FRAMES" --fps "$FPS" -W "$W" -H "$H" -s "$SEED" \
+      "${LARG[@]}" -o "jutsu_take" || fail "$VIDEO_BACKEND single-take failed"
+  fi
+  CLIPS+=( "$ONE" )
+elif [ "$MOTION_MODE" = "cuts" ]; then
   # SEAL SEQUENCE — anime cuts: hold each seal, HARD CUT to the next. No Wan morph between
   # seals → none of the melted/glued-finger mush. K5 (prayer) is held too, then flows into
   # the orb FLF below.
@@ -532,15 +583,22 @@ else
   flf s03 "$K3" "$K4" "$SEAL_FRAMES" "the man rapidly flicks his hands from one ninja hand seal to the next, fast decisive motion, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s03.mp4" )
   flf s04 "$K4" "$K5" "$SEAL_FRAMES" "the man snaps both hands together into a flat prayer position at his chest, fast decisive motion, $CONT";  CLIPS+=( "$SAGA_ROOT/tmp/s04.mp4" )
 fi
-# ORB SEQUENCE (shared) — always FLF: open hands + a growing orb interpolate cleanly.
-flf s05 "$K5" "$K6" 40 "the man's pressed palms begin to separate slightly and a small bright orb of glowing light appears in the gap between them, $CONT";                CLIPS+=( "$SAGA_ROOT/tmp/s05.mp4" )
-[ "$HOLD6" -gt 0 ] && { hold "$K6" "$HOLD6" "$WORK/s06_hold6.mp4";                 CLIPS+=( "$WORK/s06_hold6.mp4" ); }
-flf s07 "$K6" "$K7" 40 "the man's hands draw further apart and the glowing orb of light between his palms grows larger and brighter as the hands separate, $CONT";        CLIPS+=( "$SAGA_ROOT/tmp/s07.mp4" )
-flf s08 "$K7" "$K8" "$ORB_FRAMES" "the man's arms open out to shoulder width and the orb swells to full size, erupting into vivid swirling multicolored energy, radiant and intense, rays of light, $CONT"; CLIPS+=( "$SAGA_ROOT/tmp/s08.mp4" )
-[ "$HOLD8" -gt 0 ] && { hold "$K8" "$HOLD8" "$WORK/s09_hold8.mp4";                 CLIPS+=( "$WORK/s09_hold8.mp4" ); }
+# ORB SEQUENCE (wan only) — always FLF: open hands + a growing orb interpolate cleanly.
+# (Single-take backends already produced the entire jutsu, orb included, in ONE gen above.)
+if [ "$VIDEO_BACKEND" = "wan" ]; then
+  flf s05 "$K5" "$K6" 40 "the man's pressed palms begin to separate slightly and a small bright orb of glowing light appears in the gap between them, $CONT";                CLIPS+=( "$SAGA_ROOT/tmp/s05.mp4" )
+  [ "$HOLD6" -gt 0 ] && { hold "$K6" "$HOLD6" "$WORK/s06_hold6.mp4";                 CLIPS+=( "$WORK/s06_hold6.mp4" ); }
+  flf s07 "$K6" "$K7" 40 "the man's hands draw further apart and the glowing orb of light between his palms grows larger and brighter as the hands separate, $CONT";        CLIPS+=( "$SAGA_ROOT/tmp/s07.mp4" )
+  flf s08 "$K7" "$K8" "$ORB_FRAMES" "the man's arms open out to shoulder width and the orb swells to full size, erupting into vivid swirling multicolored energy, radiant and intense, rays of light, $CONT"; CLIPS+=( "$SAGA_ROOT/tmp/s08.mp4" )
+  [ "$HOLD8" -gt 0 ] && { hold "$K8" "$HOLD8" "$WORK/s09_hold8.mp4";                 CLIPS+=( "$WORK/s09_hold8.mp4" ); }
+fi
 TOT=0
 for c in "${CLIPS[@]}"; do verify_out "$c"; f=$(frames_of "$c"); [ "$f" != "?" ] && TOT=$((TOT+f)); done
-log "total frames (measured): ${TOT:-?} (expected 320 = 20.0s @ ${FPS}fps)"
+if [ "$VIDEO_BACKEND" = "wan" ]; then
+  log "total frames (measured): ${TOT:-?} (expected 320 = 20.0s @ ${FPS}fps)"
+else
+  log "total frames (measured): ${TOT:-?} (single continuous take @ ${FPS}fps)"
+fi
 echo "✅ motion segments ready"
 
 # ── STEP 3 — ASSEMBLE ───────────────────────────────────────────────────────
