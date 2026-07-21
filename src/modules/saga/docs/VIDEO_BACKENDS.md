@@ -89,10 +89,15 @@ git clone https://github.com/kijai/ComfyUI-FramePackWrapper
 "$COMFY_PY" -m pip install -r ComfyUI-FramePackWrapper/requirements.txt   # into ComfyUI's venv
 sudo pm2 restart saga-comfyui                              # reload nodes (wait ~15s)
 ```
-**Models** (HuggingFace — verify exact filenames against the repos, versions move):
+**Models for INFERENCE** (what the `saga-framepack.sh` driver loads — distinct from the
+TRAINING weights in §4; verify exact filenames against the repos, versions move):
 - FramePack transformer: `lllyasviel/FramePackI2V_HY` → `$SAGA_ROOT/models/diffusion_models/`
 - HunyuanVideo VAE: `hunyuan_video_vae_bf16.safetensors` → `models/vae/`
 - Text encoders: `llava-llama-3-8b-v1_1` (llm) + `clip-l` → `models/text_encoders/` (or `clip/`)
+
+> ⚠️ Inference weights ≠ training weights. FramePack I2V single-files here let you *generate*
+> video; training a HunyuanVideo LoRA needs the full-precision **base** HunyuanVideo tree —
+> see §4. They're separate downloads.
 
 **Verify after install:**
 ```bash
@@ -149,6 +154,49 @@ python3 -m venv .venv-dp
 **Reuse the existing curated dataset** — no re-shoot:
 `users/gabrielgomez1/datasets/anime_curated` (the same anime images that trained
 `animegabriel2`). diffusion-pipe takes a dataset TOML pointing at that folder + captions.
+
+### 4a. HunyuanVideo base weights (required to train the hunyuan LoRA)
+
+**VERIFIED against `models/hunyuan_video.py` in the installed diffusion-pipe:** this version
+loads the **original Tencent HunyuanVideo layout** via a single `ckpt_path` base dir (NOT the
+Kijai ComfyUI single-files). The loader hard-derives every sub-path, so you download the
+official tree into one folder and the template's `ckpt_path` points at it:
+```
+$SAGA_ROOT/models/hunyuan-video/          ← ckpt_path
+  hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt   (bf16 DiT, ~25GB)
+  hunyuan-video-t2v-720p/vae/                                      (default vae_path)
+  text_encoder/                            (llava, PREPROCESSED — default llm_path)
+  text_encoder_2/                          (clip-l — default clip_path)
+```
+Download (in the diffusion-pipe venv; ~45GB total, disk is ample):
+```bash
+. $SAGA_ROOT/engine/.venv-dp/bin/activate
+.venv-dp/bin/python -m pip install -U "huggingface_hub[cli]"
+HV="$SAGA_ROOT/models/hunyuan-video"; mkdir -p "$HV"
+
+# 1) transformer (bf16 — the loader wants mp_rank_00_model_states.pt, not the fp8) + vae
+huggingface-cli download tencent/HunyuanVideo --local-dir "$HV" \
+  --include "hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt" \
+            "hunyuan-video-t2v-720p/vae/*"
+
+# 2) llava text encoder → MUST be preprocessed into text_encoder/ (HunyuanVideo requirement)
+huggingface-cli download xtuner/llava-llama-3-8b-v1_1-transformers --local-dir "$HV/llava-raw"
+DP="$SAGA_ROOT/engine/diffusion-pipe/submodules/HunyuanVideo"
+.venv-dp/bin/python "$DP/hyvideo/utils/preprocess_text_encoder_tokenizer_utils.py" \
+  --input_dir "$HV/llava-raw" --output_dir "$HV/text_encoder"
+
+# 3) clip-l
+huggingface-cli download openai/clip-vit-large-patch14 --local-dir "$HV/text_encoder_2"
+```
+Sanity-check the tree before training:
+```bash
+test -f "$HV/hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt" && echo "✓ dit" || echo "✗ dit"
+test -d "$HV/hunyuan-video-t2v-720p/vae" && echo "✓ vae" || echo "✗ vae"
+test -d "$HV/text_encoder" && echo "✓ llava" || echo "✗ llava"
+test -d "$HV/text_encoder_2" && echo "✓ clip" || echo "✗ clip"
+```
+(LTX and Wan LoRAs likewise need their own full-precision base weights — the GGUF you use for
+Wan *inference* cannot train. Get those before `--model ltx` / `--model wan`.)
 
 **Do not hand-write the configs** — `saga-video-lora-train.sh` fills the per-model TOML
 templates (`src/modules/saga/training/{dataset,lora_wan,lora_hunyuan,lora_ltx}.toml.tmpl`)
