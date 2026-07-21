@@ -25,6 +25,19 @@ diffusion-pipe (training) gets its **own separate venv** — see §4. Run node i
 user that owns the venv (`dina`), not `administrator`/root, so packages land with the right
 perms. Restart after installing nodes:  `sudo pm2 restart saga-comfyui` (wait ~15s).
 
+**The `saga-*.sh` scripts are NOT on `PATH`.** They live in the repo checkout, not under
+`$SAGA_ROOT` (which is the runtime data tree). Put the scripts dir on `PATH` once per shell,
+then the bare `saga-…` commands below work:
+```bash
+# auto-discover wherever dina-server is checked out on this box:
+export SAGA_BIN="$(dirname "$(find /mnt /home ~ -type f -name saga-jutsu-flf.sh -path '*modules/saga/scripts*' 2>/dev/null | head -1)")"
+echo "SAGA_BIN=$SAGA_BIN"          # sanity-check it resolved to .../src/modules/saga/scripts
+export PATH="$SAGA_BIN:$PATH"
+# (persist it: append those two `export` lines to ~/.bashrc)
+```
+Every `saga-…` command in this doc assumes `$SAGA_BIN` is on `PATH`; otherwise call it as
+`"$SAGA_BIN/saga-….sh"`.
+
 ---
 
 ## 1. Architecture — one pipeline, pluggable motion
