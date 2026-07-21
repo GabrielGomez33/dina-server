@@ -72,6 +72,32 @@ if [ "$DRY" -eq 1 ]; then
 fi
 [ -f "$DP_ROOT/train.py" ] || die "diffusion-pipe not found at $DP_ROOT (clone it; see docs/VIDEO_BACKENDS.md), or use --dry-run"
 command -v deepspeed >/dev/null || die "deepspeed not on PATH (activate the diffusion-pipe venv)"
+
+# --- environment hardening (each of these was a real failure mode; see docs/VIDEO_BACKENDS.md §4b) ---
+# 1) CUDA toolkit: deepspeed JIT-compiles ops → needs nvcc + CUDA_HOME. Auto-detect if unset.
+if [ -z "${CUDA_HOME:-}" ]; then
+  for c in /usr/local/cuda /usr/local/cuda-13.0 /usr/local/cuda-13 /usr/local/cuda-12.*; do
+    [ -x "$c/bin/nvcc" ] && { export CUDA_HOME="$c"; break; }
+  done
+fi
+[ -n "${CUDA_HOME:-}" ] && [ -x "$CUDA_HOME/bin/nvcc" ] \
+  || die "CUDA toolkit (nvcc) not found. Install cuda-toolkit and/or set CUDA_HOME (see docs §4b)"
+export PATH="$CUDA_HOME/bin:$PATH"
+# 2) LD_LIBRARY_PATH: pin THIS venv's cuDNN/cuBLAS first so a foreign venv (kohya sd-scripts)
+#    can't inject an incompatible cuDNN. Strip any sd-scripts paths that leaked in.
+VENV_NV="$(dirname "$(command -v deepspeed)")/../lib/python*/site-packages/nvidia"
+VENV_NV="$(ls -d $VENV_NV 2>/dev/null | head -1)"
+CLEAN_LD="$(printf '%s' "${LD_LIBRARY_PATH:-}" | tr ':' '\n' | grep -v 'sd-scripts' | paste -sd: -)"
+[ -n "$VENV_NV" ] && export LD_LIBRARY_PATH="$VENV_NV/cudnn/lib:$VENV_NV/cublas/lib:$CUDA_HOME/lib64:$CLEAN_LD"
+# 3) fragmentation + no wandb prompt (train.py imports wandb at module load).
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export WANDB_MODE="${WANDB_MODE:-disabled}"
+# 4) free master port: a crashed prior run can leave 29500 held → EADDRINUSE. Pick a free one.
+PORT=29500
+while command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ":$PORT "; do PORT=$((PORT+1)); done
+CMD="deepspeed --num_gpus=1 --master_port=$PORT $DP_ROOT/train.py --deepspeed --config $CFG_OUT"
+
 echo "▶ launching training (one GPU: this pauses ComfyUI-heavy work)…"
+echo "   CUDA_HOME=$CUDA_HOME  master_port=$PORT  WANDB_MODE=$WANDB_MODE"
 ( cd "$DP_ROOT" && $CMD ) || die "training failed"
 echo "✅ done — LoRA(s) under $OUT_DIR"

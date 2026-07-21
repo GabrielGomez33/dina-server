@@ -10,6 +10,9 @@
 #   docs/VIDEO_BACKENDS.md §2 (official Tencent flow + the llava text-encoder preprocess step).
 output_dir = '@OUTPUT_DIR@'
 dataset = '@DATASET_TOML@'
+# Recompute activations in backward instead of storing them — the decisive 24GB saver.
+# Without this, the forward pass OOMs even with block-swapping. Verified required on a 3090 Ti.
+activation_checkpointing = true
 
 epochs = @EPOCHS@
 micro_batch_size_per_gpu = 1
@@ -18,7 +21,8 @@ gradient_clipping = 1.0
 warmup_steps = 100
 save_every_n_epochs = @SAVE_EVERY@
 checkpoint_every_n_minutes = 30
-blocks_to_swap = 20            # fit 24GB by swapping blocks to CPU; tune down if VRAM allows
+blocks_to_swap = 30            # offload N transformer blocks to CPU RAM; 30 fits 24GB with
+                               # activation_checkpointing on. Lower if you have VRAM headroom.
 
 [model]
 type = 'hunyuan-video'

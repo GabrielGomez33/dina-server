@@ -223,6 +223,35 @@ and confirm the `[model]` paths point at your actually-installed weights (the te
 
 Trigger word: reuse `animegabriel` for consistency with the existing prompt assembly.
 
+### 4b. Environment setup for diffusion-pipe (run ONCE, in order)
+
+The installed diffusion-pipe + its vendored HunyuanVideo target an OLDER torch/transformers
+than this box's bleeding-edge stack (torch 2.13+cu130, transformers 5.x). Bridging that gap is
+automated by **`saga-dp-setup.sh`** — run it, then fetch weights, then train:
+```bash
+. $SAGA_ROOT/engine/.venv-dp/bin/activate
+saga-dp-setup.sh              # pin transformers<5, torch-family deps, patch reduction.py + attenion.py
+saga-dp-setup.sh --check      # ✓/✗ per fix
+saga-hunyuan-fetch.sh         # weights (AFTER transformers<5, so tokenizer saves in 4.x format)
+saga-video-lora-train.sh --user gabrielgomez1 --model hunyuan
+```
+The fixes `saga-dp-setup.sh` applies — each was a real, diagnosed failure on the first train:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `CUDA_HOME does not exist` (deepspeed import) | driver present, **CUDA toolkit absent** | `sudo apt install cuda-toolkit-13-0`; export `CUDA_HOME=/usr/local/cuda-13.0` |
+| `No module named 'torchvision' / 'torchaudio'` | torch-family deps missing | install from torch's own `…/whl/cu130` index (never downgrade torch) |
+| `CLIPTextModel has no attribute 'text_model'`; `Llava…no attribute 'language_model'`; `TokenizersBackend does not exist` | **transformers 5.x** refactor | pin `transformers<5` (weights already on disk load fine) |
+| `No module named 'torch._namedtensor_internals'` | torch 2.13 removed it | patch `utils/reduction.py` with a fallback |
+| `flash_attn_varlen_func … 'NoneType' object is not callable` | flash-attn not installed (won't build on cu130) | patch `attenion.py` → **torch SDPA** fallback (block-diagonal via `cu_seqlens`) |
+| `cuDNN version incompatibility (found 9.1.0)` | `LD_LIBRARY_PATH` leaked kohya **sd-scripts** venv's old cuDNN | trainer pins this venv's cuDNN first + strips foreign paths |
+| `EADDRINUSE port 29500` | crashed prior run held the port | trainer auto-picks a free master port |
+| `CUDA out of memory` at first step | activations don't fit 24GB | `activation_checkpointing = true` + `blocks_to_swap = 30` (both now in the template) + `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` |
+
+`saga-video-lora-train.sh` now sets `CUDA_HOME`, sanitizes `LD_LIBRARY_PATH`, disables wandb,
+sets the allocator conf, and picks a free port automatically — so a normal run needs none of
+this by hand. LTX/Wan will surface their own analogues; extend `saga-dp-setup.sh` as they land.
+
 ---
 
 ## 5. Build phases (tracked)
