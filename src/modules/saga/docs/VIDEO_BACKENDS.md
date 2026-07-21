@@ -168,37 +168,35 @@ $SAGA_ROOT/models/hunyuan-video/          ← ckpt_path
   text_encoder/                            (llava, PREPROCESSED — default llm_path)
   text_encoder_2/                          (clip-l — default clip_path)
 ```
-Download (in the diffusion-pipe venv; ~45GB total, disk is ample). Newer `huggingface_hub`
-ships the `hf` CLI — `huggingface-cli` is deprecated; use `hf`:
+**One command provisions the whole tree** — `saga-hunyuan-fetch.sh` (idempotent, resumable):
 ```bash
-. $SAGA_ROOT/engine/.venv-dp/bin/activate
-.venv-dp/bin/python -m pip install -U "huggingface_hub[cli]"   # provides `hf`
-HV="$SAGA_ROOT/models/hunyuan-video"; mkdir -p "$HV"
+. $SAGA_ROOT/engine/.venv-dp/bin/activate      # the venv with torch+transformers
+$SAGA_ROOT/engine/.venv-dp/bin/python -m pip install -U "huggingface_hub[cli]"  # provides `hf`
 # (if the tencent repo is gated:  hf auth login  with a token that accepted its terms)
 
-# 1) transformer (bf16 — the loader wants mp_rank_00_model_states.pt, not the fp8) + vae.
-#    NOTE: this `hf` version's --include takes ONE pattern; do it as two calls (exact file for
-#    the transformer, single --include glob for the vae dir).
-hf download tencent/HunyuanVideo \
-  hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt --local-dir "$HV"
-hf download tencent/HunyuanVideo --include "hunyuan-video-t2v-720p/vae/*" --local-dir "$HV"
-
-# 2) llava text encoder → MUST be preprocessed into text_encoder/ (HunyuanVideo requirement)
-hf download xtuner/llava-llama-3-8b-v1_1-transformers --local-dir "$HV/llava-raw"
-DP="$SAGA_ROOT/engine/diffusion-pipe/submodules/HunyuanVideo"
-.venv-dp/bin/python "$DP/hyvideo/utils/preprocess_text_encoder_tokenizer_utils.py" \
-  --input_dir "$HV/llava-raw" --output_dir "$HV/text_encoder"
-
-# 3) clip-l
-hf download openai/clip-vit-large-patch14 --local-dir "$HV/text_encoder_2"
+saga-hunyuan-fetch.sh            # downloads dit+vae+llava+clip, extracts llava, verifies tree
+saga-hunyuan-fetch.sh --check    # re-verify anytime (✓/✗ per component; exit 0 = ready)
 ```
-Sanity-check the tree before training:
-```bash
-test -f "$HV/hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt" && echo "✓ dit" || echo "✗ dit"
-test -d "$HV/hunyuan-video-t2v-720p/vae" && echo "✓ vae" || echo "✗ vae"
-test -d "$HV/text_encoder" && echo "✓ llava" || echo "✗ llava"
-test -d "$HV/text_encoder_2" && echo "✓ clip" || echo "✗ clip"
+It handles the two sharp edges we hit by hand:
+- **`hf` `--include` takes ONE pattern** → it fetches the transformer as an exact filename and
+  the vae dir with a single `--include`.
+- **The vendored HunyuanVideo llava-preprocess script is broken against newer `transformers`**
+  (`AttributeError: LlavaForConditionalGeneration has no attribute 'language_model'` — the
+  backbone moved to `model.model.language_model`) **and forces the 16GB model onto the GPU
+  (OOM on a shared card)**. The tool extracts the backbone *wherever the installed transformers
+  exposes it*, **on CPU** — so it survives version drift and never fights Ollama/ComfyUI for VRAM.
+
+The resulting tree (what `models/hunyuan_video.py` loads via `ckpt_path`):
 ```
+$SAGA_ROOT/models/hunyuan-video/          ← ckpt_path (what lora_hunyuan.toml.tmpl points at)
+  hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt   (bf16 DiT, ~25GB)
+  hunyuan-video-t2v-720p/vae/                                      (default vae_path)
+  text_encoder/                            (llava backbone, extracted — default llm_path)
+  text_encoder_2/                          (clip-l — default clip_path)
+```
+> GPU: the llava extraction and the train itself want the card free — stop ComfyUI
+> (`sudo pm2 stop saga-comfyui`) and unload Ollama first; `nvidia-smi` should show ~full VRAM.
+
 (LTX and Wan LoRAs likewise need their own full-precision base weights — the GGUF you use for
 Wan *inference* cannot train. Get those before `--model ltx` / `--model wan`.)
 
