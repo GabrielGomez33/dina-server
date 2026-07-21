@@ -176,10 +176,12 @@ ships the `hf` CLI — `huggingface-cli` is deprecated; use `hf`:
 HV="$SAGA_ROOT/models/hunyuan-video"; mkdir -p "$HV"
 # (if the tencent repo is gated:  hf auth login  with a token that accepted its terms)
 
-# 1) transformer (bf16 — the loader wants mp_rank_00_model_states.pt, not the fp8) + vae
-hf download tencent/HunyuanVideo --local-dir "$HV" \
-  --include "hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt" \
-            "hunyuan-video-t2v-720p/vae/*"
+# 1) transformer (bf16 — the loader wants mp_rank_00_model_states.pt, not the fp8) + vae.
+#    NOTE: this `hf` version's --include takes ONE pattern; do it as two calls (exact file for
+#    the transformer, single --include glob for the vae dir).
+hf download tencent/HunyuanVideo \
+  hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt --local-dir "$HV"
+hf download tencent/HunyuanVideo --include "hunyuan-video-t2v-720p/vae/*" --local-dir "$HV"
 
 # 2) llava text encoder → MUST be preprocessed into text_encoder/ (HunyuanVideo requirement)
 hf download xtuner/llava-llama-3-8b-v1_1-transformers --local-dir "$HV/llava-raw"
