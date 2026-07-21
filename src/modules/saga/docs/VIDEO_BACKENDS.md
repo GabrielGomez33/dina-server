@@ -168,25 +168,27 @@ $SAGA_ROOT/models/hunyuan-video/          ← ckpt_path
   text_encoder/                            (llava, PREPROCESSED — default llm_path)
   text_encoder_2/                          (clip-l — default clip_path)
 ```
-Download (in the diffusion-pipe venv; ~45GB total, disk is ample):
+Download (in the diffusion-pipe venv; ~45GB total, disk is ample). Newer `huggingface_hub`
+ships the `hf` CLI — `huggingface-cli` is deprecated; use `hf`:
 ```bash
 . $SAGA_ROOT/engine/.venv-dp/bin/activate
-.venv-dp/bin/python -m pip install -U "huggingface_hub[cli]"
+.venv-dp/bin/python -m pip install -U "huggingface_hub[cli]"   # provides `hf`
 HV="$SAGA_ROOT/models/hunyuan-video"; mkdir -p "$HV"
+# (if the tencent repo is gated:  hf auth login  with a token that accepted its terms)
 
 # 1) transformer (bf16 — the loader wants mp_rank_00_model_states.pt, not the fp8) + vae
-huggingface-cli download tencent/HunyuanVideo --local-dir "$HV" \
+hf download tencent/HunyuanVideo --local-dir "$HV" \
   --include "hunyuan-video-t2v-720p/transformers/mp_rank_00_model_states.pt" \
             "hunyuan-video-t2v-720p/vae/*"
 
 # 2) llava text encoder → MUST be preprocessed into text_encoder/ (HunyuanVideo requirement)
-huggingface-cli download xtuner/llava-llama-3-8b-v1_1-transformers --local-dir "$HV/llava-raw"
+hf download xtuner/llava-llama-3-8b-v1_1-transformers --local-dir "$HV/llava-raw"
 DP="$SAGA_ROOT/engine/diffusion-pipe/submodules/HunyuanVideo"
 .venv-dp/bin/python "$DP/hyvideo/utils/preprocess_text_encoder_tokenizer_utils.py" \
   --input_dir "$HV/llava-raw" --output_dir "$HV/text_encoder"
 
 # 3) clip-l
-huggingface-cli download openai/clip-vit-large-patch14 --local-dir "$HV/text_encoder_2"
+hf download openai/clip-vit-large-patch14 --local-dir "$HV/text_encoder_2"
 ```
 Sanity-check the tree before training:
 ```bash
