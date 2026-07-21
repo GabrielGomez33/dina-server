@@ -246,7 +246,17 @@ The fixes `saga-dp-setup.sh` applies — each was a real, diagnosed failure on t
 | `flash_attn_varlen_func … 'NoneType' object is not callable` | flash-attn not installed (won't build on cu130) | patch `attenion.py` → **torch SDPA** fallback (block-diagonal via `cu_seqlens`) |
 | `cuDNN version incompatibility (found 9.1.0)` | `LD_LIBRARY_PATH` leaked kohya **sd-scripts** venv's old cuDNN | trainer pins this venv's cuDNN first + strips foreign paths |
 | `EADDRINUSE port 29500` | crashed prior run held the port | trainer auto-picks a free master port |
-| `CUDA out of memory` at first step | activations don't fit 24GB | `activation_checkpointing = true` + `blocks_to_swap = 30` (both now in the template) + `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` |
+| `CUDA out of memory` at first step | activations don't fit 24GB | `activation_checkpointing = true` (the decisive fix) + a SMALL `blocks_to_swap` + `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` |
+
+**Speed / `blocks_to_swap` tuning (important — over-swapping is the #1 way to make a train
+needlessly slow).** `activation_checkpointing` alone frees most of the memory; `blocks_to_swap`
+offloads transformer blocks to CPU RAM and every offloaded block is a **PCIe round-trip each
+step**. Over-swap and the GPU sits at 100% "util" but low power, **stalling on transfers** — a
+first-run mistake here left ~13GB VRAM idle (`nvidia-smi` showed 10/23GB) at `blocks_to_swap=30`
+and made steps ~20s instead of ~5–10s. **Tune it against `nvidia-smi`:** start low (template
+default 10), and if VRAM stays well under ~21GB during a run, drop toward `0` (no swap = fastest);
+only raise it if you actually OOM. Also cut wall-clock with **fewer epochs** — 20–30 is plenty
+for an identity LoRA; 100 overfits and wastes hours.
 
 `saga-video-lora-train.sh` now sets `CUDA_HOME`, sanitizes `LD_LIBRARY_PATH`, disables wandb,
 sets the allocator conf, and picks a free port automatically — so a normal run needs none of

@@ -21,8 +21,12 @@ gradient_clipping = 1.0
 warmup_steps = 100
 save_every_n_epochs = @SAVE_EVERY@
 checkpoint_every_n_minutes = 30
-blocks_to_swap = 30            # offload N transformer blocks to CPU RAM; 30 fits 24GB with
-                               # activation_checkpointing on. Lower if you have VRAM headroom.
+blocks_to_swap = 10            # offload N transformer blocks to CPU RAM. With
+                               # activation_checkpointing on, the model fits 24GB with LITTLE
+                               # swapping — 30 was over-conservative (left ~13GB idle and made
+                               # every step wait on PCIe). TUNE via nvidia-smi during a run:
+                               # if VRAM stays well under ~21GB, drop toward 0 (fastest, no swap);
+                               # only raise this if you actually OOM. Fewer swaps = faster steps.
 
 [model]
 type = 'hunyuan-video'
