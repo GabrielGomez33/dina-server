@@ -46,8 +46,9 @@ while [ $# -gt 0 ]; do case "$1" in
   *) die "unknown arg: $1 (see --help)";;
 esac; done
 
-# tools to publish: every saga-*.sh in the repo scripts dir EXCEPT this installer.
-mapfile -t TOOLS < <(cd "$SRC" && ls saga-*.sh 2>/dev/null | grep -v '^saga-install\.sh$')
+# tools to publish: EVERY saga-*.sh in the repo scripts dir, including this installer itself
+# (so `saga-install.sh --check` / re-install work from PATH after the first run).
+mapfile -t TOOLS < <(cd "$SRC" && ls saga-*.sh 2>/dev/null)
 [ "${#TOOLS[@]}" -gt 0 ] || die "no saga-*.sh found in $SRC (is this the repo scripts dir?)"
 
 # ---- --check: report state, don't touch anything -------------------------------
