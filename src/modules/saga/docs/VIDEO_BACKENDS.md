@@ -275,7 +275,8 @@ this by hand. LTX/Wan will surface their own analogues; extend `saga-dp-setup.sh
      (+`VIDEO_LORA_WEIGHT`) from `models/loras_video/<backend>`; warns if unset (identity will
      drift — the "random guy") or missing.
    - STEP 3/4 (assemble/upscale/grade/shake) reused unchanged: a single clip concats to itself.
-6. ⬜ Expose backend choice in the front-end (per-shot model selector).
+6. ⬜ Expose backend choice in the front-end (per-shot model selector). **Deferred — front end
+   is a long way off. See §7 for the integration scope so nothing is a surprise later.**
 
 Everything else (references, padding, face-restore, grade, shake, cuts/continuous) already
 works and is reused as-is.
@@ -299,3 +300,37 @@ Wan alone caps ~5s/81f per gen. ~10s options without a new model:
   (160f) at 1280×704 on 24GB is near the ceiling; drop to 960×544 if it OOMs.
 - Or generate 81f and interpolate ×2 (`INTERPOLATE=1`) for smoothness at the same duration
   (not more content).
+
+---
+
+## 7. Front-end integration (DEFERRED — notes only, not started)
+
+The front end is a long way off; this section just records what it will touch so it isn't a
+surprise. **The bash scripts do NOT change** — they're the stable single-concern primitives the
+TS layer already spawns (see `core/pipeline.ts`, `systems/workflowTemplates.ts`,
+`systems/generationWorker.ts`). The work is at the TypeScript orchestration layer + CI, not here.
+
+**Gap as of this writing:** the TS SAGA module has **zero awareness** of `VIDEO_BACKEND` /
+`framepack` / `ltx` / `loras_video/` (grep confirms). So before any UI can offer a model
+selector or "use my video LoRA", these must be registered server-side.
+
+What the front end will require (all additive):
+
+| Area | File(s) | What to add |
+|---|---|---|
+| Backend + LoRA registry | `core/modelRegistry.ts`, `core/methodRegistry.ts` | register `framepack`+`ltx` as selectable video backends; surface `models/loras_video/<backend>/*.safetensors` |
+| Dispatch | `core/pipeline.ts`, `systems/workflowTemplates.ts`, `systems/generationWorker.ts` | pass `VIDEO_BACKEND`/`VIDEO_LORA`/`TAKE_SECONDS` env and call `saga-framepack.sh`/`saga-ltx.sh` (already spawns `saga-*.sh`) |
+| Video-LoRA training | `core/loraTraining.ts` | new job type: `saga-dp-setup.sh` → `saga-hunyuan-fetch.sh` → `saga-video-lora-train.sh` (alongside the SDXL flow) |
+| Queue / GPU | `systems/jobQueue.ts` + GPU arbiter | register video-LoRA training as a **long, GPU-exclusive** job (serialize vs render + Ollama) |
+| Routes | saga routes (`routeContractTest`) | expose the per-shot data model (keyframe = prompt+reference; per-shot model selector) from `USER_STORAGE.md §7.10`; new endpoints ⇒ new route-contract tests |
+| Progress (optional) | scripts + `systems/progressMapper.ts` | optionally add a `--json` progress mode to the scripts for clean UI streaming; else `progressMapper` parses existing `steps: N loss: …` lines |
+| UI | `ui/` (has `tokens.css`, `styleguide.html`) | build the client against the design tokens already present |
+
+**CI note:** quality gates are `tsc --noEmit` (strict) → `npm run build` → `npm audit
+--audit-level=high` (no jest gate). Any TS added must pass strict type-check. `npm run build` is
+`tsc → dist/` (the **server** only); an in-repo browser UI needs a **separate front-end build
+step added to `.github/workflows/ci-cd.yml`**, and its deps must stay clean for `npm audit`.
+
+Bottom line: front-end enablement = (a) add a UI build to CI, (b) register the new backends +
+video-LoRA training into the existing TS registries/worker/routes, (c) build the UI. The scripts
+and training pipeline proven in §4/§4b are the untouched foundation underneath.
