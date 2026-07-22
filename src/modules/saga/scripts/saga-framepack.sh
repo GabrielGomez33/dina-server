@@ -138,10 +138,10 @@ if [ "$CHECK" -eq 1 ]; then preflight || exit 1; exit 0; fi
 # The LoRA select node feeds the loader's `lora` input (FramePackWrapper convention).
 if [ -n "$LORA" ]; then
   LORA_NODE="\"40\":{\"class_type\":\"$NODE_LORA\",\"inputs\":{\"lora\":\"$LORA\",\"strength\":$LORA_W,\"fuse_lora\":false}},"
-  MODEL_INPUTS="{\"model\":\"$FP_MODEL\",\"base_precision\":\"bf16\",\"quantization\":\"disabled\",\"attention_mode\":\"sdpa\",\"load_device\":\"main_device\",\"lora\":[\"40\",0]}"
+  MODEL_INPUTS="{\"model\":\"$FP_MODEL\",\"base_precision\":\"bf16\",\"quantization\":\"disabled\",\"attention_mode\":\"sdpa\",\"load_device\":\"offload_device\",\"lora\":[\"40\",0]}"
 else
   LORA_NODE=""
-  MODEL_INPUTS="{\"model\":\"$FP_MODEL\",\"base_precision\":\"bf16\",\"quantization\":\"disabled\",\"attention_mode\":\"sdpa\",\"load_device\":\"main_device\"}"
+  MODEL_INPUTS="{\"model\":\"$FP_MODEL\",\"base_precision\":\"bf16\",\"quantization\":\"disabled\",\"attention_mode\":\"sdpa\",\"load_device\":\"offload_device\"}"
 fi
 
 build_graph(){ cat <<JSON
