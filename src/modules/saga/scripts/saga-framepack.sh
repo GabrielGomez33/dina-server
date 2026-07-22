@@ -20,6 +20,9 @@
 #   -W/--width N   -H/--height N   -s/--seed N   -o/--out NAME
 #   --lora FILE  --lora-weight F   HunyuanVideo video-LoRA (models/loras_video/hunyuan)
 #   --steps N (default 25)   --cfg F (default 1.0)   --guidance F (default 10.0)
+#   --teacache F (default 0.05: motion-first) | --no-teacache (max motion, slowest).
+#     RAISE toward 0.15 for speed if the clip is static-tolerant; 0.15 suppresses subtle
+#     motion (head/body drift caches away, only blinks survive) — that's the "no movement" bug.
 #   --dump-graph            write the graph JSON to stdout and EXIT (no submit) —
 #                           inspect/diff against /object_info before a real run
 #   --check                 run the /object_info preflight only, then exit
@@ -56,6 +59,12 @@ NODE_SAMPLER="${FP_NODE_SAMPLER:-FramePackSampler}"
 
 OUT="saga_framepack"; SEED=0; W=768; H=1152; FPS=30; SHIFT=8; LEN=""; DUR=""
 STEPS=25; CFG=1.0; GUIDANCE=10.0; LWS=9; GPU_KEEP=6.0
+# TeaCache: caches transformer steps whose output changes < TEACACHE (L1). It's a SPEED hack,
+# but it suppresses SUBTLE continuous motion — only high-delta changes (a blink) survive while
+# gradual head/body drift gets cached away, so the clip looks nearly static. 0.15 = fast/static;
+# ~0.05 = mostly-full motion, modest speedup; 0 (or --no-teacache) = OFF, max motion, slowest.
+# Default lowered to 0.05 so motion is the priority — the anime look tolerates the small speed hit.
+TEACACHE="${FP_TEACACHE:-0.05}"
 LORA=""; LORA_W=1.0
 PROMPT=""; NEG=""
 FIRST=""; LAST=""; DUMP=0; CHECK=0
@@ -79,6 +88,8 @@ while [ $# -gt 0 ]; do case "$1" in
   --steps) STEPS="$2"; shift 2;;
   --cfg) CFG="$2"; shift 2;;
   --guidance) GUIDANCE="$2"; shift 2;;
+  --teacache) TEACACHE="$2"; shift 2;;
+  --no-teacache) TEACACHE="0"; shift;;
   --latent-window) LWS="$2"; shift 2;;
   --gpu-keep) GPU_KEEP="$2"; shift 2;;
   --lora) LORA="$2"; shift 2;;
@@ -105,6 +116,10 @@ if [ "$CLAMPED" != "$SECONDS_LEN" ]; then
   echo "⚠️ duration ${SECONDS_LEN}s out of [1,120] — clamping to ${CLAMPED}s" >&2
   SECONDS_LEN="$CLAMPED"
 fi
+
+# ---- TeaCache: >0 enables caching at that L1 threshold; 0 (or --no-teacache) OFF (max motion)
+TC_ON=$(awk -v t="$TEACACHE" 'BEGIN{print (t+0>0)?"true":"false"}')
+[ "$TC_ON" = "false" ] && TEACACHE="0"
 
 # ---- preflight: every node class we emit must exist on this server -------------
 preflight(){
@@ -157,7 +172,7 @@ build_graph(){ cat <<JSON
  "7": {"class_type":"VAEEncode","inputs":{"pixels":["13",0],"vae":["2",0]}},
  "8": {"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$PROMPT" '$s'),"clip":["4",0]}},
  "9": {"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$NEG" '$s'),"clip":["4",0]}},
- "10":{"class_type":"$NODE_SAMPLER","inputs":{"model":["1",0],"positive":["8",0],"negative":["9",0],"start_latent":["7",0],"image_embeds":["6",0],"steps":$STEPS,"cfg":$CFG,"guidance_scale":$GUIDANCE,"shift":$SHIFT,"seed":$SEED,"latent_window_size":$LWS,"gpu_memory_preservation":$GPU_KEEP,"total_second_length":$SECONDS_LEN,"use_teacache":true,"teacache_rel_l1_thresh":0.15,"sampler":"unipc_bh1"}},
+ "10":{"class_type":"$NODE_SAMPLER","inputs":{"model":["1",0],"positive":["8",0],"negative":["9",0],"start_latent":["7",0],"image_embeds":["6",0],"steps":$STEPS,"cfg":$CFG,"guidance_scale":$GUIDANCE,"shift":$SHIFT,"seed":$SEED,"latent_window_size":$LWS,"gpu_memory_preservation":$GPU_KEEP,"total_second_length":$SECONDS_LEN,"use_teacache":$TC_ON,"teacache_rel_l1_thresh":$TEACACHE,"sampler":"unipc_bh1"}},
  "11":{"class_type":"VAEDecode","inputs":{"samples":["10",0],"vae":["2",0]}},
  "12":{"class_type":"VHS_VideoCombine","inputs":{"images":["11",0],"frame_rate":$FPS,"loop_count":0,"filename_prefix":"$OUT","format":"video/h264-mp4","pingpong":false,"save_output":true}}
 }
@@ -195,7 +210,7 @@ fi
 
 preflight || die "preflight failed (see above)"
 
-echo "▶ framepack: '$OUT'  ${W}x${H}  ${SECONDS_LEN}s @ ${FPS}fps  seed=$SEED  steps=$STEPS${LORA:+  lora=$LORA@$LORA_W}"
+echo "▶ framepack: '$OUT'  ${W}x${H}  ${SECONDS_LEN}s @ ${FPS}fps  seed=$SEED  steps=$STEPS  teacache=$([ "$TC_ON" = true ] && echo "$TEACACHE" || echo off)${LORA:+  lora=$LORA@$LORA_W}"
 A=$(upload "$FIRST"); echo "  start: $A"
 
 GRAPH=$(mktemp)
