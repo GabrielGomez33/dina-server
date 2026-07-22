@@ -3,15 +3,31 @@
 > **Read this first.** This is the single canonical "where are we, why, and what's next" doc for
 > the SAGA subsystem, written so the next iteration (of Claude, or of a human) can resume with zero
 > loss. It is the *living state*; the other docs are reference depth. Update the **Status ledger**
-> and **Recent prompts** sections every working session. Last updated: **2026-07-18**.
+> and **Recent prompts** sections every working session. Last updated: **2026-07-22**.
 
-Companion docs (reference, not state): `PHASES.md` (original plan), `VERIFICATION.md` (live proof
+Companion docs (reference, not state): `DECISION_LOG.md` (**strategic decisions + why**),
+`PHASES.md` (original plan), `VERIFICATION.md` (live proof
 log), `TOOLCHAIN.md` (every tool), `RESEARCH_ANIME_PIPELINE.md` (model research),
 `REFERENCE_FIDELITY.md` (consistency laws), `USER_STORAGE.md` (per-user asset storage design +
 future extrapolation), `PREPRODUCTION_AND_FRAMERATE.md`, `OVERVIEW.md`, `INTEGRATION.md`,
 `ENVIRONMENT.md`.
 
 ---
+
+## ADDENDUM — 2026-07-22 (session: build-vs-buy decision → hosted)
+
+**Strategic pivot: pause self-hosted SAGA for content production; adopt ElevenLabs / Eleven Creative
+(hosted) as the primary engine.** Full reasoning, findings, and revisit-conditions in
+**`DECISION_LOG.md`**. One-line why: the goal is *making visuals/stories/content* (a creator goal),
+and hosted wins on iteration speed (minutes vs 20–30 min/take), is hands-off/parallel, costs
+cents/clip vs a ~$2–3k GPU, and **stops SAGA starving Dina's `mirror`/`digim`** on the shared 24 GB
+card (the arbiter's exclusive lease is non-preemptive → chat stalls for the whole render).
+
+SAGA is **banked, not abandoned** — the trained LoRA identity, Wired Ronin aesthetic, and full A–Z
+pipeline all work and are committed. This session also: fixed FramePack near-static motion (TeaCache
+knob, default 0.05), wired framepack/ltx single-take into the one `saga-jutsu-flf.sh` pipeline
+(`VIDEO_W/H`, `--gpu-keep`, K1-only), and busted the NVLink-pooling myth (see DECISION_LOG).
+**Revisit SAGA only when there's a 2nd GPU AND a product surface needing owned per-user identity.**
 
 ## ADDENDUM — 2026-07-18 (session 2: LoRA subsystem + consistency pivot)
 
