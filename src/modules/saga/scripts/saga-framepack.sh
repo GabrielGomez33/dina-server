@@ -138,10 +138,10 @@ if [ "$CHECK" -eq 1 ]; then preflight || exit 1; exit 0; fi
 # The LoRA select node feeds the loader's `lora` input (FramePackWrapper convention).
 if [ -n "$LORA" ]; then
   LORA_NODE="\"40\":{\"class_type\":\"$NODE_LORA\",\"inputs\":{\"lora\":\"$LORA\",\"strength\":$LORA_W,\"fuse_lora\":false}},"
-  MODEL_INPUTS="{\"model\":\"$FP_MODEL\",\"base_precision\":\"bf16\",\"quantization\":\"disabled\",\"attention\":\"sdpa\",\"lora\":[\"40\",0]}"
+  MODEL_INPUTS="{\"model\":\"$FP_MODEL\",\"base_precision\":\"bf16\",\"quantization\":\"disabled\",\"attention_mode\":\"sdpa\",\"load_device\":\"main_device\",\"lora\":[\"40\",0]}"
 else
   LORA_NODE=""
-  MODEL_INPUTS="{\"model\":\"$FP_MODEL\",\"base_precision\":\"bf16\",\"quantization\":\"disabled\",\"attention\":\"sdpa\"}"
+  MODEL_INPUTS="{\"model\":\"$FP_MODEL\",\"base_precision\":\"bf16\",\"quantization\":\"disabled\",\"attention_mode\":\"sdpa\",\"load_device\":\"main_device\"}"
 fi
 
 build_graph(){ cat <<JSON
@@ -156,7 +156,7 @@ build_graph(){ cat <<JSON
  "7": {"class_type":"VAEEncode","inputs":{"pixels":["5",0],"vae":["2",0]}},
  "8": {"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$PROMPT" '$s'),"clip":["4",0]}},
  "9": {"class_type":"CLIPTextEncode","inputs":{"text":$(jq -Rn --arg s "$NEG" '$s'),"clip":["4",0]}},
- "10":{"class_type":"$NODE_SAMPLER","inputs":{"model":["1",0],"positive":["8",0],"negative":["9",0],"start_latent":["7",0],"image_embeds":["6",0],"steps":$STEPS,"cfg":$CFG,"guidance_scale":$GUIDANCE,"shift":$SHIFT,"seed":$SEED,"latent_window_size":$LWS,"gpu_memory_preservation":$GPU_KEEP,"total_second_length":$SECONDS_LEN,"use_teacache":true,"sampler":"unipc"}},
+ "10":{"class_type":"$NODE_SAMPLER","inputs":{"model":["1",0],"positive":["8",0],"negative":["9",0],"start_latent":["7",0],"image_embeds":["6",0],"steps":$STEPS,"cfg":$CFG,"guidance_scale":$GUIDANCE,"shift":$SHIFT,"seed":$SEED,"latent_window_size":$LWS,"gpu_memory_preservation":$GPU_KEEP,"total_second_length":$SECONDS_LEN,"use_teacache":true,"teacache_rel_l1_thresh":0.15,"sampler":"unipc_bh1"}},
  "11":{"class_type":"VAEDecode","inputs":{"samples":["10",0],"vae":["2",0]}},
  "12":{"class_type":"VHS_VideoCombine","inputs":{"images":["11",0],"frame_rate":$FPS,"loop_count":0,"filename_prefix":"$OUT","format":"video/h264-mp4","pingpong":false,"save_output":true}}
 }
