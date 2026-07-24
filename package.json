@@ -24,6 +24,8 @@
     "migrate:down": "ts-node scripts/migrate.ts down",
     "test": "jest",
     "test:digim": "ts-node test/digim/webEdgeCases.ts",
+    "test:auth": "ts-node test/auth/authUnit.ts",
+    "test:auth:smoke": "ts-node test/auth/authSmoke.ts",
     "test:gpu": "ts-node src/modules/gpu/tests/gpuArbiterTest.ts",
     "test:saga": "ts-node src/modules/saga/tests/sagaFoundationTest.ts",
     "test:saga:render": "ts-node src/modules/saga/tests/renderSystemsTest.ts",
@@ -79,6 +81,7 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^4.17.21",

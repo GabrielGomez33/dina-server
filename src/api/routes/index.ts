@@ -13,6 +13,7 @@ import { isDigiMMethod } from '../../modules/digim/types';
 import { registerTruthStreamRoutes } from '../../modules/mirror/truthStreamRoutes';
 import { registerPersonalAnalysisRoutes } from '../../modules/mirror/personalAnalysisRoutes';
 import { registerSagaRoutes } from '../../modules/saga/sagaRoutes';
+import { registerAuthRoutes } from '../../modules/auth';
 import { gpuArbiter } from '../../modules/gpu';
 
 // FIXED: Add helper function to map trust levels to security clearances
@@ -118,7 +119,16 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   });
 
   // ================================
-  // UNIFIED AUTHENTICATION
+  // USER AUTHENTICATION (DINA console accounts)
+  // ================================
+  // Mounted BEFORE the service-level `authenticate` gate: anonymous browsers
+  // must be able to reach /auth/login, /auth/register, etc. (you can't hold a
+  // service key in order to sign in). Endpoints that need a logged-in USER apply
+  // `requireAuth` per-route inside this router. See src/modules/auth.
+  registerAuthRoutes(apiRouter);
+
+  // ================================
+  // UNIFIED AUTHENTICATION (service / trust-level gate)
   // ================================
   // Apply unified authentication to ALL routes except health
   apiRouter.use('/health', (req, res, next) => next()); // Skip auth for health
