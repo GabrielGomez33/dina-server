@@ -1,58 +1,53 @@
 // File: migrations/004_auth_users.ts
 // ============================================================================
-// DINA AUTH — USERS, SESSIONS, AND CREDENTIAL-FLOW TOKENS  (shared-DB safe)
+// DINA AUTH — SESSIONS + CREDENTIAL-FLOW TOKENS (on DINA's OWN users table)
 // ============================================================================
-// CRITICAL CONTEXT — this database is SHARED with mirror-server.
-//   The `users` table in this database is owned and populated by mirror-server
-//   (the Admin panel creates "simulated" Mirror users by calling mirror-server's
-//   internal /mirror/api/admin/simulation API, which does the INSERT INTO users).
-//   It already holds real accounts. DINA therefore MUST NOT recreate, alter the
-//   shape of, or drop `users` / `user_sessions`. It reuses them as-is.
+// TOPOLOGY (corrected):
+//   DINA and Mirror do NOT share a database. Mirror is a separate module with
+//   its OWN `mirror` database and its own `users` table; it talks to DINA over
+//   the wire. This migration operates ONLY on DINA's `dina` database.
 //
-// Why the previous version failed:
-//   Mirror created `users` with `id INT NOT NULL AUTO_INCREMENT` (SIGNED). The
-//   old migration declared its FK columns as `BIGINT UNSIGNED`, so MySQL refused
-//   the foreign keys — "Referencing column 'user_id' and referenced column 'id'
-//   in foreign key constraint 'fk_evt_user' are incompatible."
+//   DINA already has its own `users` table, created by the app's schema
+//   bootstrap (src/config/database/db.ts). Its real shape is:
+//     id VARCHAR(36) PRIMARY KEY DEFAULT (UUID())   -- UUID string, NOT an int
+//     email VARCHAR(255) UNIQUE, username VARCHAR(100), password_hash VARCHAR(255),
+//     salt, last_login, failed_login_attempts, locked_until, is_active,
+//     security_clearance ENUM(...)                   -- no email_verified/role
+//
+// Why the first attempt failed:
+//   The token tables declared `user_id BIGINT UNSIGNED` referencing
+//   `users.id VARCHAR(36)` — incompatible ("Referencing column 'user_id' and
+//   referenced column 'id' ... incompatible", errno 150).
 //
 // How this version is correct AND robust:
-//   1. It DETECTS the real column type of `users.id` at run time and uses it
-//      verbatim for every `user_id` FK column. This can never drift out of sync
-//      with whatever mirror-server actually created — INT, INT UNSIGNED, BIGINT,
-//      whatever the live table has, the FK columns match it exactly.
-//   2. Every table is CREATE TABLE IF NOT EXISTS behind a tableExists() guard,
-//      so on the live shared DB (where Mirror already made these) it is a clean
-//      skip, and on a fresh standalone DINA DB it creates Mirror-COMPATIBLE
-//      tables (identical column names/types to mirror-server migrations 011/013
-//      and its authController), so the two services interoperate on one schema.
-//   3. down() is a guarded NO-OP. Auto-dropping a `users` table shared with a
-//      live, account-holding sister service is a footgun; reverting DINA must
-//      never destroy Mirror's data. Manual, deliberate teardown only.
+//   1. DETECT the real column type of `users.id` at run time (VARCHAR(36) here,
+//      but INT/BIGINT-safe too) and use it VERBATIM — length included — for every
+//      `user_id` FK column. See normalizeColType: char/varchar lengths are kept.
+//   2. Do NOT recreate DINA's `users` table when it exists; only ADD the two
+//      auth columns it lacks (`email_verified`, `role`) via addColumnIfMissing.
+//      On a fresh standalone DB, create a users table matching DINA's UUID shape.
+//   3. Create `user_sessions` + the three credential-token tables IF NOT EXISTS,
+//      with `user_id` matching users.id exactly.
+//   4. down() is a guarded NO-OP — it never drops `users` (may hold accounts).
 //
-// Column conventions matched to mirror-server (verified against its source):
-//   users              — INSERT (username, email, password_hash); login stamps
-//                        `last_login`; lock via account_locked/locked_until;
-//                        email_verified TINYINT(1); role VARCHAR.
-//   user_sessions      — revoked BOOLEAN + revoked_at (NOT a nullable-token
-//                        model); session_id, user_agent, ip_address,
-//                        device_fingerprint, expires_at, created_at.
+// Token-table conventions (proven design, from mirror-server migration 011/013):
 //   email_verification_tokens — plaintext `token` CHAR(64) (secret is the inbox)
-//   password_reset_tokens     — `token_hash` CHAR(64) = SHA-256(token); the
-//                        plaintext never touches the DB; + ip_address/user_agent
+//   password_reset_tokens     — `token_hash` CHAR(64) = SHA-256(token); plaintext
+//                        never touches the DB; + ip_address/user_agent forensics
 //   pending_email_changes     — new_email + plaintext `token` CHAR(64)
 // ============================================================================
 
 import type { Connection } from 'mysql2/promise';
 import { Migration } from './types';
-import { tableExists } from './helpers';
+import { tableExists, addColumnIfMissing } from './helpers';
 
 /**
  * The exact SQL column type of `users.id`, read live from information_schema
- * (e.g. "int", "int unsigned", "bigint unsigned"). Every FK `user_id` column is
+ * (e.g. "varchar(36)", "int", "bigint unsigned"). Every FK `user_id` column is
  * declared with this identical type so MySQL accepts the foreign key regardless
- * of how the shared `users` table was originally created. Falls back to plain
- * "int" only when `users` does not yet exist (fresh standalone DINA DB), which
- * matches the users table this migration would then create.
+ * of how `users` was created. Falls back to "varchar(36)" (DINA's UUID default)
+ * only when `users` does not yet exist — matching the table this migration then
+ * creates.
  */
 async function usersIdType(conn: Connection): Promise<string> {
   const [rows] = await conn.query(
@@ -60,12 +55,27 @@ async function usersIdType(conn: Connection): Promise<string> {
      WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'id'`,
   );
   const arr = rows as Array<Record<string, any>>;
-  if (!arr || arr.length === 0) return 'int';
+  if (!arr || arr.length === 0) return 'varchar(36)';
   const raw = String(Object.values(arr[0])[0] ?? '').trim();
-  // column_type is like "int", "int(11)", "int unsigned", "bigint unsigned".
-  // Strip the display-width "(n)" (deprecated in MySQL 8) but keep "unsigned".
-  const t = raw.replace(/\(\d+\)/, '').toLowerCase().trim();
-  return t.length > 0 ? t : 'int';
+  return normalizeColType(raw);
+}
+
+/**
+ * Normalise a column_type for reuse as an FK column type.
+ *   - Integer family ("int(11)", "bigint(20) unsigned"): drop the meaningless
+ *     display width, keep signedness → "int", "bigint unsigned".
+ *   - Everything else (VARCHAR(36), CHAR(36), decimal(p,s), …): keep VERBATIM.
+ *     The length is SEMANTIC — a VARCHAR(36) FK to a VARCHAR(36) PK must be
+ *     exactly VARCHAR(36); stripping "(36)" yields invalid "varchar" DDL.
+ * DINA's real users.id is VARCHAR(36) (UUID), so this distinction is load-bearing.
+ */
+export function normalizeColType(raw: string): string {
+  const t = String(raw ?? '').toLowerCase().trim();
+  if (t.length === 0) return 'varchar(36)';
+  if (/^(tinyint|smallint|mediumint|int|integer|bigint)\b/.test(t)) {
+    return t.replace(/\(\d+\)/, '').replace(/\s+/g, ' ').trim();
+  }
+  return t;
 }
 
 async function createTable(conn: Connection, name: string, ddl: string): Promise<void> {
@@ -83,32 +93,45 @@ const migration: Migration = {
 
   async up(conn: Connection): Promise<void> {
     // ── users ────────────────────────────────────────────────────────────
-    // On the live shared DB this is skipped (Mirror owns it). On a fresh
-    // standalone DINA DB, create a Mirror-compatible minimal accounts table.
-    // NOTE: id is INT SIGNED to match mirror-server; auth-relevant columns only.
+    // Normally SKIPPED: DINA's app bootstrap already created `users` (UUID id).
+    // Only on a fresh standalone DB (users absent) do we create it, matching
+    // DINA's real UUID shape so both paths converge on the same schema.
     await createTable(
       conn,
       'users',
       `CREATE TABLE IF NOT EXISTS users (
-        id              INT          NOT NULL AUTO_INCREMENT,
-        username        VARCHAR(64)  NOT NULL,
-        email           VARCHAR(320) NOT NULL,
-        password_hash   VARCHAR(255) NOT NULL,
+        id              VARCHAR(36)  NOT NULL DEFAULT (UUID()),
+        email           VARCHAR(255) NULL,
+        username        VARCHAR(100) NULL,
+        password_hash   VARCHAR(255) NULL,
+        salt            VARCHAR(32)  NULL,
+        created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        last_login      TIMESTAMP    NULL,
+        failed_login_attempts INT    NOT NULL DEFAULT 0,
+        locked_until    TIMESTAMP    NULL,
+        is_active       TINYINT(1)   NOT NULL DEFAULT 1,
         email_verified  TINYINT(1)   NOT NULL DEFAULT 0,
-        account_locked  TINYINT(1)   NOT NULL DEFAULT 0,
-        locked_until    DATETIME     NULL DEFAULT NULL,
         role            VARCHAR(24)  NOT NULL DEFAULT 'user',
-        last_login      DATETIME     NULL DEFAULT NULL,
-        last_active     DATETIME     NULL DEFAULT NULL,
-        created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
-        UNIQUE KEY uq_users_username (username),
         UNIQUE KEY uq_users_email (email)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
     );
 
-    // Resolve the real FK type AFTER users is guaranteed to exist (either it
-    // already did, or we just created it as INT). Everything below matches it.
+    // DINA's existing `users` table lacks the two columns the auth module needs.
+    // Add them idempotently — non-destructive, safe on a table with live rows.
+    const addedVerified = await addColumnIfMissing(
+      conn,
+      'users',
+      'email_verified',
+      'email_verified TINYINT(1) NOT NULL DEFAULT 0',
+    );
+    if (addedVerified) console.log('   ✓ users.email_verified added');
+    const addedRole = await addColumnIfMissing(conn, 'users', 'role', "role VARCHAR(24) NOT NULL DEFAULT 'user'");
+    if (addedRole) console.log('   ✓ users.role added');
+
+    // Resolve the real FK type AFTER users is guaranteed to exist. VARCHAR(36)
+    // on the live DB; the length is preserved (see normalizeColType).
     const idType = await usersIdType(conn);
     console.log(`   ↳ users.id resolved as "${idType}" — FK user_id columns will match`);
 
@@ -118,9 +141,9 @@ const migration: Migration = {
       conn,
       'user_sessions',
       `CREATE TABLE IF NOT EXISTS user_sessions (
-        id                  ${idType} NOT NULL AUTO_INCREMENT,
+        id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
         user_id             ${idType} NOT NULL,
-        session_id          CHAR(36)     NOT NULL,
+        session_id          CHAR(64)     NOT NULL,
         user_agent          VARCHAR(255) NULL DEFAULT NULL,
         ip_address          VARCHAR(64)  NULL DEFAULT NULL,
         device_fingerprint  VARCHAR(128) NULL DEFAULT NULL,
@@ -143,7 +166,7 @@ const migration: Migration = {
       conn,
       'email_verification_tokens',
       `CREATE TABLE IF NOT EXISTS email_verification_tokens (
-        id          ${idType} NOT NULL AUTO_INCREMENT,
+        id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
         user_id     ${idType} NOT NULL,
         token       CHAR(64)     NOT NULL,
         expires_at  DATETIME     NOT NULL,
@@ -164,7 +187,7 @@ const migration: Migration = {
       conn,
       'password_reset_tokens',
       `CREATE TABLE IF NOT EXISTS password_reset_tokens (
-        id          ${idType} NOT NULL AUTO_INCREMENT,
+        id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
         user_id     ${idType} NOT NULL,
         token_hash  CHAR(64)     NOT NULL,
         expires_at  DATETIME     NOT NULL,
@@ -186,7 +209,7 @@ const migration: Migration = {
       conn,
       'pending_email_changes',
       `CREATE TABLE IF NOT EXISTS pending_email_changes (
-        id          ${idType} NOT NULL AUTO_INCREMENT,
+        id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
         user_id     ${idType} NOT NULL,
         new_email   VARCHAR(320) NOT NULL,
         token       CHAR(64)     NOT NULL,
@@ -203,16 +226,17 @@ const migration: Migration = {
   },
 
   // ── down ───────────────────────────────────────────────────────────────
-  // Deliberately a NO-OP. This database is SHARED with mirror-server: `users`
-  // and `user_sessions` hold live accounts and sessions, and the token tables
-  // may be relied on by mirror-server too. A `migrate:down` must never silently
-  // destroy a sister service's data. If a genuine teardown is intended, drop the
-  // specific tables by hand after confirming no other service depends on them.
+  // Deliberately a NO-OP. `users` predates this migration (DINA's app bootstrap
+  // owns it) and may hold live accounts; the two auth columns we add are
+  // harmless to leave in place. A `migrate:down` must never silently destroy
+  // account data or a column another code path now reads. If a genuine teardown
+  // is intended, drop the specific token tables by hand after confirming nothing
+  // depends on them; never drop `users`.
   async down(_conn: Connection): Promise<void> {
     console.log(
-      '   ⚠ down() is a no-op for 004_auth_users: `users`/`user_sessions` and the\n' +
-        '     auth token tables are SHARED with mirror-server and hold live data.\n' +
-        '     Refusing to auto-drop. Drop manually if you are certain it is safe.',
+      '   ⚠ down() is a no-op for 004_auth_users: `users` predates this migration\n' +
+        '     and may hold live accounts. Refusing to auto-drop. Drop the token\n' +
+        '     tables manually if you are certain it is safe.',
     );
   },
 };
