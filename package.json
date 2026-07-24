@@ -25,6 +25,8 @@
     "test": "jest",
     "test:digim": "ts-node test/digim/webEdgeCases.ts",
     "test:auth": "ts-node test/auth/authUnit.ts",
+    "test:auth:config": "ts-node test/auth/configTest.ts",
+    "test:auth:crash": "ts-node test/auth/crashProof.ts",
     "test:auth:smoke": "ts-node test/auth/authSmoke.ts",
     "test:gpu": "ts-node src/modules/gpu/tests/gpuArbiterTest.ts",
     "test:saga": "ts-node src/modules/saga/tests/sagaFoundationTest.ts",

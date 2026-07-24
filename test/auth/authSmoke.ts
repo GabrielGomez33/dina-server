@@ -11,10 +11,17 @@
 // ============================================================================
 
 import http from 'http';
+import os from 'os';
+import path from 'path';
 import express from 'express';
 import mysql from 'mysql2/promise';
 import { database } from '../../src/config/database/db';
 import { registerAuthRoutes } from '../../src/modules/auth';
+
+// Self-contained secrets: point DINA's self-managed secrets file at a temp path
+// so the smoke test exercises the real generate-and-persist flow without needing
+// /var/www/dina-storage or any env secret.
+process.env.DINA_AUTH_SECRETS_FILE = path.join(os.tmpdir(), `dina-smoke-secrets-${process.pid}.json`);
 
 let passed = 0;
 let failed = 0;

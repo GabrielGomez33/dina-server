@@ -5,8 +5,9 @@ import http from 'http';
 import express from 'express';
 import { registerAuthRoutes } from '../../src/modules/auth';
 
-// Ensure secrets are absent for this test.
-delete process.env.JWT_SECRET;
+// Force a configuration ERROR (a too-short JWT_SECRET) so register() throws
+// inside its handler — the exact scenario that used to crash the process.
+process.env.JWT_SECRET = 'too-short';
 delete process.env.JWT_REFRESH_SECRET;
 
 let crashed = false;
@@ -35,7 +36,7 @@ async function main() {
   server.close();
 
   const ok = status === 503 && !crashed;
-  console.log(`register with no secrets → HTTP ${status}; process crashed: ${crashed}`);
+  console.log(`register with a too-short JWT_SECRET → HTTP ${status}; process crashed: ${crashed}`);
   console.log(ok ? '✅ PASS: clean 503, process survived' : '❌ FAIL');
   process.exit(ok ? 0 : 1);
 }
