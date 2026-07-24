@@ -52,7 +52,7 @@ import { tableExists, addColumnIfMissing } from './helpers';
  * only when `users` does not yet exist — matching the table this migration then
  * creates.
  */
-async function usersIdColumnSpec(conn: Connection): Promise<string> {
+export async function usersIdColumnSpec(conn: Connection): Promise<string> {
   const [rows] = await conn.query(
     `SELECT column_type, collation_name FROM information_schema.columns
      WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'id'`,
@@ -142,12 +142,14 @@ const migration: Migration = {
     const idType = await usersIdColumnSpec(conn);
     console.log(`   ↳ users.id resolved as "${idType}" — FK user_id columns will match`);
 
-    // ── user_sessions ────────────────────────────────────────────────────
-    // Matches mirror-server's authController schema (revoked BOOLEAN model).
+    // ── dina_auth_sessions ────────────────────────────────────────────────
+    // DINA-auth's OWN sessions table. Deliberately namespaced (NOT the generic
+    // `user_sessions`, which may already exist in this DB with a foreign schema)
+    // so it can never collide with a pre-existing table. Revoked-BOOLEAN model.
     await createTable(
       conn,
-      'user_sessions',
-      `CREATE TABLE IF NOT EXISTS user_sessions (
+      'dina_auth_sessions',
+      `CREATE TABLE IF NOT EXISTS dina_auth_sessions (
         id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
         user_id             ${idType} NOT NULL,
         session_id          CHAR(64)     NOT NULL,
@@ -159,10 +161,10 @@ const migration: Migration = {
         expires_at          DATETIME     NOT NULL,
         created_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
-        UNIQUE KEY uq_sessions_session_id (session_id),
-        KEY idx_sessions_user (user_id),
-        KEY idx_sessions_expires (expires_at),
-        CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        UNIQUE KEY uq_das_session_id (session_id),
+        KEY idx_das_user (user_id),
+        KEY idx_das_expires (expires_at),
+        CONSTRAINT fk_das_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
     );
 
