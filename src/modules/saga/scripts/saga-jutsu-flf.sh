@@ -129,6 +129,13 @@ VIDEO_BACKEND="${VIDEO_BACKEND:-wan}"
 VIDEO_LORA="${VIDEO_LORA:-}"                   # e.g. gabrielgomez1.safetensors under models/loras_video/<backend>
 VIDEO_LORA_WEIGHT="${VIDEO_LORA_WEIGHT:-0.9}"
 TAKE_SECONDS="${TAKE_SECONDS:-15}"             # target length of the single continuous take
+# Video-model render resolution — SEPARATE from the SDXL keyframe W/H below. Keyframes want
+# ~1024 (SDXL sweet spot); FramePack/HunyuanVideo want ~640 (its sweet spot + fits 24GB). The
+# start keyframe K1 is auto-resized to this by the backend driver, so the two never conflict.
+VIDEO_W="${VIDEO_W:-640}"; VIDEO_H="${VIDEO_H:-640}"
+# FramePack CPU-offload aggressiveness: higher = keep more VRAM free = fits, slightly slower.
+# 8 fits 640² on a 24GB card with the fp8 model + fp8 llava. Raise if you OOM, lower to go faster.
+VIDEO_GPU_KEEP="${VIDEO_GPU_KEEP:-8}"
 # The whole jutsu in ONE prompt (single-take backends narrate the sequence rather than pinning
 # per-seal keyframes). Overridable via env for other scenes/characters.
 TAKE_PROMPT="${TAKE_PROMPT:-the man rapidly performs a flurry of ninja hand seals in about one second, hands flicking fast and precise, then snaps both palms together in a prayer position at his chest, then slowly draws his hands apart as a small bright orb of glowing light appears between his palms and grows larger and brighter, finally his arms open to shoulder width and the orb erupts into vivid swirling multicolored energy, dramatic action scene, subtle handheld camera shake, cinematic, the same man stays centered in frame, one continuous shot, consistent lighting}"
@@ -205,6 +212,13 @@ while [ $# -gt 0 ]; do case "$1" in
   --dwpose) CONTROL_PRE=dwpose; USE_CONTROL=1; shift;;
   --openpose) CONTROL_PRE=openpose; USE_CONTROL=1; shift;;
   --canny) CONTROL_PRE=canny; USE_CONTROL=1; shift;;
+  # Identity method for the keyframes (who the character is):
+  #   lora      = per-user TRAINED identity (default; strongest, but a train per user)
+  #   instantid = ZERO-SHOT identity from one reference FACE photo, NO training — the
+  #               path that scales to many users. Needs FACE=<photo> + InstantID installed.
+  --identity) IDENTITY="$2"; shift 2;;
+  --zero-shot) IDENTITY=instantid; shift;;            # alias: --identity instantid
+  --face) FACE="$2"; shift 2;;                          # reference photo for --zero-shot
   # anime cuts for the seal sequence (no Wan morph → no melted hands); implies hard cuts
   --cuts) MOTION_MODE=cuts; ASSEMBLE=concat; shift;;
   --no-polish) POLISH=0; shift;; -h|--help) sed -n '2,40p' "$0"; exit 0;;
@@ -213,6 +227,8 @@ esac; done
 # Derive the union-net type from the FINAL preprocessor (env or flag). Must run post-flags.
 # Values must be valid SetUnionControlNetType enums: pose skeleton → "openpose".
 case "$CONTROL_PRE" in dwpose|openpose) CONTROL_UNION="${UNION_TYPE:-openpose}";; *) CONTROL_UNION="${UNION_TYPE:-canny/lineart/anime_lineart/mlsd}";; esac
+# Identity method must be a known value (fail early on a typo, not deep in STEP 1).
+case "$IDENTITY" in lora|instantid) ;; *) echo "❌ IDENTITY must be lora|instantid (got '$IDENTITY'); instantid = zero-shot reference-face, needs --face"; exit 2;; esac
 
 WORK="$SAGA_ROOT/tmp/jutsu"; mkdir -p "$WORK"
 LOG="$WORK/run_$(date +%Y%m%d_%H%M%S).log"
@@ -498,7 +514,15 @@ KF_CTRL=( "$SIGN1" "$SIGN2" "$SIGN3" "$SIGN4" "$SIGN_PRAYER" "$SIGN_ORB_NEAR" "$
 # animals and it reinforces (never fights) the matching reference.
 pose_for(){ echo "${KF_POSE[$1]}"; }
 
-if [ "$KEYFRAME_MODE" = "anchor" ]; then
+if [ "$VIDEO_BACKEND" != "wan" ]; then
+  # SINGLE-TAKE (framepack|ltx): the video model narrates the WHOLE jutsu from ONE seed
+  # frame + the take prompt — it never consumes K2..K8. So generate ONLY K1 (identity +
+  # start pose + the SAME hand-fixer via gen_kf's hand_fix). Skipping the other 7 keyframes
+  # is the big efficiency win on this path — no wasted SDXL gens for frames nothing reads.
+  log "single-take backend ($VIDEO_BACKEND): generating ONLY K1 (seed frame); K2..K8 skipped"
+  gen_kf "${KF_NAME[0]}" "$(pose_for 0)" "${KF_CTRL[0]}"
+  verify_out "$SAGA_ROOT/tmp/${KF_NAME[0]}.png"
+elif [ "$KEYFRAME_MODE" = "anchor" ]; then
   # ANCHOR-CHAIN: K1 via the full generator (identity + pose + hand-fix), then every
   # other keyframe is an EDIT of the clean K1 — inherit identity/outfit/framing, change
   # only the pose. Editing the same clean anchor each time = no drift accumulation.
@@ -527,10 +551,11 @@ K1="$SAGA_ROOT/tmp/jutsu_k1.png"; K2="$SAGA_ROOT/tmp/jutsu_k2.png"
 K3="$SAGA_ROOT/tmp/jutsu_k3.png"; K4="$SAGA_ROOT/tmp/jutsu_k4.png"
 K5="$SAGA_ROOT/tmp/jutsu_k5.png"; K6="$SAGA_ROOT/tmp/jutsu_k6.png"
 K7="$SAGA_ROOT/tmp/jutsu_k7.png"; K8="$SAGA_ROOT/tmp/jutsu_k8.png"
-echo "✅ 8 keyframes ready (mode=$KEYFRAME_MODE)"
+if [ "$VIDEO_BACKEND" != "wan" ]; then echo "✅ K1 seed frame ready (single-take $VIDEO_BACKEND; K2..K8 not needed)"; else echo "✅ 8 keyframes ready (mode=$KEYFRAME_MODE)"; fi
 
-# ── STEP 2 — MOTION (holds + FLF transitions) ───────────────────────────────
-CUR=2; step 2 "motion (3 holds + 7 FLF transitions = 320f/20s)"
+# ── STEP 2 — MOTION (Wan: holds + FLF stitch │ framepack/ltx: ONE continuous take) ──
+CUR=2
+if [ "$VIDEO_BACKEND" != "wan" ]; then step 2 "motion (single-take $VIDEO_BACKEND: one continuous gen from K1)"; else step 2 "motion (3 holds + 7 FLF transitions = 320f/20s)"; fi
 hold(){ # <still> <frames> <out>
   local png="$1" n="$2" out="$3"
   if [ "$FORCE" -eq 0 ] && have_file "$out"; then log "  reuse hold $(basename "$out")"; return 0; fi
@@ -560,9 +585,16 @@ if [ "$VIDEO_BACKEND" != "wan" ]; then
     log "  reuse take $(basename "$ONE")"
   else
     LARG=(); [ -n "$VIDEO_LORA" ] && LARG=(--lora "$VIDEO_LORA" --lora-weight "$VIDEO_LORA_WEIGHT")
+    # FramePack-only knob: --gpu-keep controls CPU-offload aggressiveness (how many GB to keep
+    # resident). Not an LTX flag, so gate it on the backend. VIDEO_W/VIDEO_H is the VIDEO-model
+    # render resolution — deliberately SMALLER than the SDXL keyframe W/H (keyframes want ~1024
+    # for crisp identity; the video model wants ~640 to fit 24GB). The driver auto-resizes K1
+    # down to VIDEO_W×VIDEO_H before VAEEncode (ImageScale node) so the take renders at 640², not
+    # the keyframe's native 1024² — the exact OOM we hit before. Upscaling back to 2K is STEP 4.
+    GARG=(); [ "$VIDEO_BACKEND" = "framepack" ] && GARG=(--gpu-keep "$VIDEO_GPU_KEEP")
     COMFY="$COMFY" "$BACKEND_DRV" -a "$K1" -p "$TAKE_PROMPT" -n "$NEG" \
-      -L "$TAKE_FRAMES" --fps "$FPS" -W "$W" -H "$H" -s "$SEED" \
-      "${LARG[@]}" -o "jutsu_take" || fail "$VIDEO_BACKEND single-take failed"
+      -L "$TAKE_FRAMES" --fps "$FPS" -W "$VIDEO_W" -H "$VIDEO_H" -s "$SEED" \
+      "${GARG[@]}" "${LARG[@]}" -o "jutsu_take" || fail "$VIDEO_BACKEND single-take failed"
   fi
   CLIPS+=( "$ONE" )
 elif [ "$MOTION_MODE" = "cuts" ]; then
