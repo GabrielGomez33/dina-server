@@ -11,24 +11,100 @@ caused by an unattended `apt` upgrade that was not followed by a reboot.
 ## 0. TL;DR decision tree
 
 ```
-Responses suddenly slow (≈ pre-GPU speeds)?
-        │
-        ▼
-  run:  nvidia-smi
-        │
-        ├─ ERROR "Driver/library version mismatch"  ──►  Section 1  (REBOOT to fix)
-        │
-        └─ OK (lists the 3090 Ti)
-                │
-                ▼
-          run:  ollama ps
-                │
-                ├─ shows "100% CPU"   ──►  Section 2  (RESTART OLLAMA to re-load on GPU)
-                │
-                ├─ shows "xx%/yy% CPU/GPU" (split) ──► Section 3 (model too big / VRAM full)
-                │
-                └─ shows "100% GPU"  ──►  GPU is fine. Look elsewhere (prompt size, queue depth).
+Symptom?
+   │
+   ├─ dina-server logs "fetch failed" / "ECONNREFUSED 127.0.0.1:11434"
+   │        └─►  Section 0.5  (Ollama daemon is DOWN — start it. GPU is unrelated.)
+   │
+   └─ Responses suddenly slow (≈ pre-GPU speeds)
+            │
+            ▼
+      run:  nvidia-smi
+            │
+            ├─ ERROR "Driver/library version mismatch"  ──►  Section 1  (REBOOT to fix)
+            │
+            └─ OK (lists the 3090 Ti)
+                    │
+                    ▼
+              run:  ollama ps
+                    │
+                    ├─ shows "100% CPU"   ──►  Section 2  (RESTART OLLAMA to re-load on GPU)
+                    │
+                    ├─ shows "xx%/yy% CPU/GPU" (split) ──► Section 3 (model too big / VRAM full)
+                    │
+                    └─ shows "100% GPU"  ──►  GPU is fine. Look elsewhere (prompt size, queue depth).
 ```
+
+> **Reading the two failure classes apart:** a healthy `nvidia-smi` that shows the 3090 Ti
+> but **"No running processes found"** and only a few MiB of VRAM used means **nothing is
+> loaded** — Ollama is either down (Section 0.5) or idle. That is a *different* problem from
+> "slow" (Sections 1–3), where Ollama *is* running but on the CPU.
+
+---
+
+## 0.5. Ollama daemon is DOWN  (`ECONNREFUSED` / "fetch failed")
+
+### Symptom
+`dina-server` logs a burst of errors while the GPU is perfectly healthy:
+```
+❌ Ollama generate error: TypeError: fetch failed
+   [cause]: Error: connect ECONNREFUSED 127.0.0.1:11434
+      errno: -111, code: 'ECONNREFUSED', syscall: 'connect', port: 11434
+❌ Mirror Chat processing failed: TypeError: fetch failed
+📤 Response generated ... status=error   (message: "fetch failed")
+```
+…and at the same time `nvidia-smi` is **fine** — it lists the 3090 Ti, shows ~7 MiB / 23028 MiB
+used, and **"No running processes found."**
+
+### Why it happens
+`dina-server` and Ollama are **separate processes.** `dina-server` (via `OllamaClient`) makes
+HTTP calls to `OLLAMA_BASE_URL` (default `http://localhost:11434`). `ECONNREFUSED` means the
+TCP connect was actively rejected — **nothing is listening on that port.** The GPU is a red
+herring here: a low VRAM figure with no processes is exactly what you'd see when Ollama isn't
+running to hold a model. Common causes:
+- The `ollama` systemd service is stopped, crashed, or was never enabled to start on boot.
+- Ollama is bound to a different address (`OLLAMA_HOST`) than the URL dina-server dials.
+- `OLLAMA_BASE_URL` in dina's environment points at the wrong host/port.
+
+### Diagnose
+```bash
+sudo systemctl status ollama            # active (running)?  or dead/failed?
+curl -fsS http://localhost:11434/api/version   # 🔴 "Connection refused" confirms it's down
+ss -ltnp | grep 11434                   # is anything listening on the port at all?
+```
+
+### Fix — start (and persist) the daemon
+```bash
+sudo systemctl enable --now ollama      # start now AND on every boot
+sudo systemctl status ollama            # confirm: active (running)
+curl -fsS http://localhost:11434/api/version   # ✅ should now return a version JSON
+```
+Then warm a model and confirm it landed on the GPU:
+```bash
+ollama run qwen2.5:3b "hi"
+ollama ps                               # PROCESSOR should read 100% GPU
+```
+Send one `@Dina` message — the `fetch failed` errors should stop.
+
+### If it won't stay up
+```bash
+journalctl -u ollama --no-pager -n 100  # read the crash reason
+ollama --version                        # very old? reinstall: curl -fsSL https://ollama.com/install.sh | sh
+```
+- **Port mismatch / bound to wrong interface:** check `OLLAMA_HOST` in the service env and make
+  sure it agrees with dina's `OLLAMA_BASE_URL`. If Ollama listens on `127.0.0.1:11434` (the
+  default), dina must dial `http://localhost:11434` — which it does out of the box.
+- **dina pointed elsewhere:** verify `OLLAMA_BASE_URL` in dina-server's environment. Unset =
+  the safe `http://localhost:11434` default (see `src/modules/llm/llmConfig.ts`).
+
+### One-command check
+```bash
+bash ops/verify-gpu.sh   # step 2 now flags a refused connection with the exact fix
+```
+
+> Note: the in-process residency monitor (Section 5) already models this — it reports the
+> `unreachable` state when Ollama doesn't answer — so `modules.llm.gpu` in the status payload
+> flips unhealthy while the daemon is down, not just when a model is on the CPU.
 
 ---
 
