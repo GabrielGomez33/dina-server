@@ -20,6 +20,7 @@
     "deploy": "npm run rebuild && sudo pm2 reload ecosystem.config.js",
     "migrate": "ts-node scripts/migrate.ts up",
     "digim:purge": "ts-node scripts/digimPurge.ts",
+    "verify": "bash scripts/verify-all.sh",
     "migrate:status": "ts-node scripts/migrate.ts status",
     "migrate:list": "ts-node scripts/migrate.ts list",
     "migrate:down": "ts-node scripts/migrate.ts down",
