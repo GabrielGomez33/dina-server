@@ -56,6 +56,38 @@ const migration: Migration = {
     await addOwnerCols(conn, 'digim_relationships');
     await addOwnerCols(conn, 'digim_relationship_sources');
 
+    // digim_content dedups by content_hash. Globally-unique content_hash would
+    // let a second research reference the FIRST owner's row (cross-tenant leak),
+    // so make dedup per-(owner, research): each research keeps its own copy of a
+    // gathered doc. Drop the inline global UNIQUE, keep a plain lookup index, add
+    // the composite UNIQUE. Guarded/idempotent.
+    if (await tableExists(conn, 'digim_content')) {
+      // The inline `content_hash VARCHAR(64) UNIQUE` created a unique index named
+      // `content_hash`. Drop it only if it is UNIQUE (non_unique = 0).
+      const [uniqRows] = await conn.query(
+        `SELECT index_name FROM information_schema.statistics
+         WHERE table_schema = DATABASE() AND table_name = 'digim_content'
+           AND column_name = 'content_hash' AND non_unique = 0`,
+      );
+      for (const r of uniqRows as Array<Record<string, any>>) {
+        const name = String(Object.values(r)[0]);
+        if (name && name !== 'uq_content_owner_research_hash') {
+          await conn.query(`ALTER TABLE \`digim_content\` DROP INDEX \`${name}\``);
+          console.log(`   ✓ dropped global unique index ${name} on digim_content.content_hash`);
+        }
+      }
+      if (!(await indexExists(conn, 'digim_content', 'idx_content_hash'))) {
+        await conn.query('ALTER TABLE `digim_content` ADD INDEX `idx_content_hash` (content_hash)');
+        console.log('   ✓ added idx_content_hash (lookup)');
+      }
+      if (!(await indexExists(conn, 'digim_content', 'uq_content_owner_research_hash'))) {
+        await conn.query(
+          'ALTER TABLE `digim_content` ADD UNIQUE KEY `uq_content_owner_research_hash` (owner_id, research_id, content_hash)',
+        );
+        console.log('   ✓ added uq_content_owner_research_hash (owner_id, research_id, content_hash)');
+      }
+    }
+
     // ── digim_intelligence: it already has user_id (the owner). Add visibility.
     if (await tableExists(conn, 'digim_intelligence')) {
       if (

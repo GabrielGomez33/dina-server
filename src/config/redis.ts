@@ -176,6 +176,30 @@ function bufToStr(v: any): string {
   return String(v);
 }
 
+/** DIGIM tenancy filter for embeddings. ownerId (when given) is the security
+ *  boundary; researchId narrows to one island. Applied against each embedding's
+ *  metadata (which carries ownerId/researchId set at store time). */
+export interface EmbeddingOwnerFilter {
+  ownerId?: string | null;
+  researchId?: string | null;
+}
+
+/** Build a predicate over embedding metadata. With no filter it matches all
+ *  (backward-compatible for non-DIGIM callers). With an ownerId it matches ONLY
+ *  embeddings tagged with that owner — an untagged (legacy) embedding is NOT
+ *  matched, so it never leaks to a scoped read (fail closed). */
+function makeEmbeddingFilter(filter?: EmbeddingOwnerFilter): (metadata: any) => boolean {
+  if (!filter || (!filter.ownerId && !filter.researchId)) return () => true;
+  const wantOwner = filter.ownerId || null;
+  const wantResearch = filter.researchId || null;
+  return (metadata: any) => {
+    const md = metadata || {};
+    if (wantOwner && String(md.ownerId ?? md.owner_id ?? '') !== wantOwner) return false;
+    if (wantResearch && String(md.researchId ?? md.research_id ?? '') !== wantResearch) return false;
+    return true;
+  };
+}
+
 export class EnhancedDinaRedisManager extends EventEmitter {
   // Core Redis connections
   private client: RedisClientType;
@@ -788,19 +812,26 @@ export class EnhancedDinaRedisManager extends EventEmitter {
 
   async searchSimilarEmbeddings(
     queryVector: number[],
-    options: VectorSearchOptions = {}
+    options: VectorSearchOptions & { ownerFilter?: EmbeddingOwnerFilter } = {}
   ): Promise<VectorSearchResult[]> {
     const topK = Math.max(1, Math.min(options.topK ?? 10, 200));
     const threshold = typeof options.threshold === 'number' ? options.threshold : 0;
     const filters = options.filters;
+    const ownerFilter = options.ownerFilter;
+    // TENANCY: the RediSearch fast path issues a GLOBAL KNN (`*=>[KNN…]`) with no
+    // owner predicate — it would return other tenants' vectors. When an owner
+    // scope is requested we therefore FORCE the brute-force path, which filters
+    // by owner during collection. This is O(owner-corpus) — small per user — and
+    // is the only path that guarantees the tenancy boundary. Fail closed.
+    const scoped = !!ownerFilter?.ownerId;
 
     if (!Array.isArray(queryVector) || queryVector.length === 0) {
       console.warn('⚠️ searchSimilarEmbeddings called with an empty query vector');
       return [];
     }
 
-    // Fast path — RediSearch KNN.
-    if (this.redisSearchAvailable) {
+    // Fast path — RediSearch KNN. Skipped entirely when owner-scoped (see above).
+    if (this.redisSearchAvailable && !scoped) {
       try {
         const fast = await this.searchViaRediSearch(queryVector, topK, threshold, filters);
         if (fast) return fast;
@@ -809,8 +840,8 @@ export class EnhancedDinaRedisManager extends EventEmitter {
       }
     }
 
-    // Fallback — brute-force cosine.
-    const corpus = await this.collectEmbeddingsForSearch();
+    // Fallback / scoped path — brute-force cosine over the (owner-filtered) corpus.
+    const corpus = await this.collectEmbeddingsForSearch(ownerFilter);
     const scored: VectorSearchResult[] = [];
     for (const emb of corpus) {
       if (filters && !matchesFilters(emb.metadata, filters)) continue;
@@ -878,8 +909,8 @@ export class EnhancedDinaRedisManager extends EventEmitter {
    * path as brute-force search. `limit` caps the number returned (newest-ish
    * by iteration order; the cap is a safety bound, not a ranking).
    */
-  async listEmbeddings(limit = 2000): Promise<VectorEmbedding[]> {
-    const all = await this.collectEmbeddingsForSearch();
+  async listEmbeddings(limit = 2000, filter?: EmbeddingOwnerFilter): Promise<VectorEmbedding[]> {
+    const all = await this.collectEmbeddingsForSearch(filter);
     const n = Math.max(1, Math.min(Math.floor(limit) || 1, all.length || 1));
     return all.slice(0, n);
   }
@@ -887,11 +918,16 @@ export class EnhancedDinaRedisManager extends EventEmitter {
   /**
    * Gather all stored embeddings for brute-force search. Prefers the in-memory
    * persistence map (fast); if empty, SCANs the `embedding:*` keyspace (capped).
+   * An optional owner/research filter is applied DURING collection (so a `limit`
+   * bounds the OWNER's corpus, not the global one) — the DIGIM tenancy boundary
+   * for the semantic view and recall.
    */
-  private async collectEmbeddingsForSearch(): Promise<VectorEmbedding[]> {
+  private async collectEmbeddingsForSearch(filter?: EmbeddingOwnerFilter): Promise<VectorEmbedding[]> {
+    const matchesOwner = makeEmbeddingFilter(filter);
     if (this.persistedEmbeddings.size > 0) {
       const out: VectorEmbedding[] = [];
       for (const e of this.persistedEmbeddings.values()) {
+        if (!matchesOwner(e.metadata)) continue;
         out.push({
           id: e.id,
           vector: e.vector,
@@ -917,7 +953,7 @@ export class EnhancedDinaRedisManager extends EventEmitter {
           const key = bufToStr(k);
           const id = key.startsWith('embedding:') ? key.slice('embedding:'.length) : key;
           const emb = await this.getEmbedding(id);
-          if (emb) out.push(emb);
+          if (emb && matchesOwner(emb.metadata)) out.push(emb);
           if (out.length >= MAX) { cursor = '0'; break; }
         }
       } while (cursor !== '0' && out.length < MAX);

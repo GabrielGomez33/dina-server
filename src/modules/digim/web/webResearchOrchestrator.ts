@@ -20,6 +20,7 @@
 // ============================================================================
 
 import { performance } from 'perf_hooks';
+import { v4 as uuidv4 } from 'uuid';
 import { getDigimWebConfig, DigimWebConfig } from './config/webConfig';
 import { GatheringPipeline } from './pipeline/gatheringPipeline';
 import { WebInsightSynthesizer } from './processors/webInsightSynthesizer';
@@ -190,9 +191,19 @@ export class WebResearchOrchestrator {
    * Recall from semantic memory only — no gathering. Returns documents already
    * in memory most relevant to the query, by meaning.
    */
-  async recall(query: string, opts?: { topK?: number; minScore?: number }): Promise<RetrievedMemory[]> {
+  async recall(
+    query: string,
+    opts?: { topK?: number; minScore?: number; ownerId?: string | null; researchId?: string | null; mode?: 'island' | 'all' },
+  ): Promise<RetrievedMemory[]> {
     this.assertEnabled();
-    return this.memory.retrieve(query, { topK: opts?.topK, minScore: opts?.minScore });
+    // Fail closed: recall is per-owner (retrieve returns [] without an owner).
+    return this.memory.retrieve(query, {
+      topK: opts?.topK,
+      minScore: opts?.minScore,
+      ownerId: opts?.ownerId ?? null,
+      researchId: opts?.researchId ?? null,
+      mode: opts?.mode ?? 'all',
+    });
   }
 
   /**
@@ -236,11 +247,20 @@ export class WebResearchOrchestrator {
   }
 
   /** Embed freshly-gathered (non-duplicate) documents into semantic memory. */
-  private async embedGathered(result: GatherResult): Promise<void> {
+  private async embedGathered(result: GatherResult, scope?: { ownerId?: string | null; researchId?: string | null }): Promise<void> {
     if (!this.memory.enabled) return;
     const items = result.documents
       .filter((d) => !d.duplicate) // already embedded on a prior run
-      .map((d) => ({ id: d.id, text: d.content, metadata: { url: d.url, title: d.title, provider: d.provider } }));
+      .map((d) => ({
+        id: d.id,
+        text: d.content,
+        // Tag the vector's metadata with the owner + research so the semantic
+        // view and recall can filter to the tenant (see redis makeEmbeddingFilter).
+        metadata: {
+          url: d.url, title: d.title, provider: d.provider,
+          ownerId: scope?.ownerId ?? null, researchId: scope?.researchId ?? null,
+        },
+      }));
     if (items.length === 0) return;
     try {
       await this.memory.embedMany(items);
@@ -303,10 +323,19 @@ export class WebResearchOrchestrator {
       throw new Error('research requires a non-empty query or seed URLs');
     }
 
+    // TENANCY: the owner is the authenticated console account. Generate this
+    // research's id UP FRONT so content, embeddings, and graph rows can all be
+    // tagged with it as research_id (the island key) before the intelligence row
+    // exists. ownerId may be undefined for internal/system calls — such rows are
+    // then untagged and invisible to every console user (fail closed on read).
+    const ownerId = opts?.userId || null;
+    const researchId = uuidv4();
+
     // (cache) Serve a fresh cached result unless refresh is forced. Keyed by
-    // query AND level so a 'surface' result isn't served for a 'deep' request.
+    // query AND level AND OWNER so one user's cached result is never served to
+    // another (getFreshIntelligence fails closed without an owner).
     if (!opts?.forceRefresh) {
-      const cachedRow = await this.store.getFreshIntelligence(cleanQuery, level);
+      const cachedRow = await this.store.getFreshIntelligence(cleanQuery, level, ownerId);
       if (cachedRow) {
         return {
           query: cleanQuery,
@@ -329,36 +358,46 @@ export class WebResearchOrchestrator {
     // memory is injected + cited (a loose bar cited unrelated old docs as
     // sources — e.g. a battery article for an NBA query).
     let priorMemory: RetrievedMemory[] = [];
-    if (this.cfg.memorySynthesisTopK > 0) {
+    if (this.cfg.memorySynthesisTopK > 0 && ownerId) {
       try {
+        // Scope prior-memory recall to THIS owner (their earlier research can
+        // inform a new one; another user's never can). Cross-research within the
+        // owner is intentional here ('all') so accumulated knowledge helps.
         priorMemory = await this.memory.retrieve(cleanQuery, {
           minScore: this.cfg.memorySynthesisMinScore,
           topK: this.cfg.memorySynthesisTopK,
+          ownerId,
+          mode: 'all',
         });
       } catch (err) {
         console.warn(`⚠️ [webResearchOrchestrator] memory recall failed: ${(err as Error).message}`);
       }
     }
 
-    // (gather → embed → synthesize)
+    // (gather → embed → synthesize). Content + embeddings are tagged with the
+    // owner and this research (island).
     const gather = await this.pipeline.gather({
       query: cleanQuery,
       maxDocuments: opts?.maxDocuments,
       seedUrls: opts?.seedUrls,
       userId: opts?.userId,
+      ownerId,
+      researchId,
       browserMode: opts?.browserMode,
     });
-    await this.embedGathered(gather);
+    await this.embedGathered(gather, { ownerId, researchId });
 
     const insight = await this.synthesizer.synthesize(cleanQuery, gather.documents, level, priorMemory);
 
-    // (persist) Store the intelligence — best effort, never fails the response.
+    // (persist) Store the intelligence under the pre-generated researchId — best
+    // effort, never fails the response.
     let intelligenceId: string | undefined;
     if (gather.documents.length > 0) {
       try {
         intelligenceId = await this.store.storeIntelligence({
+          id: researchId,
           query: cleanQuery,
-          userId: opts?.userId,
+          userId: ownerId || undefined,
           level,
           insight,
           sourceContentIds: gather.documents.map((d) => d.id),
@@ -370,11 +409,12 @@ export class WebResearchOrchestrator {
       }
     }
 
-    // (graph) Extract relationship triples into the graph — best effort, gated,
-    // never fails the response (Phase 2.4b).
+    // (graph) Extract relationship triples into THIS research's island — best
+    // effort, gated, never fails the response (Phase 2.4b). Only when we have a
+    // full scope (owner + research); an unscoped call skips the graph entirely.
     let graphAdded = 0;
-    if (this.cfg.graphEnabled && gather.documents.length > 0) {
-      graphAdded = await this.buildGraphFrom(gather.documents);
+    if (this.cfg.graphEnabled && gather.documents.length > 0 && ownerId) {
+      graphAdded = await this.buildGraphFrom(gather.documents, { ownerId, researchId });
     }
 
     const gatheredCount = gather.documents.length;
@@ -404,7 +444,7 @@ export class WebResearchOrchestrator {
    * sub-queries, research each through the proven pipeline, and fuse into one
    * comprehensive briefing. Composes existing capabilities — no new gathering.
    */
-  async investigate(query: string, opts?: { level?: IntelligenceLevel }): Promise<InvestigationResult> {
+  async investigate(query: string, opts?: { level?: IntelligenceLevel; userId?: string }): Promise<InvestigationResult> {
     this.assertEnabled();
     if (!this.cfg.plannerEnabled) {
       throw new Error('DIGIM research planner is disabled (set DIGIM_WEB_PLANNER_ENABLED=true to enable)');
@@ -412,7 +452,8 @@ export class WebResearchOrchestrator {
     const planner = new ResearchPlanner(this.cfg, {
       generate: (prompt) => this.generateText(prompt, 'digim_planner_decompose'),
       research: async (q, level) => {
-        const r = await this.research(q, { level: level as IntelligenceLevel });
+        // Each sub-research is its own owned island under the SAME account.
+        const r = await this.research(q, { level: level as IntelligenceLevel, userId: opts?.userId });
         return { insight: r.insight, documentsGathered: r.gather.documents.length, basis: r.basis };
       },
       synthesize: (q, sources, level) => this.synthesizer.synthesize(q, sources, level),
@@ -424,14 +465,22 @@ export class WebResearchOrchestrator {
    * Query the relationship graph: return the subgraph around a focus term plus
    * the view the system recommends for it (Phase 2.4b).
    */
-  async graph(focus: string, opts?: { maxNodes?: number }): Promise<Subgraph> {
+  async graph(
+    focus: string,
+    opts: { ownerId: string; researchId?: string | null; mode?: 'island' | 'all'; maxNodes?: number },
+  ): Promise<Subgraph> {
     this.assertEnabled();
-    return this.graphStore.getSubgraph(focus, opts);
+    return this.graphStore.getSubgraph(
+      focus,
+      { ownerId: opts.ownerId, researchId: opts.researchId ?? null, mode: opts.mode },
+      { maxNodes: opts.maxNodes },
+    );
   }
 
-  /** Node/edge totals for the graph (status/telemetry). */
-  async getGraphStats(): Promise<{ entities: number; relationships: number }> {
-    return this.graphStore.getStats();
+  /** Node/edge totals. Owner-scoped when given (per-user); unscoped = system
+   *  telemetry only (never surfaced to an end user). */
+  async getGraphStats(scope?: { ownerId?: string | null }): Promise<{ entities: number; relationships: number }> {
+    return this.graphStore.getStats(scope);
   }
 
   /**
@@ -442,11 +491,18 @@ export class WebResearchOrchestrator {
    * result. Optional `filter` (case-insensitive substring on title/url) narrows
    * the corpus to a topic's neighbourhood.
    */
-  async semanticMap(opts?: { limit?: number; filter?: string }): Promise<SemanticProjection> {
+  async semanticMap(opts: { limit?: number; filter?: string; ownerId: string; researchId?: string | null; mode?: 'island' | 'all' }): Promise<SemanticProjection> {
     const limit = Math.max(2, Math.min(opts?.limit ?? this.cfg.graphMaxNodes * 4, 4000));
     const filter = (opts?.filter || '').trim().toLowerCase();
+    // TENANCY: no owner ⇒ empty cloud (fail closed). 'island' restricts to one
+    // research's documents; otherwise the owner's whole corpus.
+    if (!opts?.ownerId) return projectEmbeddings([]);
+    const ownerFilter = {
+      ownerId: opts.ownerId,
+      researchId: opts.mode !== 'all' && opts.researchId ? opts.researchId : null,
+    };
 
-    const embeddings = await redisManager.listEmbeddings(limit);
+    const embeddings = await redisManager.listEmbeddings(limit, ownerFilter);
     const mapped = embeddings
       .map((e) => {
         const md = e.metadata || {};
@@ -482,11 +538,12 @@ export class WebResearchOrchestrator {
    * RESEARCH HISTORY (frontend infra): list past researches for a history
    * sidebar. Reads the intelligence records every run already persists.
    */
-  async listResearch(opts?: { limit?: number; offset?: number; type?: string; search?: string }): Promise<{ total: number; items: any[] }> {
+  async listResearch(opts: { limit?: number; offset?: number; type?: string; search?: string; ownerId: string }): Promise<{ total: number; items: any[] }> {
     this.assertEnabled();
+    // Fail closed: history is per-owner (store methods return empty without one).
     const [items, total] = await Promise.all([
-      this.store.listIntelligence(opts || {}),
-      this.store.countIntelligence({ type: opts?.type, search: opts?.search }),
+      this.store.listIntelligence({ ...opts, ownerId: opts.ownerId }),
+      this.store.countIntelligence({ type: opts.type, search: opts.search, ownerId: opts.ownerId }),
     ]);
     return { total, items };
   }
@@ -495,12 +552,13 @@ export class WebResearchOrchestrator {
    * Open one past research by id (detail view). Optionally resolves the gathered
    * source documents (title/url/snippet) behind it so a frontend can show them.
    */
-  async getResearch(id: string, opts?: { withDocuments?: boolean }): Promise<any | null> {
+  async getResearch(id: string, opts: { withDocuments?: boolean; ownerId: string }): Promise<any | null> {
     this.assertEnabled();
-    const rec = await this.store.getIntelligenceById(id);
+    // Owner-scoped: opening an id you don't own returns null (IDOR-safe).
+    const rec = await this.store.getIntelligenceById(id, opts.ownerId);
     if (!rec) return null;
     if (opts?.withDocuments && rec.sourceContentIds.length > 0) {
-      const rows = await this.store.getContentByIds(rec.sourceContentIds);
+      const rows = await this.store.getContentByIds(rec.sourceContentIds, opts.ownerId);
       (rec as any).documents = rows.map((r) => ({
         id: r.id, title: r.title || '', url: r.url || '',
         snippet: String(r.content || '').replace(/\s+/g, ' ').trim().slice(0, 280),
@@ -517,15 +575,20 @@ export class WebResearchOrchestrator {
    * crawl. One LLM call, cached per node, so it is cheap and never bulk. Fully
    * guarded and injection-fenced.
    */
-  async nodeInsight(input: { entity: string; maxSources?: number }): Promise<{
+  async nodeInsight(input: { entity: string; maxSources?: number; ownerId: string; researchId?: string | null; mode?: 'island' | 'all' }): Promise<{
     entity: string; insight: string; sources: string[]; relationships: string[]; cached: boolean;
   }> {
     this.assertEnabled();
     const entity = (input.entity || '').trim();
     if (!entity) throw new Error('nodeInsight requires an "entity"');
+    // TENANCY: an insight is grounded ONLY in the owner's graph + memory.
+    if (!input.ownerId) throw new Error('nodeInsight requires an authenticated owner');
     const maxSources = Math.max(1, Math.min(input.maxSources ?? 5, 12));
+    const island = input.mode !== 'all';
 
-    const key = entity.toLowerCase();
+    // Cache key includes the owner + scope so one user's cached insight is never
+    // returned to another (and island vs all don't collide).
+    const key = `${input.ownerId}:${island ? input.researchId ?? '' : 'all'}:${entity.toLowerCase()}`;
     const TTL = 30 * 60 * 1000; // 30 min — graph rarely changes mid-session
     const hit = this.insightCache.get(key);
     if (hit && Date.now() - hit.at < TTL) {
@@ -537,7 +600,11 @@ export class WebResearchOrchestrator {
     const graphSources: string[] = [];
     if (this.cfg.graphEnabled) {
       try {
-        const sub = await this.graphStore.getSubgraph(entity, { maxNodes: 40 });
+        const sub = await this.graphStore.getSubgraph(
+          entity,
+          { ownerId: input.ownerId, researchId: input.researchId ?? null, mode: input.mode },
+          { maxNodes: 40 },
+        );
         const nameById = new Map(sub.nodes.map((n) => [n.id, n.name]));
         for (const e of sub.edges) {
           const s = nameById.get(e.subjectId) || '', o = nameById.get(e.objectId) || '';
@@ -547,8 +614,14 @@ export class WebResearchOrchestrator {
       } catch { /* graph optional */ }
     }
 
-    // 2) Memory context: stored source snippets most relevant to the entity.
-    const mems = await this.memory.retrieve(entity, { topK: maxSources });
+    // 2) Memory context: stored source snippets most relevant to the entity —
+    //    scoped to the owner (+ research in island mode).
+    const mems = await this.memory.retrieve(entity, {
+      topK: maxSources,
+      ownerId: input.ownerId,
+      researchId: input.researchId ?? null,
+      mode: input.mode,
+    });
 
     // 3) Synthesize a focused insight (fenced, guarded). If there is nothing to
     //    ground on, say so honestly rather than hallucinate.
@@ -590,7 +663,7 @@ export class WebResearchOrchestrator {
    * Extract relationship triples from gathered documents and upsert them into the
    * graph. Best-effort and fully guarded — a graph failure never affects research.
    */
-  private async buildGraphFrom(documents: GatheredDocument[]): Promise<number> {
+  private async buildGraphFrom(documents: GatheredDocument[], scope: { ownerId: string; researchId: string }): Promise<number> {
     try {
       const triples = await this.graphExtractor.extract(
         documents.map((d) => ({ title: d.title, url: d.url, content: d.content }))
@@ -605,7 +678,7 @@ export class WebResearchOrchestrator {
           occurredAt: t.occurredAt,
           sourceUrl: t.sourceUrl || (documents[0] ? documents[0].url : undefined),
           sourceContentId: null,
-        });
+        }, scope);
         if (id) added++;
       }
       if (added > 0) {

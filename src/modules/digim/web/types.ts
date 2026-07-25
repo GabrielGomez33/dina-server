@@ -97,6 +97,10 @@ export interface GatherOptions {
   seedUrls?: string[];
   /** userId for audit/attribution. */
   userId?: string;
+  /** Tenancy: the owning console account + the research (island) this gather
+   *  belongs to. Stamped onto every stored content row (migration 007). */
+  ownerId?: string | null;
+  researchId?: string | null;
   /**
    * Per-job override of the headless-browser escalation mode. Ignored (forced
    * 'off') when the browser is globally disabled or unavailable. Defaults to the

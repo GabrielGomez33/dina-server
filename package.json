@@ -25,6 +25,7 @@
     "migrate:down": "ts-node scripts/migrate.ts down",
     "test": "jest",
     "test:digim": "ts-node test/digim/webEdgeCases.ts",
+    "test:digim:tenancy": "ts-node test/digim/tenancyTest.ts",
     "test:auth": "ts-node test/auth/authUnit.ts",
     "test:auth:config": "ts-node test/auth/configTest.ts",
     "test:auth:crash": "ts-node test/auth/crashProof.ts",
