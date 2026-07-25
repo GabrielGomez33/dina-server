@@ -32,6 +32,11 @@ export type { MemoryCandidate } from './hybridRank';
 export interface RetrieveOptions {
   topK?: number;
   minScore?: number;
+  // Tenancy: recall is scoped to this owner (required — no owner ⇒ no results).
+  // 'island' mode further restricts to a single research.
+  ownerId?: string | null;
+  researchId?: string | null;
+  mode?: 'island' | 'all';
 }
 
 export interface EmbedItem {
@@ -147,6 +152,9 @@ export class SemanticMemory {
     if (!this.cfg.memoryEnabled) return [];
     const q = (query || '').trim();
     if (!q) return [];
+    // TENANCY: recall is per-owner. Without an owner we return nothing (fail
+    // closed) — never search across other users' memory.
+    if (!opts.ownerId) return [];
 
     const topK = clampInt(opts.topK ?? this.cfg.memoryTopK, 1, 50);
     const minScore = typeof opts.minScore === 'number' ? opts.minScore : this.cfg.memoryMinScore;
@@ -154,16 +162,21 @@ export class SemanticMemory {
     const qvec = await this.embeddingService.embed(q);
     if (!qvec) return [];
 
-    // Over-fetch from the vector index, then hybrid re-rank + trim.
+    // Over-fetch from the (owner-scoped) vector index, then hybrid re-rank + trim.
+    // 'island' mode further restricts to a single research.
     const hits = await redisManager.searchSimilarEmbeddings(qvec, {
       topK: topK * 3,
       threshold: minScore,
       includeMetadata: true,
+      ownerFilter: {
+        ownerId: opts.ownerId,
+        researchId: opts.mode === 'island' ? opts.researchId ?? null : null,
+      },
     });
     if (hits.length === 0) return [];
 
     const ids = hits.map((h) => h.id);
-    const rows = await this.store.getContentByIds(ids);
+    const rows = await this.store.getContentByIds(ids, opts.ownerId);
     const byId = new Map<string, any>(rows.map((r) => [r.id, r]));
 
     const candidates: MemoryCandidate[] = [];

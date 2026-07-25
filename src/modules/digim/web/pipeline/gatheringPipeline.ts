@@ -231,6 +231,9 @@ export class GatheringPipeline {
         extracted,
         quality,
         provider: candidate.provider,
+        // Tenancy: tag the stored content with the owner + research (island).
+        ownerId: options.ownerId ?? null,
+        researchId: options.researchId ?? null,
       };
 
       try {

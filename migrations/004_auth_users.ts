@@ -42,22 +42,28 @@ import { Migration } from './types';
 import { tableExists, addColumnIfMissing } from './helpers';
 
 /**
- * The exact SQL column type of `users.id`, read live from information_schema
- * (e.g. "varchar(36)", "int", "bigint unsigned"). Every FK `user_id` column is
- * declared with this identical type so MySQL accepts the foreign key regardless
- * of how `users` was created. Falls back to "varchar(36)" (DINA's UUID default)
+ * The exact FK column SPEC to mirror `users.id`, read live from
+ * information_schema — type AND, for string ids, collation. A VARCHAR/CHAR
+ * foreign key is rejected (errno 150) unless BOTH the type and the collation
+ * match the referenced column, so we reproduce both:
+ *   "varchar(36) COLLATE utf8mb4_unicode_ci"   (string id → type + collation)
+ *   "int" / "bigint unsigned"                   (numeric id → collation N/A)
+ * Falls back to DINA's UUID default ("varchar(36)" + server default collation)
  * only when `users` does not yet exist — matching the table this migration then
  * creates.
  */
-async function usersIdType(conn: Connection): Promise<string> {
+export async function usersIdColumnSpec(conn: Connection): Promise<string> {
   const [rows] = await conn.query(
-    `SELECT column_type FROM information_schema.columns
+    `SELECT column_type, collation_name FROM information_schema.columns
      WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'id'`,
   );
   const arr = rows as Array<Record<string, any>>;
   if (!arr || arr.length === 0) return 'varchar(36)';
-  const raw = String(Object.values(arr[0])[0] ?? '').trim();
-  return normalizeColType(raw);
+  const vals = Object.values(arr[0]);
+  const type = normalizeColType(String(vals[0] ?? '').trim());
+  const collation = vals[1] != null ? String(vals[1]).trim() : '';
+  // Collation only applies to string types; integers report NULL collation.
+  return collation ? `${type} COLLATE ${collation}` : type;
 }
 
 /**
@@ -130,17 +136,20 @@ const migration: Migration = {
     const addedRole = await addColumnIfMissing(conn, 'users', 'role', "role VARCHAR(24) NOT NULL DEFAULT 'user'");
     if (addedRole) console.log('   ✓ users.role added');
 
-    // Resolve the real FK type AFTER users is guaranteed to exist. VARCHAR(36)
-    // on the live DB; the length is preserved (see normalizeColType).
-    const idType = await usersIdType(conn);
+    // Resolve the real FK column spec (type + collation) AFTER users is
+    // guaranteed to exist. On the live DB this is
+    // "varchar(36) COLLATE utf8mb4_unicode_ci".
+    const idType = await usersIdColumnSpec(conn);
     console.log(`   ↳ users.id resolved as "${idType}" — FK user_id columns will match`);
 
-    // ── user_sessions ────────────────────────────────────────────────────
-    // Matches mirror-server's authController schema (revoked BOOLEAN model).
+    // ── dina_auth_sessions ────────────────────────────────────────────────
+    // DINA-auth's OWN sessions table. Deliberately namespaced (NOT the generic
+    // `user_sessions`, which may already exist in this DB with a foreign schema)
+    // so it can never collide with a pre-existing table. Revoked-BOOLEAN model.
     await createTable(
       conn,
-      'user_sessions',
-      `CREATE TABLE IF NOT EXISTS user_sessions (
+      'dina_auth_sessions',
+      `CREATE TABLE IF NOT EXISTS dina_auth_sessions (
         id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
         user_id             ${idType} NOT NULL,
         session_id          CHAR(64)     NOT NULL,
@@ -152,10 +161,10 @@ const migration: Migration = {
         expires_at          DATETIME     NOT NULL,
         created_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
-        UNIQUE KEY uq_sessions_session_id (session_id),
-        KEY idx_sessions_user (user_id),
-        KEY idx_sessions_expires (expires_at),
-        CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+        UNIQUE KEY uq_das_session_id (session_id),
+        KEY idx_das_user (user_id),
+        KEY idx_das_expires (expires_at),
+        CONSTRAINT fk_das_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
     );
 

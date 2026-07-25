@@ -286,19 +286,19 @@ async  initialize(): Promise<void> {
         return await this.handleRecallRequest(requestData, message.security.user_id);
 
       case 'digim_graph':
-        return await this.handleGraphRequest(requestData);
+        return await this.handleGraphRequest(requestData, message.security.user_id);
 
       case 'digim_semantic':
-        return await this.handleSemanticRequest(requestData);
+        return await this.handleSemanticRequest(requestData, message.security.user_id);
 
       case 'digim_node_insight':
-        return await this.handleNodeInsightRequest(requestData);
+        return await this.handleNodeInsightRequest(requestData, message.security.user_id);
 
       case 'digim_history':
-        return await this.handleHistoryRequest(requestData);
+        return await this.handleHistoryRequest(requestData, message.security.user_id);
 
       case 'digim_get':
-        return await this.handleGetResearchRequest(requestData);
+        return await this.handleGetResearchRequest(requestData, message.security.user_id);
 
       case 'digim_memory_backfill':
         return await this.handleMemoryBackfillRequest(requestData);
@@ -525,7 +525,7 @@ async  initialize(): Promise<void> {
     }
 
     const level = normalizeIntelligenceLevel(requestData?.intelligence_level);
-    const result = await this.webResearch.investigate(query, { level });
+    const result = await this.webResearch.investigate(query, { level, userId });
 
     return {
       status: 'success',
@@ -552,7 +552,7 @@ async  initialize(): Promise<void> {
    * digim_graph — query the relationship graph: the subgraph around a focus term
    * (nodes + edges + provenance) plus the view the system recommends for it.
    */
-  private async handleGraphRequest(requestData: any): Promise<any> {
+  private async handleGraphRequest(requestData: any, userId?: string): Promise<any> {
     const focus: string = (requestData?.query || requestData?.focus || requestData?.q || '').trim();
     console.log(`🕸️ Handling graph request: "${focus.substring(0, 60)}..."`);
 
@@ -562,9 +562,15 @@ async  initialize(): Promise<void> {
     if (!focus) {
       throw new Error('digim_graph requires a "query" (focus entity/topic)');
     }
+    if (!userId) return { status: 'error', error: 'Authentication required.', code: 'NO_AUTH' };
 
-    const sub = await this.webResearch.graph(focus, { maxNodes: requestData?.max_nodes });
-    const stats = await this.webResearch.getGraphStats();
+    const sub = await this.webResearch.graph(focus, {
+      ownerId: userId,
+      researchId: requestData?.research_id ?? null,
+      mode: requestData?.scope,
+      maxNodes: requestData?.max_nodes,
+    });
+    const stats = await this.webResearch.getGraphStats({ ownerId: userId });
     // Resolve edge endpoints to names so the relationships are directly readable.
     const nameById = new Map(sub.nodes.map((n) => [n.id, n.name]));
     return {
@@ -596,7 +602,7 @@ async  initialize(): Promise<void> {
    * closeness of meaning. Returns a `points` array the graph viewer's Semantic tab
    * renders directly. Optional `filter` narrows the corpus to a topic.
    */
-  private async handleSemanticRequest(requestData: any): Promise<any> {
+  private async handleSemanticRequest(requestData: any, userId?: string): Promise<any> {
     const filter: string = (requestData?.filter || requestData?.query || requestData?.q || '').trim();
     const limit = requestData?.limit;
     console.log(`🌌 Handling semantic-map request${filter ? ` (filter="${filter.substring(0, 40)}")` : ''}`);
@@ -604,8 +610,14 @@ async  initialize(): Promise<void> {
     if (!this.webResearch.enabled) {
       return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
     }
+    if (!userId) return { status: 'error', error: 'Authentication required.', code: 'NO_AUTH' };
 
-    const proj = await this.webResearch.semanticMap({ filter, limit });
+    const proj = await this.webResearch.semanticMap({
+      filter, limit,
+      ownerId: userId,
+      researchId: requestData?.research_id ?? null,
+      mode: requestData?.scope,
+    });
     return {
       status: 'success',
       view: 'semantic',
@@ -622,15 +634,17 @@ async  initialize(): Promise<void> {
    * digim_history — list past researches (newest first) for a history sidebar.
    * Paginated; optional level filter + query search.
    */
-  private async handleHistoryRequest(requestData: any): Promise<any> {
+  private async handleHistoryRequest(requestData: any, userId?: string): Promise<any> {
     if (!this.webResearch.enabled) {
       return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
     }
+    if (!userId) return { status: 'error', error: 'Authentication required.', code: 'NO_AUTH' };
     const { total, items } = await this.webResearch.listResearch({
       limit: requestData?.limit,
       offset: requestData?.offset,
       type: requestData?.type || requestData?.level,
       search: requestData?.search || requestData?.q,
+      ownerId: userId,
     });
     return {
       status: 'success',
@@ -646,14 +660,15 @@ async  initialize(): Promise<void> {
    * digim_get — open one past research by id (full detail). Set with_documents
    * to also resolve the gathered source documents behind it.
    */
-  private async handleGetResearchRequest(requestData: any): Promise<any> {
+  private async handleGetResearchRequest(requestData: any, userId?: string): Promise<any> {
     if (!this.webResearch.enabled) {
       return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
     }
     const id: string = (requestData?.id || requestData?.research_id || '').trim();
     if (!id) throw new Error('digim_get requires an "id"');
     const withDocuments = requestData?.with_documents === true || requestData?.with_documents === 'true';
-    const rec = await this.webResearch.getResearch(id, { withDocuments });
+    if (!userId) return { status: 'error', error: 'Authentication required.', code: 'NO_AUTH' };
+    const rec = await this.webResearch.getResearch(id, { withDocuments, ownerId: userId });
     if (!rec) return { status: 'not_found', message: `No research found for id "${id}"` };
     return { status: 'success', research: rec, generated_at: new Date() };
   }
@@ -663,7 +678,7 @@ async  initialize(): Promise<void> {
    * single clicked entity/node from what DINA already has (graph relationships +
    * stored sources). Cached per entity; one LLM call; never bulk.
    */
-  private async handleNodeInsightRequest(requestData: any): Promise<any> {
+  private async handleNodeInsightRequest(requestData: any, userId?: string): Promise<any> {
     const entity: string = (requestData?.entity || requestData?.query || requestData?.node || requestData?.q || '').trim();
     console.log(`💡 Handling node-insight request: "${entity.substring(0, 60)}"`);
 
@@ -674,7 +689,14 @@ async  initialize(): Promise<void> {
       throw new Error('digim_node_insight requires an "entity" (the node/label to explain)');
     }
 
-    const res = await this.webResearch.nodeInsight({ entity, maxSources: requestData?.max_sources });
+    if (!userId) return { status: 'error', error: 'Authentication required.', code: 'NO_AUTH' };
+    const res = await this.webResearch.nodeInsight({
+      entity,
+      maxSources: requestData?.max_sources,
+      ownerId: userId,
+      researchId: requestData?.research_id ?? null,
+      mode: requestData?.scope,
+    });
     return {
       status: 'success',
       entity: res.entity,
@@ -743,9 +765,12 @@ async  initialize(): Promise<void> {
       throw new Error('digim_recall requires a "query"');
     }
 
+    if (!userId) return { status: 'error', error: 'Authentication required.', code: 'NO_AUTH' };
     const memories = await this.webResearch.recall(query, {
       topK: requestData?.top_k,
       minScore: requestData?.min_score,
+      ownerId: userId,
+      mode: 'all',
     });
 
     return {
@@ -964,8 +989,10 @@ async  initialize(): Promise<void> {
             
               'digim_content': `CREATE TABLE IF NOT EXISTS digim_content (
                   id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+                  owner_id VARCHAR(36) NULL DEFAULT NULL,     -- tenancy (migration 007): console account that gathered this
+                  research_id VARCHAR(36) NULL DEFAULT NULL,  -- island: the digim_intelligence.id this doc belongs to
                   source_id VARCHAR(36) NULL, -- nullable: ad-hoc web docs need no configured source (migration 001)
-                  content_hash VARCHAR(64) UNIQUE NOT NULL,
+                  content_hash VARCHAR(64) NOT NULL, -- dedup is per-(owner, research), see uq_content_owner_research_hash
                   title TEXT,
                   content LONGTEXT NOT NULL,
                   url TEXT NOT NULL,
@@ -993,6 +1020,8 @@ async  initialize(): Promise<void> {
                   embedding_ref VARCHAR(128) NULL, -- Redis vector id
                   CONSTRAINT fk_digim_content_source FOREIGN KEY (source_id) REFERENCES digim_sources(id) ON DELETE SET NULL,
                   INDEX idx_content_hash (content_hash),
+                  INDEX idx_content_owner (owner_id, research_id),
+                  UNIQUE KEY uq_content_owner_research_hash (owner_id, research_id, content_hash),
                   INDEX idx_cluster_status (cluster_id, processing_status),
                   INDEX idx_quality_metrics (quality_score DESC, relevance_score DESC),
                   INDEX idx_security_status (security_status, gathered_at),
@@ -1009,6 +1038,7 @@ async  initialize(): Promise<void> {
                   id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
                   query_hash VARCHAR(64) NOT NULL,
                   user_id VARCHAR(36),
+                  visibility ENUM('private','shared') NOT NULL DEFAULT 'private', -- tenancy (migration 007): sharing hook
                   intelligence_type ENUM('surface', 'deep', 'predictive') NOT NULL,
                   query_text TEXT NOT NULL,
                   source_content_ids JSON NOT NULL,
