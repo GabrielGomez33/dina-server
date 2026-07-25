@@ -964,6 +964,8 @@ async  initialize(): Promise<void> {
             
               'digim_content': `CREATE TABLE IF NOT EXISTS digim_content (
                   id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
+                  owner_id VARCHAR(36) NULL DEFAULT NULL,     -- tenancy (migration 007): console account that gathered this
+                  research_id VARCHAR(36) NULL DEFAULT NULL,  -- island: the digim_intelligence.id this doc belongs to
                   source_id VARCHAR(36) NULL, -- nullable: ad-hoc web docs need no configured source (migration 001)
                   content_hash VARCHAR(64) UNIQUE NOT NULL,
                   title TEXT,
@@ -993,6 +995,7 @@ async  initialize(): Promise<void> {
                   embedding_ref VARCHAR(128) NULL, -- Redis vector id
                   CONSTRAINT fk_digim_content_source FOREIGN KEY (source_id) REFERENCES digim_sources(id) ON DELETE SET NULL,
                   INDEX idx_content_hash (content_hash),
+                  INDEX idx_content_owner (owner_id, research_id),
                   INDEX idx_cluster_status (cluster_id, processing_status),
                   INDEX idx_quality_metrics (quality_score DESC, relevance_score DESC),
                   INDEX idx_security_status (security_status, gathered_at),
@@ -1009,6 +1012,7 @@ async  initialize(): Promise<void> {
                   id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
                   query_hash VARCHAR(64) NOT NULL,
                   user_id VARCHAR(36),
+                  visibility ENUM('private','shared') NOT NULL DEFAULT 'private', -- tenancy (migration 007): sharing hook
                   intelligence_type ENUM('surface', 'deep', 'predictive') NOT NULL,
                   query_text TEXT NOT NULL,
                   source_content_ids JSON NOT NULL,
