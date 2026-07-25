@@ -66,6 +66,11 @@ export interface DigimSearchInput {
 export interface DigimGraphInput {
   query: string;
   maxNodes?: number;
+  /** Island scope: restrict the subgraph to this research only. */
+  researchId?: string | null;
+  /** 'island' (default when researchId is set) = one research; 'all' = the
+   *  owner's whole graph across researches. */
+  mode?: 'island' | 'all';
 }
 
 export interface DigimRecallInput {
@@ -79,6 +84,11 @@ export interface DigimSemanticInput {
   filter?: string;
   /** Max embeddings to project (safety bound). */
   limit?: number;
+  /** Island scope: restrict the point cloud to this research only. */
+  researchId?: string | null;
+  /** 'island' (default when researchId is set) = one research; 'all' = the
+   *  owner's whole embedding corpus across researches. */
+  mode?: 'island' | 'all';
 }
 
 /**
@@ -131,6 +141,8 @@ export class DigimClient {
     return this.dispatch('digim_graph', 6, {
       query: input.query,
       max_nodes: input.maxNodes,
+      research_id: input.researchId ?? null,
+      scope: input.mode,
     }, caller);
   }
 
@@ -139,14 +151,21 @@ export class DigimClient {
     return this.dispatch('digim_semantic', 5, {
       filter: input.filter,
       limit: input.limit,
+      research_id: input.researchId ?? null,
+      scope: input.mode,
     }, caller);
   }
 
   /** On-demand insight for a single clicked graph node/entity. */
-  nodeInsight(input: { entity: string; maxSources?: number }, caller?: Partial<DigimCaller>): Promise<any> {
+  nodeInsight(
+    input: { entity: string; maxSources?: number; researchId?: string | null; mode?: 'island' | 'all' },
+    caller?: Partial<DigimCaller>,
+  ): Promise<any> {
     return this.dispatch('digim_node_insight', 6, {
       entity: input.entity,
       max_sources: input.maxSources,
+      research_id: input.researchId ?? null,
+      scope: input.mode,
     }, caller);
   }
 

@@ -1636,7 +1636,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // (nodes + edges + provenance) plus the recommended view (Phase 2.4b).
   apiRouter.post('/digim/graph', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { query, focus, max_nodes } = req.body || {};
+      const { query, focus, max_nodes, research_id, scope } = req.body || {};
       const focusTerm = String(query || focus || '').trim();
       if (!focusTerm) {
         res.status(400).json({
@@ -1647,7 +1647,14 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
       const data = await digim.graph(
-        { query: focusTerm, maxNodes: typeof max_nodes === 'number' ? max_nodes : undefined },
+        {
+          query: focusTerm,
+          maxNodes: typeof max_nodes === 'number' ? max_nodes : undefined,
+          // Island scope: carry the research the viewer is pinned to so the
+          // subgraph is restricted to it (else it falls back to owner-wide).
+          researchId: research_id ? String(research_id) : null,
+          mode: scope === 'all' ? 'all' : scope === 'island' ? 'island' : undefined,
+        },
         digimCaller(req)
       );
       res.json({
@@ -1696,11 +1703,14 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // DIGIM Semantic view — project stored embeddings to a 3D coordinate cloud
   apiRouter.post('/digim/semantic', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { filter, query, limit } = req.body || {};
+      const { filter, query, limit, research_id, scope } = req.body || {};
       const data = await digim.semantic(
         {
           filter: String(filter || query || '').trim() || undefined,
           limit: typeof limit === 'number' ? limit : undefined,
+          // Island scope: restrict the point cloud to this research.
+          researchId: research_id ? String(research_id) : null,
+          mode: scope === 'all' ? 'all' : scope === 'island' ? 'island' : undefined,
         },
         digimCaller(req)
       );
@@ -1720,7 +1730,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // DIGIM Node insight — on-demand grounded insight for one clicked entity
   apiRouter.post('/digim/node-insight', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { entity, query, node, max_sources } = req.body || {};
+      const { entity, query, node, max_sources, research_id, scope } = req.body || {};
       const name = String(entity || query || node || '').trim();
       if (!name) {
         res.status(400).json({
@@ -1731,7 +1741,13 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
         return;
       }
       const data = await digim.nodeInsight(
-        { entity: name, maxSources: typeof max_sources === 'number' ? max_sources : undefined },
+        {
+          entity: name,
+          maxSources: typeof max_sources === 'number' ? max_sources : undefined,
+          // Island scope: ground the insight in this research's sources only.
+          researchId: research_id ? String(research_id) : null,
+          mode: scope === 'all' ? 'all' : scope === 'island' ? 'island' : undefined,
+        },
         digimCaller(req)
       );
       res.json({
