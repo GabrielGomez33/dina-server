@@ -13,7 +13,8 @@ import { isDigiMMethod } from '../../modules/digim/types';
 import { registerTruthStreamRoutes } from '../../modules/mirror/truthStreamRoutes';
 import { registerPersonalAnalysisRoutes } from '../../modules/mirror/personalAnalysisRoutes';
 import { registerSagaRoutes } from '../../modules/saga/sagaRoutes';
-import { registerAuthRoutes } from '../../modules/auth';
+import { registerAuthRoutes, requireAuth } from '../../modules/auth';
+import type { AuthedRequest } from '../../modules/auth';
 import { gpuArbiter } from '../../modules/gpu';
 
 // FIXED: Add helper function to map trust levels to security clearances
@@ -58,11 +59,20 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // is how browser_mode got silently dropped once). Foreign modules use the same
   // client, so every capability's payload is defined in exactly one place.
   const digim = new DigimClient(dina, { sourceModule: 'api' });
-  const digimCaller = (req: AuthenticatedRequest) => ({
-    userId: req.dina!.dina_key,
-    sessionId: req.dina!.session_id,
-    clearance: mapTrustLevelToSecurityLevel(req.dina!.trust_level),
-  });
+  // TENANCY BOUNDARY: the DIGIM owner id is the JWT-verified console account
+  // (req.authUser.id, set by requireAuth on the /digim/* routes) — NEVER the
+  // service key or anything client-supplied. This is the single source of the
+  // owner used to tag writes and scope reads. If requireAuth didn't run,
+  // authUser is undefined → userId '' → every scoped store/graph/memory read
+  // fails closed (returns empty), so data can never leak.
+  const digimCaller = (req: AuthenticatedRequest) => {
+    const authUser = (req as unknown as AuthedRequest).authUser;
+    return {
+      userId: authUser?.id || '',
+      sessionId: req.dina?.session_id || authUser?.sessionId || '',
+      clearance: mapTrustLevelToSecurityLevel(req.dina?.trust_level || 'new'),
+    };
+  };
 
   // FIXED: Enhanced timeout handling with route-specific timeouts
   // TruthStream LLM endpoints need longer timeouts for Ollama synthesis
@@ -1446,7 +1456,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   // DIGIM Web Research — surf the web + synthesize insights (gather → synthesize)
   // Behaviour is gated by DIGIM_WEB_ENABLED on the server; when disabled it
   // returns a clear "disabled" status rather than doing anything.
-  apiRouter.post('/digim/research', async (req: AuthenticatedRequest, res: Response) => {
+  apiRouter.post('/digim/research', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { query, seed_urls, intelligence_level, max_documents, force_refresh, browser_mode } = req.body || {};
 
@@ -1487,7 +1497,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
 
   // DIGIM Investigate — multi-facet investigation (Phase 2.4a): decompose a broad
   // question → research each facet → fuse into one comprehensive briefing.
-  apiRouter.post('/digim/investigate', async (req: AuthenticatedRequest, res: Response) => {
+  apiRouter.post('/digim/investigate', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { query, intelligence_level } = req.body || {};
       if (!query || String(query).trim().length === 0) {
@@ -1589,7 +1599,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   });
 
   // DIGIM Recall — retrieve from semantic memory by meaning (no gathering)
-  apiRouter.post('/digim/recall', async (req: AuthenticatedRequest, res: Response) => {
+  apiRouter.post('/digim/recall', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { query, top_k, min_score } = req.body || {};
       if (!query || String(query).trim().length === 0) {
@@ -1624,7 +1634,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
 
   // DIGIM Graph — query the relationship graph: subgraph around a focus term
   // (nodes + edges + provenance) plus the recommended view (Phase 2.4b).
-  apiRouter.post('/digim/graph', async (req: AuthenticatedRequest, res: Response) => {
+  apiRouter.post('/digim/graph', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { query, focus, max_nodes } = req.body || {};
       const focusTerm = String(query || focus || '').trim();
@@ -1654,7 +1664,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   });
 
   // DIGIM Research history — list past researches (frontend history sidebar)
-  apiRouter.get('/digim/history', async (req: AuthenticatedRequest, res: Response) => {
+  apiRouter.get('/digim/history', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const q = req.query;
       const data = await digim.history({
@@ -1671,7 +1681,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   });
 
   // DIGIM Get research — open one past research by id (full detail)
-  apiRouter.get('/digim/research/:id', async (req: AuthenticatedRequest, res: Response) => {
+  apiRouter.get('/digim/research/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const withDocs = req.query.with_documents === 'true' || req.query.with_documents === '1';
       const data = await digim.get({ id: String(req.params.id), withDocuments: withDocs }, digimCaller(req));
@@ -1684,7 +1694,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   });
 
   // DIGIM Semantic view — project stored embeddings to a 3D coordinate cloud
-  apiRouter.post('/digim/semantic', async (req: AuthenticatedRequest, res: Response) => {
+  apiRouter.post('/digim/semantic', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { filter, query, limit } = req.body || {};
       const data = await digim.semantic(
@@ -1708,7 +1718,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
   });
 
   // DIGIM Node insight — on-demand grounded insight for one clicked entity
-  apiRouter.post('/digim/node-insight', async (req: AuthenticatedRequest, res: Response) => {
+  apiRouter.post('/digim/node-insight', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { entity, query, node, max_sources } = req.body || {};
       const name = String(entity || query || node || '').trim();

@@ -8,7 +8,7 @@
 //   - refresh token (long-lived, 7d): carries only {id, sessionId}, exchanged at
 //     /auth/refresh for a fresh access token. Signed with a SEPARATE
 //     JWT_REFRESH_SECRET so a leaked access secret can't mint refresh tokens.
-// The sessionId ties both tokens to a revocable row in `user_sessions`, so a
+// The sessionId ties both tokens to a revocable row in `dina_auth_sessions`, so a
 // logout (or logout-all) invalidates tokens immediately regardless of expiry.
 // ============================================================================
 
@@ -40,24 +40,34 @@ export function generateSessionId(): string {
 
 export function createAccessToken(payload: Omit<AccessPayload, 'iat' | 'exp'>): string {
   const cfg = getAuthConfig();
-  const opts: SignOptions = { expiresIn: cfg.accessTokenExpiry as SignOptions['expiresIn'], algorithm: 'HS256' };
+  const opts: SignOptions = {
+    expiresIn: cfg.accessTokenExpiry as SignOptions['expiresIn'],
+    algorithm: 'HS256',
+    issuer: cfg.issuer, // `iss` scopes the token to DINA
+  };
   return jwt.sign(payload, cfg.jwtSecret, opts);
 }
 
 export function createRefreshToken(payload: Omit<RefreshPayload, 'iat' | 'exp'>): string {
   const cfg = getAuthConfig();
-  const opts: SignOptions = { expiresIn: cfg.refreshTokenExpiry as SignOptions['expiresIn'], algorithm: 'HS256' };
+  const opts: SignOptions = {
+    expiresIn: cfg.refreshTokenExpiry as SignOptions['expiresIn'],
+    algorithm: 'HS256',
+    issuer: cfg.issuer,
+  };
   return jwt.sign(payload, cfg.jwtRefreshSecret, opts);
 }
 
-/** Verify an access token. Throws on invalid/expired — callers map to 401. */
+/** Verify an access token. Throws on invalid/expired/wrong-issuer — callers map
+ *  to 401. Pinning the issuer means a token minted by a different service (even
+ *  one that somehow shared our secret) is rejected. */
 export function verifyAccessToken(token: string): AccessPayload {
   const cfg = getAuthConfig();
-  return jwt.verify(token, cfg.jwtSecret, { algorithms: ['HS256'] }) as AccessPayload;
+  return jwt.verify(token, cfg.jwtSecret, { algorithms: ['HS256'], issuer: cfg.issuer }) as AccessPayload;
 }
 
-/** Verify a refresh token. Throws on invalid/expired — callers map to 401. */
+/** Verify a refresh token. Throws on invalid/expired/wrong-issuer — callers map to 401. */
 export function verifyRefreshToken(token: string): RefreshPayload {
   const cfg = getAuthConfig();
-  return jwt.verify(token, cfg.jwtRefreshSecret, { algorithms: ['HS256'] }) as RefreshPayload;
+  return jwt.verify(token, cfg.jwtRefreshSecret, { algorithms: ['HS256'], issuer: cfg.issuer }) as RefreshPayload;
 }

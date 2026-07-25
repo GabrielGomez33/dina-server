@@ -5,7 +5,7 @@
 // Protects user-facing endpoints. Two gates, both must pass:
 //   1. A valid, unexpired access token in `Authorization: Bearer <jwt>`.
 //   2. The token's sessionId still maps to a live (unexpired, non-revoked) row
-//      in user_sessions — so logout/logout-all take effect immediately, before
+//      in dina_auth_sessions — so logout/logout-all take effect immediately, before
 //      the JWT would naturally expire.
 // On success it attaches `req.authUser` for handlers to use. This is DISTINCT
 // from DINA's service-level `authenticate` middleware (trust levels / service
