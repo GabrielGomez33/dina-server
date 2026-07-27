@@ -529,6 +529,10 @@ async  initialize(): Promise<void> {
 
     return {
       status: 'success',
+      // The persisted investigation-root id — the console opens this after an
+      // investigate run, and its facets nest under it in history.
+      intelligence_id: result.investigationId,
+      investigation_id: result.investigationId,
       query: result.query,
       intelligence_level: result.level,
       facets_planned: result.facetsPlanned,
@@ -1038,6 +1042,7 @@ async  initialize(): Promise<void> {
                   id VARCHAR(36) PRIMARY KEY DEFAULT (UUID()),
                   query_hash VARCHAR(64) NOT NULL,
                   user_id VARCHAR(36),
+                  parent_id VARCHAR(36) NULL DEFAULT NULL, -- investigation root (migration 008): multi-facet grouping
                   visibility ENUM('private','shared') NOT NULL DEFAULT 'private', -- tenancy (migration 007): sharing hook
                   intelligence_type ENUM('surface', 'deep', 'predictive') NOT NULL,
                   query_text TEXT NOT NULL,
@@ -1057,6 +1062,7 @@ async  initialize(): Promise<void> {
                   expires_at TIMESTAMP,
                   INDEX idx_query_hash (query_hash),
                   INDEX idx_user_type (user_id, intelligence_type),
+                  INDEX idx_parent (parent_id),
                   INDEX idx_confidence (confidence_score DESC),
                   INDEX idx_generated_expires (generated_at DESC, expires_at),
                   CHECK (confidence_score >= 0.0000 AND confidence_score <= 1.0000)
