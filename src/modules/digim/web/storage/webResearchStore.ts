@@ -50,6 +50,8 @@ export interface StoreContentResult {
 /** Lightweight row for the research-history sidebar. */
 export interface ResearchSummary {
   id: string;
+  /** Investigation root this is a facet of; null for standalone/root rows. */
+  parentId: string | null;
   query: string;
   level: string;
   confidence: number;
@@ -194,6 +196,8 @@ export class WebResearchStore {
     id?: string;
     query: string;
     userId?: string;
+    /** Investigation root this row is a facet of (NULL = standalone / root). */
+    parentId?: string | null;
     level: 'surface' | 'deep' | 'predictive';
     insight: WebInsight;
     sourceContentIds: string[];
@@ -211,14 +215,15 @@ export class WebResearchStore {
     try {
       await DB.query(
         `INSERT INTO digim_intelligence
-           (id, query_hash, user_id, visibility, intelligence_type, query_text, source_content_ids,
+           (id, query_hash, user_id, parent_id, visibility, intelligence_type, query_text, source_content_ids,
             summary, insights, trends, predictions, confidence_score, raw_data,
             generated_content, processing_time_ms, model_used, expires_at)
-         VALUES (?, ?, ?, 'private', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, 'private', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           queryHash,
           params.userId || null,
+          params.parentId ?? null,
           params.level,
           params.query,
           JSON.stringify(params.sourceContentIds),
@@ -384,7 +389,7 @@ export class WebResearchStore {
     const clause = `WHERE ${where.join(' AND ')}`;
     try {
       const rows = await DB.query(
-        `SELECT id, query_text, intelligence_type, confidence_score, model_used,
+        `SELECT id, parent_id, query_text, intelligence_type, confidence_score, model_used,
                 processing_time_ms, generated_at, expires_at, source_content_ids, summary
          FROM digim_intelligence ${clause}
          ORDER BY generated_at DESC
@@ -504,6 +509,7 @@ export function toResearchSummary(row: any): ResearchSummary {
   const ids = asArray(row.source_content_ids);
   return {
     id: String(row.id),
+    parentId: row.parent_id != null ? String(row.parent_id) : null,
     query: String(row.query_text ?? ''),
     level: String(row.intelligence_type ?? ''),
     confidence: Number(row.confidence_score ?? 0) || 0,

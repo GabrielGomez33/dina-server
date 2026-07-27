@@ -58,6 +58,9 @@ export interface InvestigationResult {
   synthesis: WebInsight;
   sourcesConsulted: number;
   processingTimeMs: number;
+  /** The persisted investigation-root id (set by the orchestrator, not the
+   *  planner). Facets carry this as their parent_id. */
+  investigationId?: string;
 }
 
 /**
