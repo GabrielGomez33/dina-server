@@ -459,6 +459,45 @@ export class WebResearchStore {
       return [];
     }
   }
+
+  /**
+   * Stored source documents for an owner's researches — used by the graph
+   * BACKFILL to re-extract relationships/dates from content already gathered
+   * (no re-fetching). Owner-scoped (fail closed). Optionally one research.
+   * Returns lightweight {id, research_id, url, title, content} rows.
+   */
+  async listContentForResearch(
+    ownerId: string,
+    researchId?: string | null,
+    limit = 2000,
+  ): Promise<Array<{ id: string; research_id: string | null; url: string; title: string; content: string }>> {
+    if (!ownerId) return [];
+    const lim = clampInt(limit, 1, 20000);
+    const where = ['owner_id = ?', 'research_id IS NOT NULL', "content <> ''"];
+    const args: any[] = [ownerId];
+    if (researchId) { where.push('research_id = ?'); args.push(researchId); }
+    try {
+      const rows = await DB.query(
+        `SELECT id, research_id, url, title, content
+           FROM digim_content
+          WHERE ${where.join(' AND ')}
+          ORDER BY research_id, gathered_at
+          LIMIT ${lim}`,
+        args,
+        true,
+      );
+      return (Array.isArray(rows) ? rows : []).map((r: any) => ({
+        id: String(r.id),
+        research_id: r.research_id != null ? String(r.research_id) : null,
+        url: String(r.url ?? ''),
+        title: String(r.title ?? ''),
+        content: String(r.content ?? ''),
+      }));
+    } catch (err) {
+      console.warn(`⚠️ [webResearchStore] listContentForResearch failed: ${(err as Error).message}`);
+      return [];
+    }
+  }
 }
 
 // ----------------------------------------------------------------------------

@@ -303,6 +303,9 @@ async  initialize(): Promise<void> {
       case 'digim_memory_backfill':
         return await this.handleMemoryBackfillRequest(requestData);
 
+      case 'digim_graph_backfill':
+        return await this.handleGraphBackfillRequest(requestData, message.security.user_id);
+
       case 'digim_memory_prune':
         return await this.handleMemoryPruneRequest();
 
@@ -809,6 +812,30 @@ async  initialize(): Promise<void> {
       status: 'success',
       ...result,
       message: `Backfill complete: ${result.embedded} embedded, ${result.failed} failed of ${result.processed} pending`,
+      generated_at: new Date(),
+    };
+  }
+
+  /**
+   * digim_graph_backfill — re-extract the relationship graph for THIS owner's
+   * existing researches from already-gathered content (no re-fetch), using the
+   * current extractor (+ DIGIM_WEB_EXTRACT_MODEL if set). Enriches old islands
+   * with missing dates/relationships. Owner-scoped; optional single research.
+   */
+  private async handleGraphBackfillRequest(requestData: any, userId?: string): Promise<any> {
+    if (!this.webResearch.enabled) {
+      return { status: 'disabled', message: 'DIGIM web-research is disabled. Set DIGIM_WEB_ENABLED=true.' };
+    }
+    if (!userId) return { status: 'error', error: 'Authentication required.', code: 'NO_AUTH' };
+    const result = await this.webResearch.backfillGraph({
+      ownerId: userId,
+      researchId: requestData?.research_id ?? null,
+      limitDocs: typeof requestData?.limit_docs === 'number' ? requestData.limit_docs : undefined,
+    });
+    return {
+      status: 'success',
+      ...result,
+      message: `Graph backfill: +${result.relationshipsAdded} relationships across ${result.researches} research(es) from ${result.documents} docs`,
       generated_at: new Date(),
     };
   }
