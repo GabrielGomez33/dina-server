@@ -86,7 +86,7 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     const isPersonalAnalysisLLM = req.path.startsWith('/mirror/personal-analysis/generate');
     // DIGIM research/query drive web fetches + LLM synthesis; a cold model load
     // (150s+) would otherwise 408 at the default 60s. Give them the LLM budget.
-    const isDigimLLM = req.path.startsWith('/digim/research') || req.path.startsWith('/digim/query') || req.path.startsWith('/digim/investigate') || req.path.startsWith('/digim/node-insight');
+    const isDigimLLM = req.path.startsWith('/digim/research') || req.path.startsWith('/digim/query') || req.path.startsWith('/digim/investigate') || req.path.startsWith('/digim/node-insight') || req.path.startsWith('/digim/graph/backfill');
     const timeoutMs = (isTruthStreamLLM || isPersonalAnalysisLLM || isDigimLLM) ? 300000 : 60000;
 
     const timeout = setTimeout(() => {
