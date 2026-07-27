@@ -123,8 +123,20 @@ async function main() {
   // ── 6. Real load test ─────────────────────────────────────────────────────
   if (DO_LOAD) {
     bar('6) REAL load test (--load)');
-    console.log(`  loading ${CANDIDATE} (pull if needed, 1-token generate)…`);
     try {
+      // Ollama /api/generate does NOT auto-pull — pull first if the model is
+      // absent (streams NDJSON progress; draining the body waits for completion).
+      if (!installed) {
+        console.log(`  pulling ${CANDIDATE} (first time — this downloads several GB)…`);
+        const pull = await fetch(`${BASE}/api/pull`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: CANDIDATE, stream: true }),
+        });
+        if (!pull.ok) throw new Error(`pull HTTP ${pull.status}`);
+        await pull.text(); // drain until the pull completes
+        console.log('  pull complete.');
+      }
+      console.log(`  loading ${CANDIDATE} (1-token generate)…`);
       const t0 = Date.now();
       await ollama('/api/generate', { model: CANDIDATE, prompt: 'ok', stream: false, keep_alive: cfg.keepAlive, options: { num_predict: 1, num_gpu: cfg.numGpu } });
       console.log(`  loaded in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
