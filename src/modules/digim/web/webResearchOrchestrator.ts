@@ -313,6 +313,8 @@ export class WebResearchOrchestrator {
       userId?: string;
       forceRefresh?: boolean;
       browserMode?: BrowserModeOption;
+      /** Investigation root id when this research is a facet of an investigate run. */
+      parentId?: string | null;
     }
   ): Promise<ResearchResult> {
     this.assertEnabled();
@@ -398,6 +400,7 @@ export class WebResearchOrchestrator {
           id: researchId,
           query: cleanQuery,
           userId: ownerId || undefined,
+          parentId: opts?.parentId ?? null,
           level,
           insight,
           sourceContentIds: gather.documents.map((d) => d.id),
@@ -449,16 +452,46 @@ export class WebResearchOrchestrator {
     if (!this.cfg.plannerEnabled) {
       throw new Error('DIGIM research planner is disabled (set DIGIM_WEB_PLANNER_ENABLED=true to enable)');
     }
+    // One id for the whole investigation. Every facet is tagged with it as its
+    // parent, and the fused briefing is persisted UNDER it as the root — so the
+    // console can nest the facets beneath their investigation as a tree.
+    const investigationId = uuidv4();
     const planner = new ResearchPlanner(this.cfg, {
       generate: (prompt) => this.generateText(prompt, 'digim_planner_decompose'),
       research: async (q, level) => {
-        // Each sub-research is its own owned island under the SAME account.
-        const r = await this.research(q, { level: level as IntelligenceLevel, userId: opts?.userId });
+        // Each sub-research is its own owned island under the SAME account, and a
+        // facet (parent_id) of this investigation.
+        const r = await this.research(q, {
+          level: level as IntelligenceLevel,
+          userId: opts?.userId,
+          parentId: investigationId,
+        });
         return { insight: r.insight, documentsGathered: r.gather.documents.length, basis: r.basis };
       },
       synthesize: (q, sources, level) => this.synthesizer.synthesize(q, sources, level),
     });
-    return planner.investigate(query, { level: opts?.level as PlannerLevel });
+    const result = await planner.investigate(query, { level: opts?.level as PlannerLevel });
+
+    // Persist the fused briefing as the investigation ROOT (parent_id = null) so
+    // it heads the tree and is directly openable. Best-effort — a persist failure
+    // must never fail the investigation response.
+    try {
+      await this.store.storeIntelligence({
+        id: investigationId,
+        query,
+        userId: opts?.userId,
+        parentId: null,
+        level: (opts?.level as IntelligenceLevel) || 'deep',
+        insight: result.synthesis,
+        sourceContentIds: [],
+        modelUsed: this.cfg.synthesisModel,
+        processingTimeMs: result.processingTimeMs,
+      });
+    } catch (err) {
+      console.warn(`⚠️ [webResearchOrchestrator] investigation root persist failed: ${(err as Error).message}`);
+    }
+
+    return { ...result, investigationId };
   }
 
   /**
