@@ -33,7 +33,7 @@ async function main() {
     headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(RESEARCH_ID ? { research_id: RESEARCH_ID } : {}),
   });
-  const body = await res.json().catch(() => null);
+  const body: any = await res.json().catch(() => null);
   console.log(`HTTP ${res.status}  (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
   if (body) {
     console.log(`  status:               ${body.status}`);
