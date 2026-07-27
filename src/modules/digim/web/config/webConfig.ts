@@ -206,6 +206,11 @@ export interface DigimWebConfig {
   graphExtractMaxDocs: number;
   /** Token budget for the extraction LLM call (larger than synthesis — many triples). */
   graphExtractMaxTokens: number;
+  /** Extract from EACH document separately (focused prompt → far more complete
+   *  triples on a small model) instead of one concatenated batch pass. */
+  graphExtractPerDoc: boolean;
+  /** Bounded concurrency for per-document extraction (don't swamp Ollama). */
+  graphExtractConcurrency: number;
 }
 
 /** Mirrors WebResearchOrchestrator's IntelligenceLevel, kept local to config. */
@@ -381,6 +386,8 @@ function buildConfig(): DigimWebConfig {
     graphMaxTriples: clampInt(envInt('DIGIM_WEB_GRAPH_MAX_TRIPLES', 40), 1, 200),
     graphExtractMaxDocs: clampInt(envInt('DIGIM_WEB_GRAPH_EXTRACT_MAX_DOCS', 6), 1, 20),
     graphExtractMaxTokens: clampInt(envInt('DIGIM_WEB_GRAPH_EXTRACT_MAX_TOKENS', 3000), 512, 8192),
+    graphExtractPerDoc: envBool('DIGIM_WEB_GRAPH_EXTRACT_PER_DOC', true),
+    graphExtractConcurrency: clampInt(envInt('DIGIM_WEB_GRAPH_EXTRACT_CONCURRENCY', 3), 1, 8),
   });
 }
 

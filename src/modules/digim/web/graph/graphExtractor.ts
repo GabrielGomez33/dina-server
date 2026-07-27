@@ -46,27 +46,83 @@ export interface ExtractorDeps {
 export class GraphExtractor {
   constructor(private cfg: DigimWebConfig, private deps: ExtractorDeps) {}
 
-  /** Extract triples from the top documents in ONE batched, fenced LLM call. */
+  /**
+   * Extract relationship triples from the top documents. Default mode is
+   * PER-DOCUMENT: each source gets its own focused, fenced prompt, run with
+   * bounded concurrency, and the results are unioned + de-duplicated. A small
+   * model extracts FAR more completely from one focused document than from a
+   * giant concatenated blob (which it truncates and skims) — this is the main
+   * lever for graph richness without a bigger model. Set
+   * DIGIM_WEB_GRAPH_EXTRACT_PER_DOC=false to fall back to the single batch pass.
+   */
   async extract(docs: ExtractDoc[]): Promise<ExtractedTriple[]> {
     if (!docs || docs.length === 0) return [];
     const used = docs.slice(0, this.cfg.graphExtractMaxDocs);
-    const sourceUrls = used.map((d) => d.url);
+    return this.cfg.graphExtractPerDoc ? this.extractPerDoc(used) : this.extractBatched(used);
+  }
 
-    const fenceable: FenceableSource[] = used.map((d) => ({ title: d.title, url: d.url, content: d.content }));
+  /** Per-document extraction with a bounded-concurrency pool + cross-doc dedup. */
+  private async extractPerDoc(docs: ExtractDoc[]): Promise<ExtractedTriple[]> {
+    const all: ExtractedTriple[] = [];
+    const seen = new Set<string>();
+    const cap = this.cfg.graphMaxTriples * Math.max(2, Math.min(docs.length, 6)); // union bound
+    let idx = 0;
+
+    const add = (triples: ExtractedTriple[]) => {
+      for (const t of triples) {
+        const key = `${t.subject.toLowerCase()}|${t.predicate.toLowerCase()}|${t.object.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        all.push(t);
+      }
+    };
+
+    const worker = async (): Promise<void> => {
+      while (idx < docs.length && all.length < cap) {
+        const doc = docs[idx++];
+        add(await this.extractOne(doc));
+      }
+    };
+
+    const n = Math.max(1, Math.min(this.cfg.graphExtractConcurrency, docs.length));
+    await Promise.all(Array.from({ length: n }, () => worker()));
+    console.log(`🕸️ [graphExtractor] per-doc: ${all.length} unique triple(s) from ${docs.length} doc(s)`);
+    return all.slice(0, cap);
+  }
+
+  /** One document → triples (focused, fenced, fault-isolated). */
+  private async extractOne(doc: ExtractDoc): Promise<ExtractedTriple[]> {
+    const { block, flags } = buildFencedSources(
+      [{ title: doc.title, url: doc.url, content: doc.content }],
+      this.cfg.synthesisPerDocChars,
+    );
+    if (flags.length > 0) console.warn(`⚠️ [graphExtractor] injection patterns flagged in source ${doc.url}`);
+    const prompt = buildExtractPrompt(block, this.cfg.graphMaxTriples);
+    try {
+      const raw = await this.deps.generate(prompt);
+      return parseTriples(raw, [doc.url], this.cfg.graphMaxTriples);
+    } catch (err) {
+      console.warn(`⚠️ [graphExtractor] extractOne failed for ${doc.url}: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  /** Legacy single-call path over all docs (fallback; ONE fenced LLM call). */
+  private async extractBatched(docs: ExtractDoc[]): Promise<ExtractedTriple[]> {
+    const sourceUrls = docs.map((d) => d.url);
+    const fenceable: FenceableSource[] = docs.map((d) => ({ title: d.title, url: d.url, content: d.content }));
     const { block, flags } = buildFencedSources(fenceable, this.cfg.synthesisPerDocChars);
     if (flags.length > 0) {
       console.warn(`⚠️ [graphExtractor] injection patterns flagged in ${flags.length} source(s)`);
     }
-
     const prompt = buildExtractPrompt(block, this.cfg.graphMaxTriples);
-    let raw: string;
     try {
-      raw = await this.deps.generate(prompt);
+      const raw = await this.deps.generate(prompt);
+      return parseTriples(raw, sourceUrls, this.cfg.graphMaxTriples);
     } catch (err) {
       console.warn(`⚠️ [graphExtractor] extraction LLM failed: ${(err as Error).message}`);
       return [];
     }
-    return parseTriples(raw, sourceUrls, this.cfg.graphMaxTriples);
   }
 }
 
@@ -75,15 +131,25 @@ export class GraphExtractor {
 // ============================================================================
 
 export function buildExtractPrompt(fencedSources: string, maxTriples: number): string {
-  return `You are DINA's knowledge-graph extractor. From the numbered SOURCES, extract factual RELATIONSHIP TRIPLES — (subject, predicate, object) — capturing who did what to whom, causes and effects, and events with dates.
+  return `You are DINA's knowledge-graph extractor. From the numbered SOURCES, extract factual RELATIONSHIP TRIPLES — (subject, predicate, object) — capturing who/what did what to whom, causes and effects, correlations, definitions, and events with dates. Build a COMPLETE map of the source, not just a few highlights.
 
 ${INJECTION_SYSTEM_RULE}
 
 RULES:
 - Extract ONLY relationships explicitly stated in the sources. Never invent.
-- subject/object must be SPECIFIC NAMED entities (people, organizations, countries,
-  named events/operations, technologies). SKIP generic or indefinite references
-  ("a ship", "three vessels", "the government", "they", "forces") — name the actual entity or omit.
+- BE THOROUGH: a substantive source supports MANY triples (often 8–20+). Extract
+  every distinct relationship it states — do not stop at the few most obvious.
+- subject/object may be a NAMED entity (person, organization, country, named
+  event/operation, technology) OR a SIGNIFICANT CONCEPT the topic turns on
+  (e.g. "poverty rate", "incarceration", "unemployment", "spacetime", "a 4D
+  hypercube", "monetary policy"). Capture concepts as type "concept" — for
+  abstract topics they are the most important nodes.
+- SKIP only vague, unusable references: bare pronouns ("they", "it"), indefinite
+  quantities with no identity ("a ship", "three vessels"), and filler. Name the
+  actual entity/concept or omit the triple.
+- Capture causal + statistical links explicitly: prefer predicates like
+  "correlates with", "contributes to", "increases", "reduces", "associated with",
+  "caused by", "measured by", "defined as", "leads to".
 - predicate must be a SHORT CANONICAL verb phrase of 1–3 words, lower-case, reused
   consistently: prefer "sanctioned", "struck", "launched strikes on", "blockaded",
   "attacked", "negotiated with", "chokepoint for". Do NOT write long descriptive
