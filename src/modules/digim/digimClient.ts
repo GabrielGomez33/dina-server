@@ -146,6 +146,14 @@ export class DigimClient {
     }, caller);
   }
 
+  /** Re-extract the graph for the owner's existing researches (enrich dates/rels). */
+  graphBackfill(input: { researchId?: string | null; limitDocs?: number } = {}, caller?: Partial<DigimCaller>): Promise<any> {
+    return this.dispatch('digim_graph_backfill', 4, {
+      research_id: input.researchId ?? null,
+      limit_docs: input.limitDocs,
+    }, caller);
+  }
+
   /** Semantic view: project stored embeddings to a 3D coordinate cloud. */
   semantic(input: DigimSemanticInput = {}, caller?: Partial<DigimCaller>): Promise<any> {
     return this.dispatch('digim_semantic', 5, {

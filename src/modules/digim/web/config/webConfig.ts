@@ -85,6 +85,10 @@ export interface DigimWebConfig {
   // ---- Insight synthesis ----
   /** LLM model preference for synthesis (defaults to the analysis-tier model). */
   synthesisModel: string;
+  /** LLM model for graph/relationship EXTRACTION. A more capable model here yields
+   *  richer graphs + timelines. Defaults to synthesisModel (no change unless set
+   *  via DIGIM_WEB_EXTRACT_MODEL). */
+  extractModel: string;
   /** Max tokens for a synthesis generation. */
   synthesisMaxTokens: number;
   /** Hard timeout (ms) for a single synthesis LLM call. */
@@ -202,6 +206,11 @@ export interface DigimWebConfig {
   graphExtractMaxDocs: number;
   /** Token budget for the extraction LLM call (larger than synthesis — many triples). */
   graphExtractMaxTokens: number;
+  /** Extract from EACH document separately (focused prompt → far more complete
+   *  triples on a small model) instead of one concatenated batch pass. */
+  graphExtractPerDoc: boolean;
+  /** Bounded concurrency for per-document extraction (don't swamp Ollama). */
+  graphExtractConcurrency: number;
 }
 
 /** Mirrors WebResearchOrchestrator's IntelligenceLevel, kept local to config. */
@@ -299,6 +308,9 @@ function buildConfig(): DigimWebConfig {
   // Reuse the LLM analysis model as the synthesis default so the two configs
   // stay coherent, but allow an explicit override.
   const synthesisModel = envStr('DIGIM_WEB_SYNTHESIS_MODEL', envStr('DINA_ANALYSIS_MODEL', 'mistral:7b'));
+  // Extraction can use a heavier model than chat/synthesis for richer graphs +
+  // timelines. Defaults to synthesisModel so behavior is unchanged until set.
+  const extractModel = envStr('DIGIM_WEB_EXTRACT_MODEL', synthesisModel);
 
   return Object.freeze({
     enabled: envBool('DIGIM_WEB_ENABLED', false),
@@ -327,6 +339,7 @@ function buildConfig(): DigimWebConfig {
     allowedPorts: envIntCsv('DIGIM_WEB_ALLOWED_PORTS', [80, 443]),
 
     synthesisModel,
+    extractModel,
     synthesisMaxTokens: clampInt(envInt('DIGIM_WEB_SYNTHESIS_MAX_TOKENS', 1200), 128, 8192),
     synthesisTimeoutMs: clampInt(envInt('DIGIM_WEB_SYNTHESIS_TIMEOUT_MS', 240000), 5000, 600000),
     synthesisMaxDocuments: clampInt(envInt('DIGIM_WEB_SYNTHESIS_MAX_DOCUMENTS', 6), 1, 20),
@@ -373,6 +386,8 @@ function buildConfig(): DigimWebConfig {
     graphMaxTriples: clampInt(envInt('DIGIM_WEB_GRAPH_MAX_TRIPLES', 40), 1, 200),
     graphExtractMaxDocs: clampInt(envInt('DIGIM_WEB_GRAPH_EXTRACT_MAX_DOCS', 6), 1, 20),
     graphExtractMaxTokens: clampInt(envInt('DIGIM_WEB_GRAPH_EXTRACT_MAX_TOKENS', 3000), 512, 8192),
+    graphExtractPerDoc: envBool('DIGIM_WEB_GRAPH_EXTRACT_PER_DOC', true),
+    graphExtractConcurrency: clampInt(envInt('DIGIM_WEB_GRAPH_EXTRACT_CONCURRENCY', 3), 1, 8),
   });
 }
 
@@ -422,6 +437,7 @@ function logConfigOnce(cfg: DigimWebConfig): void {
   console.log(`   • fetch: concurrency=${cfg.fetchConcurrency} timeout=${cfg.fetchTimeoutMs}ms maxBytes=${cfg.maxContentBytes} redirects=${cfg.maxRedirects}`);
   console.log(`   • ssrfGuard=${cfg.ssrfGuardEnabled} blockPrivate=${cfg.blockPrivateRanges} allowHosts=[${cfg.allowedHosts.join(', ')}] ports=[${cfg.allowedPorts.join(', ')}]`);
   console.log(`   • synthesis: model=${cfg.synthesisModel} maxTokens=${cfg.synthesisMaxTokens} docs=${cfg.synthesisMaxDocuments}`);
+  console.log(`   • extraction: model=${cfg.extractModel}${cfg.extractModel !== cfg.synthesisModel ? ' (dedicated)' : ' (= synthesis)'}`);
   if (cfg.browserEnabled) {
     console.log(`   • browser: mode=${cfg.browserMode} endpoint=${cfg.browserWsEndpoint || '(none)'} concurrency=${cfg.browserConcurrency} navTimeout=${cfg.browserNavTimeoutMs}ms`);
   }

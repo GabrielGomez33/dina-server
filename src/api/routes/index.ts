@@ -1670,6 +1670,25 @@ export function setupAPI(app: express.Application, dina: DinaCore, basePath: str
     }
   });
 
+  // DIGIM Graph backfill — re-extract relationships/dates for the caller's own
+  // existing researches from already-gathered content (owner-scoped, no re-fetch).
+  apiRouter.post('/digim/graph/backfill', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { research_id, limit_docs } = req.body || {};
+      const data = await digim.graphBackfill(
+        {
+          researchId: research_id ? String(research_id) : null,
+          limitDocs: typeof limit_docs === 'number' ? limit_docs : undefined,
+        },
+        digimCaller(req),
+      );
+      res.json({ ...data, auth_info: { trust_level: req.dina?.trust_level, rate_limit_remaining: req.dina?.rate_limit_remaining } });
+    } catch (error) {
+      console.error('❌ Error in DIGIM graph backfill:', error);
+      res.status(500).json({ error: 'DIGIM graph backfill failed', message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  });
+
   // DIGIM Research history — list past researches (frontend history sidebar)
   apiRouter.get('/digim/history', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {

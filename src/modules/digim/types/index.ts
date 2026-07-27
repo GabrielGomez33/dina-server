@@ -20,6 +20,7 @@ export type DigiMMethod =
   | 'digim_history'       // List past researches (intelligence records)
   | 'digim_get'           // Open one past research by id (detail)
   | 'digim_memory_backfill' // Embed pending content into semantic memory (admin)
+  | 'digim_graph_backfill'  // Re-extract relationships/dates for existing researches
   | 'digim_memory_prune'  // Prune aged content + expired intelligence (admin)
   | 'digim_query'         // Natural language intelligence query
   | 'digim_analyze'       // Deep analysis of content/topics
@@ -566,6 +567,7 @@ export function isDigiMMessage(message: DinaUniversalMessage): message is DigiMM
 export function isDigiMMethod(method: string): method is DigiMMethod {
   const digiMethods: DigiMMethod[] = [
     'digim_gather', 'digim_research', 'digim_investigate', 'digim_search', 'digim_recall', 'digim_graph', 'digim_semantic', 'digim_node_insight', 'digim_history', 'digim_get', 'digim_memory_backfill',
+    'digim_graph_backfill',
     'digim_memory_prune', 'digim_query', 'digim_analyze', 'digim_generate', 'digim_cluster',
     'digim_export', 'digim_status', 'digim_sources', 'digim_security'
   ];
