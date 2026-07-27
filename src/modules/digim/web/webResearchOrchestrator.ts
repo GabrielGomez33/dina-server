@@ -113,7 +113,7 @@ export class WebResearchOrchestrator {
     this.memory = new SemanticMemory(this.llmManager, cfg);
     // Relationship graph (Phase 2.4b): extractor reuses the LLM; store is DB-backed.
     this.graphStore = new GraphStore(cfg);
-    this.graphExtractor = new GraphExtractor(cfg, { generate: (p) => this.generateText(p, 'digim_graph_extract', cfg.graphExtractMaxTokens) });
+    this.graphExtractor = new GraphExtractor(cfg, { generate: (p) => this.generateText(p, 'digim_graph_extract', cfg.graphExtractMaxTokens, cfg.extractModel) });
   }
 
   get enabled(): boolean {
@@ -273,6 +273,45 @@ export class WebResearchOrchestrator {
   async backfillMemory(limit = 100): Promise<{ processed: number; embedded: number; failed: number }> {
     this.assertEnabled();
     return this.memory.backfillPending(limit);
+  }
+
+  /**
+   * Re-extract the relationship graph for an owner's EXISTING researches from
+   * content already gathered (no re-fetching). Uses the CURRENT extractor (and
+   * DIGIM_WEB_EXTRACT_MODEL if set), so it enriches old islands: upserts fill in
+   * missing occurred_at (COALESCE) and add relationships a weaker earlier model
+   * missed. Owner-scoped, per-research islands preserved. Best-effort per
+   * research. Optionally target one research.
+   */
+  async backfillGraph(opts: { ownerId: string; researchId?: string | null; limitDocs?: number }): Promise<{
+    researches: number; documents: number; relationshipsAdded: number;
+  }> {
+    this.assertEnabled();
+    if (!opts.ownerId) return { researches: 0, documents: 0, relationshipsAdded: 0 };
+    const rows = await this.store.listContentForResearch(opts.ownerId, opts.researchId ?? null, opts.limitDocs ?? 4000);
+
+    const byResearch = new Map<string, Array<{ title: string; url: string; content: string }>>();
+    for (const r of rows) {
+      if (!r.research_id) continue;
+      const arr = byResearch.get(r.research_id) || [];
+      arr.push({ title: r.title, url: r.url, content: r.content });
+      byResearch.set(r.research_id, arr);
+    }
+
+    let relationshipsAdded = 0;
+    let documents = 0;
+    for (const [researchId, docs] of byResearch) {
+      documents += docs.length;
+      try {
+        // buildGraphFrom reads only {title,url,content}; the cast is safe.
+        const added = await this.buildGraphFrom(docs as any, { ownerId: opts.ownerId, researchId });
+        relationshipsAdded += added;
+        console.log(`🔁 [backfillGraph] research ${researchId.slice(0, 8)}…: +${added} rels from ${docs.length} docs`);
+      } catch (err) {
+        console.warn(`⚠️ [backfillGraph] research ${researchId} failed: ${(err as Error).message}`);
+      }
+    }
+    return { researches: byResearch.size, documents, relationshipsAdded };
   }
 
   /**
@@ -725,13 +764,13 @@ export class WebResearchOrchestrator {
   }
 
   /** LLM text generation with a hard timeout (used by the planner + graph extractor). */
-  private async generateText(prompt: string, task: string, maxTokens?: number): Promise<string> {
+  private async generateText(prompt: string, task: string, maxTokens?: number, modelOverride?: string): Promise<string> {
     const budget = maxTokens ?? this.cfg.synthesisMaxTokens;
     const generation = this.llmManager.generate(prompt, {
       maxTokens: budget,
       max_tokens: budget,
       temperature: 0.3,
-      model_preference: this.cfg.synthesisModel,
+      model_preference: modelOverride || this.cfg.synthesisModel,
       task,
     });
     const timeout = new Promise<never>((_, reject) => {
