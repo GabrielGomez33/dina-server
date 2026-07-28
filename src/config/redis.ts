@@ -182,6 +182,9 @@ function bufToStr(v: any): string {
 export interface EmbeddingOwnerFilter {
   ownerId?: string | null;
   researchId?: string | null;
+  /** Island across a SET of researches (investigation root + facets). Takes
+   *  precedence over researchId when non-empty. */
+  researchIds?: string[] | null;
 }
 
 /** Build a predicate over embedding metadata. With no filter it matches all
@@ -189,13 +192,16 @@ export interface EmbeddingOwnerFilter {
  *  embeddings tagged with that owner — an untagged (legacy) embedding is NOT
  *  matched, so it never leaks to a scoped read (fail closed). */
 function makeEmbeddingFilter(filter?: EmbeddingOwnerFilter): (metadata: any) => boolean {
-  if (!filter || (!filter.ownerId && !filter.researchId)) return () => true;
+  const wantResearchSet = filter?.researchIds && filter.researchIds.length > 0 ? new Set(filter.researchIds) : null;
+  if (!filter || (!filter.ownerId && !filter.researchId && !wantResearchSet)) return () => true;
   const wantOwner = filter.ownerId || null;
   const wantResearch = filter.researchId || null;
   return (metadata: any) => {
     const md = metadata || {};
     if (wantOwner && String(md.ownerId ?? md.owner_id ?? '') !== wantOwner) return false;
-    if (wantResearch && String(md.researchId ?? md.research_id ?? '') !== wantResearch) return false;
+    const research = String(md.researchId ?? md.research_id ?? '');
+    if (wantResearchSet) { if (!wantResearchSet.has(research)) return false; }
+    else if (wantResearch && research !== wantResearch) return false;
     return true;
   };
 }

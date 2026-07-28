@@ -571,9 +571,17 @@ async  initialize(): Promise<void> {
     }
     if (!userId) return { status: 'error', error: 'Authentication required.', code: 'NO_AUTH' };
 
+    // Expand a research to its island set: an investigation root → [root,
+    // ...facets] so the parent view unions its facets' graphs; a leaf → itself.
+    const researchId: string | null = requestData?.research_id ?? null;
+    const researchIds = requestData?.scope !== 'all' && researchId
+      ? await this.webResearch.resolveResearchScope(userId, researchId)
+      : null;
+
     const sub = await this.webResearch.graph(focus, {
       ownerId: userId,
-      researchId: requestData?.research_id ?? null,
+      researchId,
+      researchIds,
       mode: requestData?.scope,
       maxNodes: requestData?.max_nodes,
     });
@@ -619,10 +627,15 @@ async  initialize(): Promise<void> {
     }
     if (!userId) return { status: 'error', error: 'Authentication required.', code: 'NO_AUTH' };
 
+    const semResearchId: string | null = requestData?.research_id ?? null;
+    const semResearchIds = requestData?.scope !== 'all' && semResearchId
+      ? await this.webResearch.resolveResearchScope(userId, semResearchId)
+      : null;
     const proj = await this.webResearch.semanticMap({
       filter, limit,
       ownerId: userId,
-      researchId: requestData?.research_id ?? null,
+      researchId: semResearchId,
+      researchIds: semResearchIds,
       mode: requestData?.scope,
     });
     return {

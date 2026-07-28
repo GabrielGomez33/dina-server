@@ -539,14 +539,25 @@ export class WebResearchOrchestrator {
    */
   async graph(
     focus: string,
-    opts: { ownerId: string; researchId?: string | null; mode?: 'island' | 'all'; maxNodes?: number },
+    opts: { ownerId: string; researchId?: string | null; researchIds?: string[] | null; mode?: 'island' | 'all'; maxNodes?: number },
   ): Promise<Subgraph> {
     this.assertEnabled();
     return this.graphStore.getSubgraph(
       focus,
-      { ownerId: opts.ownerId, researchId: opts.researchId ?? null, mode: opts.mode },
+      { ownerId: opts.ownerId, researchId: opts.researchId ?? null, researchIds: opts.researchIds ?? null, mode: opts.mode },
       { maxNodes: opts.maxNodes },
     );
+  }
+
+  /**
+   * Expand a research id to the island SET it should show: an investigation ROOT
+   * expands to [root, ...its facets] so the parent view unions its facets'
+   * graphs/embeddings; a standalone research or a leaf facet is just itself.
+   * Owner-scoped.
+   */
+  async resolveResearchScope(ownerId: string, researchId: string | null | undefined): Promise<string[]> {
+    if (!ownerId || !researchId) return researchId ? [researchId] : [];
+    return this.store.researchScopeIds(ownerId, researchId);
   }
 
   /** Node/edge totals. Owner-scoped when given (per-user); unscoped = system
@@ -563,15 +574,18 @@ export class WebResearchOrchestrator {
    * result. Optional `filter` (case-insensitive substring on title/url) narrows
    * the corpus to a topic's neighbourhood.
    */
-  async semanticMap(opts: { limit?: number; filter?: string; ownerId: string; researchId?: string | null; mode?: 'island' | 'all' }): Promise<SemanticProjection> {
+  async semanticMap(opts: { limit?: number; filter?: string; ownerId: string; researchId?: string | null; researchIds?: string[] | null; mode?: 'island' | 'all' }): Promise<SemanticProjection> {
     const limit = Math.max(2, Math.min(opts?.limit ?? this.cfg.graphMaxNodes * 4, 4000));
     const filter = (opts?.filter || '').trim().toLowerCase();
     // TENANCY: no owner ⇒ empty cloud (fail closed). 'island' restricts to one
-    // research's documents; otherwise the owner's whole corpus.
+    // research (or an investigation's facet SET); otherwise the owner's corpus.
     if (!opts?.ownerId) return projectEmbeddings([]);
+    const islandIds = (opts.researchIds && opts.researchIds.length > 0)
+      ? opts.researchIds
+      : (opts.researchId ? [opts.researchId] : []);
     const ownerFilter = {
       ownerId: opts.ownerId,
-      researchId: opts.mode !== 'all' && opts.researchId ? opts.researchId : null,
+      researchIds: opts.mode !== 'all' && islandIds.length > 0 ? islandIds : null,
     };
 
     const embeddings = await redisManager.listEmbeddings(limit, ownerFilter);
