@@ -82,6 +82,11 @@ async function main(): Promise<void> {
   const timedAndEmbedded = Array.from({ length: 8 }, () => ({ occurredAt: '2026-01-01', embeddingRef: 'v' }));
   ok(suggestView(timedAndEmbedded as any, []) === 'temporal', 'temporal takes precedence over semantic');
   ok(suggestView([{ occurredAt: null }, { occurredAt: null }, { occurredAt: null }] as any, []) === 'network', 'no signals → network');
+  // BCE/prehistoric events carry occurred_sort but NULL occurred_at (out of DATETIME
+  // range) — they must still count as temporal (the human-species timeline bug).
+  ok(suggestView([{ occurredAt: null, occurredSort: -10000 }, { occurredAt: null, occurredSort: -297975 }, { occurredAt: null, occurredSort: null }] as any, []) === 'temporal', 'BCE occurred_sort → temporal (occurred_at null)');
+  // Dates that live on the RELATIONSHIPS (few event nodes) still yield a timeline.
+  ok(suggestView([{ occurredAt: null }, { occurredAt: null }] as any, [{ occurredSort: 1969 }, { occurredSort: -3200 }] as any) === 'temporal', 'edge-dated graph → temporal even when nodes undated');
 
   // --------------------------------------------------------------------------
   section('rowToNode / rowToEdge — DB row → type mapping');
@@ -99,6 +104,14 @@ async function main(): Promise<void> {
   const good = parseTriples('{"triples":[{"subject":"US","predicate":"launched","object":"Operation Epic Fury","objectType":"event","occurredAt":"2026-02-28","source":1,"confidence":0.9}]}', urls, 40);
   ok(good.length === 1 && good[0].sourceUrl === 'https://a.com', 'source number → URL');
   ok(good[0].objectType === 'event' && good[0].occurredAt!.startsWith('2026-02-28'), 'event type + occurredAt parsed');
+  // REGRESSION (timeline bug): deep-time / BCE dates must be PRESERVED verbatim by
+  // the extractor, not Date.parse-nulled. The store (parseTemporal) turns them into
+  // a sortable year later — nulling them here silently emptied the timeline.
+  const deep = parseTriples('{"triples":[{"subject":"Homo sapiens","predicate":"emerged","object":"East Africa","occurredAt":"300,000 years ago","source":1},{"subject":"Agriculture","predicate":"began","object":"Fertile Crescent","occurredAt":"10,000 BCE","source":1}]}', urls, 40);
+  ok(deep.length === 2, 'deep-time triples kept');
+  ok(deep[0].occurredAt === '300,000 years ago', '"300,000 years ago" PRESERVED (not nulled)');
+  ok(deep[1].occurredAt === '10,000 BCE', '"10,000 BCE" PRESERVED (not nulled)');
+  ok(parseTriples('{"triples":[{"subject":"X Corp","predicate":"noted","object":"Y Inc","occurredAt":"null","source":1}]}', urls, 40)[0].occurredAt === null, '"null" string → null occurredAt');
   ok(parseTriples('{"triples":[{"subject":"Alpha","predicate":"p","object":"Beta","source":9}]}', urls, 40)[0].sourceUrl === '', 'out-of-range source → empty URL');
   ok(parseTriples('{"triples":[{"subject":"Alpha","predicate":"p"}]}', urls, 40).length === 0, 'missing object → dropped');
   ok(parseTriples('{"triples":[{"subject":"Iran","predicate":"is","object":"iran","source":1}]}', urls, 40).length === 0, 'self-loop dropped');

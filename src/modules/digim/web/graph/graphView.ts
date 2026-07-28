@@ -36,15 +36,27 @@ export const DEFAULT_VIEW_THRESHOLDS: ViewThresholds = {
  * (always returns a valid view, even for an empty graph).
  */
 export function suggestView(
-  nodes: Array<Pick<GraphNode, 'occurredAt' | 'embeddingRef'>>,
-  _edges: GraphEdge[] = [],
+  nodes: Array<Pick<GraphNode, 'occurredAt' | 'occurredSort' | 'embeddingRef'>>,
+  edges: Array<Pick<GraphEdge, 'occurredAt' | 'occurredSort'>> = [],
   thresholds: ViewThresholds = DEFAULT_VIEW_THRESHOLDS
 ): GraphViewType {
   const n = nodes.length;
   if (n === 0) return 'network';
 
-  const timed = nodes.filter((x) => !!x.occurredAt).length;
-  if (timed / n >= thresholds.temporalRatio) return 'temporal';
+  // A node/edge is "dated" if it carries a sortable year (occurred_sort) — which,
+  // unlike occurred_at (DATETIME, CE-only), also covers BCE/prehistoric events. Fall
+  // back to occurred_at so pre-backfill rows still count.
+  const dated = (x: { occurredAt?: string | null; occurredSort?: number | null }) =>
+    x.occurredSort != null || !!x.occurredAt;
+
+  const timedNodes = nodes.filter(dated).length;
+  if (timedNodes / n >= thresholds.temporalRatio) return 'temporal';
+
+  // Dates in this graph often live on the RELATIONSHIPS, not the entities (e.g. an
+  // event edge "X happened in 1969"). A graph whose edges are mostly dated is a
+  // timeline even if few nodes are event-typed.
+  const timedEdges = edges.filter(dated).length;
+  if (edges.length > 0 && timedEdges / edges.length >= thresholds.temporalRatio) return 'temporal';
 
   const embedded = nodes.filter((x) => !!x.embeddingRef).length;
   if (n >= thresholds.semanticMinNodes && embedded / n >= thresholds.semanticRatio) return 'semantic';

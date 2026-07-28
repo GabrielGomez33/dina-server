@@ -272,7 +272,10 @@ function ingest(raw) {
   const R = 220;
   const nodes = nodesIn.map((n, i) => {
     const node = { name: String(n.name ?? n.id ?? "?"), type: String(n.type ?? "other").toLowerCase(),
-      occurredAt: n.occurred_at ?? n.occurredAt ?? null, weight: Number(n.weight ?? n.mentionCount ?? 1) || 1,
+      occurredAt: n.occurred_at ?? n.occurredAt ?? null,
+      occurredSort: (n.occurred_sort ?? n.occurredSort ?? null),
+      occurredLabel: (n.occurred_label ?? n.occurredLabel ?? null),
+      weight: Number(n.weight ?? n.mentionCount ?? 1) || 1,
       x:(Math.random()-0.5)*R, y:(Math.random()-0.5)*R, z:(Math.random()-0.5)*R, vx:0, vy:0, vz:0, deg:0 };
     byName.set(node.name, node); return node;
   });
@@ -284,7 +287,9 @@ function ingest(raw) {
     edges.push({ s, t, predicate: String(e.predicate ?? "related to"),
       corr: Number(e.corroboration ?? e.corroborationCount ?? 1) || 1,
       confidence: (e.confidence != null ? Number(e.confidence) : null),
-      sources: srcs, occurredAt: e.occurred_at ?? e.occurredAt ?? null });
+      sources: srcs, occurredAt: e.occurred_at ?? e.occurredAt ?? null,
+      occurredSort: (e.occurred_sort ?? e.occurredSort ?? null),
+      occurredLabel: (e.occurred_label ?? e.occurredLabel ?? null) });
     s.deg++; t.deg++;
   }
   // Fan out parallel edges (same unordered pair) so their curves + labels don't stack.
@@ -488,17 +493,35 @@ function mix(hex, fogRGB, t) {
 // Both time-stamped NODES (events) and time-stamped EDGES (dated relationships)
 // are laid out, so a graph whose dates live on the relationships still populates.
 let timelineItems = [];
+// The timeline axis is a SIGNED YEAR (occurred_sort): CE positive, BCE/prehistoric
+// negative — so "300,000 years ago", "3200 BCE", and "1990" all sit on one scale.
+// Back-compat: a row with only a DATETIME occurred_at (pre-backfill) derives its
+// year from that. occurred_label is the authoritative human date string.
+function tlSort(o){
+  if (o.occurredSort != null && isFinite(o.occurredSort)) return Number(o.occurredSort);
+  if (o.occurredAt){ const d=new Date(o.occurredAt); if(!isNaN(+d)) return d.getUTCFullYear()+(d.getUTCMonth())/12; }
+  return null;
+}
+function fmtYear(y){
+  if (y==null || !isFinite(y)) return "";
+  const r=Math.round(y);
+  const withCommas=(n)=>Math.abs(n).toLocaleString("en-US");
+  if (r<0) return `${withCommas(r)} BCE`;
+  if (r<1000) return `${r} CE`;
+  return String(r);
+}
+function tlLabel(o){ return o.occurredLabel || fmtYear(tlSort(o)); }
 function drawTimeline() {
   const inkDim=cssVar("--ink-dim"), ink=cssVar("--ink"), grid=cssVar("--line"), accent=cssVar("--accent");
   const items = [];
-  for (const n of G.nodes) if (n.occurredAt) items.push({ t:+new Date(n.occurredAt), title:n.name, sub:n.type, color:typeColor(n.type), ref:n });
-  for (const e of G.edges) if (e.occurredAt) items.push({ t:+new Date(e.occurredAt), title:pretty(e.predicate), sub:`${e.s.name} → ${e.t.name}`, color:accent, ref:e.s });
+  for (const n of G.nodes){ const t=tlSort(n); if (t!=null) items.push({ t, date:tlLabel(n), title:n.name, sub:n.type, color:typeColor(n.type), ref:n }); }
+  for (const e of G.edges){ const t=tlSort(e); if (t!=null) items.push({ t, date:tlLabel(e), title:pretty(e.predicate), sub:`${e.s.name} → ${e.t.name}`, color:accent, ref:e.s }); }
   items.sort((a,b)=>a.t-b.t);
   ctx.font = "12px " + cssVar("--font-ui");
   if (!items.length) { timelineItems=[]; ctx.fillStyle=inkDim; ctx.textAlign="center";
     ctx.fillText("No time-stamped events or relationships in this graph yet.", W/2, H/2-8);
     ctx.font="11px "+cssVar("--font-mono");
-    ctx.fillText("Nodes or edges carrying occurred_at appear here as a cascade.", W/2, H/2+12); return; }
+    ctx.fillText("Nodes or edges carrying a date appear here as a cascade.", W/2, H/2+12); return; }
   const pad=70, y0=90, laneGap=62, lanes=5;
   const times=items.map(d=>d.t); const min=Math.min(...times),max=Math.max(...times),span=max-min;
   // Normalized position in [0,1], then apply the timeline zoom/pan transform so
@@ -521,12 +544,12 @@ function drawTimeline() {
     roundRect(cx-tw/2,y,tw,h,8); ctx.fill(); ctx.stroke();
     ctx.fillStyle=ink; ctx.textAlign="center"; ctx.textBaseline="top"; ctx.fillText(title,cx,y+6);
     ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono"); ctx.fillText(clip(it.sub,30),cx,y+21);
-    ctx.fillText(new Date(it.t).toISOString().slice(0,10),cx,y+32);
+    ctx.fillText(clip(it.date||fmtYear(it.t),22),cx,y+32);
     return {...it, box:{x:cx-tw/2,y,w:tw,h}, dot:{x,y:y0}}; });
   ctx.fillStyle=inkDim; ctx.font="10px "+cssVar("--font-mono");
   const xMin=xOf(min,0), xMax=xOf(max,items.length-1);
-  if (xMin>pad-40 && xMin<W){ ctx.textAlign="center"; ctx.fillText(new Date(min).toISOString().slice(0,10), Math.max(pad,xMin), y0-14); }
-  if (xMax>0 && xMax<W-pad+40){ ctx.textAlign="center"; ctx.fillText(new Date(max).toISOString().slice(0,10), Math.min(W-pad,xMax), y0-14); }
+  if (xMin>pad-40 && xMin<W){ ctx.textAlign="center"; ctx.fillText(fmtYear(min), Math.max(pad,xMin), y0-14); }
+  if (xMax>0 && xMax<W-pad+40){ ctx.textAlign="center"; ctx.fillText(fmtYear(max), Math.min(W-pad,xMax), y0-14); }
   if (span===0){ ctx.textAlign="center"; ctx.fillText("all items share one date — spaced evenly", W/2, y0-14); }
   if (tlZoom>1.01){ ctx.textAlign="right"; ctx.fillText(`${tlZoom.toFixed(1)}×`, W-pad, H-14); }
 }
