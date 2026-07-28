@@ -597,14 +597,16 @@ async  initialize(): Promise<void> {
       edge_count: sub.edges.length,
       nodes: sub.nodes.map((n) => ({
         id: n.id, name: n.name, type: n.type,
-        occurred_at: n.occurredAt, weight: n.mentionCount,
+        occurred_at: n.occurredAt, occurred_sort: n.occurredSort ?? null, occurred_label: n.occurredLabel ?? null,
+        weight: n.mentionCount,
       })),
       edges: sub.edges.map((e) => ({
         from: nameById.get(e.subjectId) || e.subjectId,
         predicate: e.predicate,
         to: nameById.get(e.objectId) || e.objectId,
         corroboration: e.corroborationCount, confidence: e.confidence,
-        occurred_at: e.occurredAt, sources: e.sources || [],
+        occurred_at: e.occurredAt, occurred_sort: e.occurredSort ?? null, occurred_label: e.occurredLabel ?? null,
+        sources: e.sources || [],
       })),
       graph_totals: stats,
       generated_at: new Date(),

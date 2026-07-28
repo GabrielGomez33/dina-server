@@ -250,11 +250,21 @@ function str(v: any): string {
   return typeof v === 'string' ? v.trim() : (v == null ? '' : String(v).trim());
 }
 
+/**
+ * Preserve the LLM's raw temporal expression FAITHFULLY — do NOT coerce it to an
+ * ISO date here. Prehistoric / BCE / century / "N years ago" expressions (the
+ * bread-and-butter of a human-species or deep-history timeline) are not
+ * Date.parse-able and would be silently dropped by any ISO coercion. The store
+ * (graphStore.normalizeTemporal → parseTemporal) is the single place that turns
+ * this string into a sortable year + storable ISO. Separation of concerns:
+ * extractor captures, store normalizes. Empty / "null" / "unknown" → null.
+ */
 function normalizeIso(v: any): string | null {
   const s = str(v);
-  if (!s || s.toLowerCase() === 'null') return null;
-  const t = Date.parse(s);
-  return Number.isNaN(t) ? null : new Date(t).toISOString();
+  if (!s) return null;
+  const low = s.toLowerCase();
+  if (low === 'null' || low === 'unknown' || low === 'n/a' || low === 'none') return null;
+  return s.slice(0, 120);
 }
 
 function clamp01(n: number): number {

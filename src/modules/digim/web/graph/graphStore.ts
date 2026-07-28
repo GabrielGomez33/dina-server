@@ -24,6 +24,7 @@ import { getDigimWebConfig, DigimWebConfig } from '../config/webConfig';
 import { canonicalizeEntityName, normalizePredicate, normalizeEntityType } from './entityResolution';
 import { suggestView } from './graphView';
 import { GraphNode, GraphEdge, Subgraph, EntityInput, RelationshipInput } from './graphTypes';
+import { parseTemporal } from './temporalParse';
 
 const DUP_ERR = new Set(['ER_DUP_ENTRY', 'ER_DUP_KEY']);
 function isDuplicateError(err: any): boolean {
@@ -64,7 +65,7 @@ export class GraphStore {
     const key = canonicalizeEntityName(input.name);
     if (!key) return null;
     const type = normalizeEntityType(input.type || 'other');
-    const occurredAt = normalizeDate(input.occurredAt);
+    const when = normalizeTemporal(input.occurredAt);
     const embeddingRef = input.embeddingRef || null;
 
     try {
@@ -75,9 +76,11 @@ export class GraphStore {
              SET mention_count = mention_count + 1,
                  last_seen = CURRENT_TIMESTAMP,
                  occurred_at = COALESCE(occurred_at, ?),
+                 occurred_sort = COALESCE(occurred_sort, ?),
+                 occurred_label = COALESCE(occurred_label, ?),
                  embedding_ref = COALESCE(embedding_ref, ?)
            WHERE id = ?`,
-          [occurredAt, embeddingRef, existing],
+          [when.at, when.sort, when.label, embeddingRef, existing],
           true
         );
         return existing;
@@ -86,9 +89,9 @@ export class GraphStore {
       const id = uuidv4();
       try {
         await DB.query(
-          `INSERT INTO digim_entities (id, owner_id, research_id, canonical_key, name, type, occurred_at, embedding_ref)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [id, scope.ownerId, scope.researchId, key, (input.name || key).slice(0, 255), type, occurredAt, embeddingRef],
+          `INSERT INTO digim_entities (id, owner_id, research_id, canonical_key, name, type, occurred_at, occurred_sort, occurred_label, embedding_ref)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [id, scope.ownerId, scope.researchId, key, (input.name || key).slice(0, 255), type, when.at, when.sort, when.label, embeddingRef],
           true
         );
         return id;
@@ -132,7 +135,7 @@ export class GraphStore {
       if (!subjectId || !objectId || subjectId === objectId) return null; // no self-loops / bad ends
 
       const confidence = clamp01(typeof input.confidence === 'number' ? input.confidence : 0.5);
-      const occurredAt = normalizeDate(input.occurredAt);
+      const when = normalizeTemporal(input.occurredAt);
 
       let edgeId = await this.findEdgeId(subjectId, predicate, objectId);
       if (edgeId) {
@@ -140,18 +143,20 @@ export class GraphStore {
           `UPDATE digim_relationships
              SET last_seen = CURRENT_TIMESTAMP,
                  confidence = GREATEST(confidence, ?),
-                 occurred_at = COALESCE(occurred_at, ?)
+                 occurred_at = COALESCE(occurred_at, ?),
+                 occurred_sort = COALESCE(occurred_sort, ?),
+                 occurred_label = COALESCE(occurred_label, ?)
            WHERE id = ?`,
-          [confidence, occurredAt, edgeId],
+          [confidence, when.at, when.sort, when.label, edgeId],
           true
         );
       } else {
         edgeId = uuidv4();
         try {
           await DB.query(
-            `INSERT INTO digim_relationships (id, owner_id, research_id, subject_id, predicate, object_id, confidence, occurred_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [edgeId, scope.ownerId, scope.researchId, subjectId, predicate, objectId, confidence, occurredAt],
+            `INSERT INTO digim_relationships (id, owner_id, research_id, subject_id, predicate, object_id, confidence, occurred_at, occurred_sort, occurred_label)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [edgeId, scope.ownerId, scope.researchId, subjectId, predicate, objectId, confidence, when.at, when.sort, when.label],
             true
           );
         } catch (err) {
@@ -344,6 +349,8 @@ export function rowToNode(row: any): GraphNode {
     name: String(row.name ?? ''),
     type: String(row.type ?? 'other'),
     occurredAt: row.occurred_at ? new Date(row.occurred_at).toISOString() : null,
+    occurredSort: row.occurred_sort != null ? Number(row.occurred_sort) : null,
+    occurredLabel: row.occurred_label ?? null,
     mentionCount: Number(row.mention_count ?? 1),
     embeddingRef: row.embedding_ref ?? null,
   };
@@ -358,6 +365,8 @@ export function rowToEdge(row: any): GraphEdge {
     corroborationCount: Number(row.corroboration_count ?? 1),
     confidence: Number(row.confidence ?? 0.5),
     occurredAt: row.occurred_at ? new Date(row.occurred_at).toISOString() : null,
+    occurredSort: row.occurred_sort != null ? Number(row.occurred_sort) : null,
+    occurredLabel: row.occurred_label ?? null,
   };
 }
 
@@ -365,12 +374,16 @@ function placeholders(arr: unknown[]): string {
   return arr.map(() => '?').join(',');
 }
 
-function normalizeDate(v: string | null | undefined): string | null {
-  if (!v) return null;
-  const t = Date.parse(v);
-  if (Number.isNaN(t)) return null;
-  // MySQL DATETIME format 'YYYY-MM-DD HH:MM:SS'.
-  return new Date(t).toISOString().slice(0, 19).replace('T', ' ');
+/** Temporal fields written to a graph row. `at` is a DATETIME-storable ISO ONLY
+ *  when the date fits MySQL's window (1000–9999 CE); `sort` is the signed decimal
+ *  year the timeline positions by (spans all of history); `label` is the display
+ *  string. An undated / unparseable value yields all-null. */
+interface StoredTemporal { at: string | null; sort: number | null; label: string | null; }
+
+function normalizeTemporal(v: string | null | undefined): StoredTemporal {
+  const t = parseTemporal(v, new Date().getFullYear());
+  // `iso` from parseTemporal is 'YYYY-MM-DD HH:MM:SS' already (storable-range only).
+  return { at: t.iso, sort: t.sortValue, label: t.label };
 }
 
 function clamp01(n: number): number {
