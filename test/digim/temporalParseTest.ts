@@ -40,6 +40,15 @@ function main(): void {
   ok(approxEq(P('300 kya').sortValue, REF - 300_000), '"300 kya" == 300 thousand years ago');
   ok(approxEq(P('4 bya').sortValue, REF - 4_000_000_000), '"4 bya" == 4 billion years ago');
 
+  section('natural phrasing — word-numbers + qualifiers (what the model actually writes)');
+  ok(approxEq(P('more than five million years ago').sortValue, REF - 5_000_000), '"more than five million years ago" ≈ -4997975');
+  ok(approxEq(P('about 3.3 million years ago').sortValue, REF - 3_300_000), '"about 3.3 million years ago" ≈ -3297975');
+  ok(approxEq(P('a million years ago').sortValue, REF - 1_000_000), '"a million years ago" == 1 million');
+  ok(approxEq(P('nearly 2 million years ago').sortValue, REF - 2_000_000), '"nearly 2 million years ago" == 2 million');
+  ok(approxEq(P('over 10000 years ago').sortValue, REF - 10_000), '"over 10000 years ago" == 10k');
+  ok(approxEq(P('three hundred thousand years ago').sortValue, REF - 300_000), '"three hundred thousand years ago" == 300k (hundred compound)');
+  ok(P('more than five million years ago').sortValue! < 0, 'qualifier phrasing still lands BCE-side');
+
   section('explicit BCE / BC → negative year');
   ok(approxEq(P('10,000 BCE').sortValue, -10000), '"10,000 BCE" == -10000');
   ok(P('10,000 BCE').iso === null, '"10,000 BCE" is NOT ISO-storable');

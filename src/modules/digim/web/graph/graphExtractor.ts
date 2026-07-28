@@ -155,19 +155,27 @@ RULES:
   "attacked", "negotiated with", "chokepoint for". Do NOT write long descriptive
   clauses — collapse "launched a series of powerful strikes against" to "struck".
 - occurredAt = WHEN the relationship/fact happened, whenever the source states a
-  time. A full date (2026-02-28), a month (2026-02), or JUST A YEAR (2019) are ALL
-  valid — capture the year of a study, report, statistic, ruling, discovery, law,
-  or event (e.g. "a 2019 study found…" → occurredAt "2019"; "crime fell in 2020" →
-  "2020"). PREFER capturing a year over leaving it null; use null only when the
-  source gives no time at all. This drives the timeline view, so date generously
-  but never invent a date the source doesn't give.
+  time. Put the TIME HERE — never as the subject or object. Valid forms, all
+  written with DIGITS:
+    • modern: "2019", "2026-02", "2026-02-28"
+    • BCE / ancient: "3200 BCE", "10000 BCE", "44 BCE", "5th century BCE"
+    • deep time / prehistory: "300000 years ago", "3.3 million years ago",
+      "2.5 mya", "13.8 billion years ago" (use digits, not words — write "5
+      million years ago", NOT "five million years ago")
+  Capture the year of a study, report, statistic, ruling, discovery, law, or event
+  (e.g. "a 2019 study found…" → "2019"). If the FACT itself is a dated happening —
+  a species emerging, an era beginning, a discovery — put that date in occurredAt
+  (e.g. "Homo sapiens emerged ~300,000 years ago" → occurredAt "300000 years ago",
+  object "Africa", NOT object "300,000 years ago"). PREFER capturing a time over
+  null; null ONLY when the source gives no time. This drives the timeline, so date
+  generously — but never invent a time the source doesn't give.
 - Use subjectType/objectType "event" for named, dated happenings; other entities
   keep their natural type — a triple can still carry occurredAt regardless of type.
 - Tag each triple with the SOURCE NUMBER it came from.
 - Up to ${maxTriples} triples. Respond with valid JSON ONLY — no markdown, no commentary.
 
 Respond with exactly this shape:
-{ "triples": [ { "subject": "", "subjectType": "person|organization|location|event|technology|concept|other", "predicate": "", "object": "", "objectType": "person|organization|location|event|technology|concept|other", "occurredAt": "YYYY, YYYY-MM, or YYYY-MM-DD — null ONLY if the source gives no time", "source": 1, "confidence": 0.0 } ] }
+{ "triples": [ { "subject": "", "subjectType": "person|organization|location|event|technology|concept|other", "predicate": "", "object": "", "objectType": "person|organization|location|event|technology|concept|other", "occurredAt": "a TIME in digits (e.g. 2019, 3200 BCE, 300000 years ago) — null ONLY if the source gives no time", "source": 1, "confidence": 0.0 } ] }
 
 SOURCES:
 ${fencedSources}`;
