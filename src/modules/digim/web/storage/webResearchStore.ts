@@ -461,6 +461,28 @@ export class WebResearchStore {
   }
 
   /**
+   * The island id SET for a research: the research itself PLUS any facets that
+   * name it as their investigation parent. Opening an investigation root thus
+   * unions its facets' graphs/embeddings; a standalone/leaf research is just
+   * itself. Owner-scoped (fail closed).
+   */
+  async researchScopeIds(ownerId: string, researchId: string): Promise<string[]> {
+    if (!ownerId || !researchId) return researchId ? [researchId] : [];
+    try {
+      const rows = await DB.query(
+        `SELECT id FROM digim_intelligence WHERE user_id = ? AND (id = ? OR parent_id = ?)`,
+        [ownerId, researchId, researchId],
+        true,
+      );
+      const ids = (Array.isArray(rows) ? rows : []).map((r: any) => String(r.id));
+      return ids.length ? Array.from(new Set(ids)) : [researchId];
+    } catch (err) {
+      console.warn(`⚠️ [webResearchStore] researchScopeIds failed: ${(err as Error).message}`);
+      return [researchId];
+    }
+  }
+
+  /**
    * Stored source documents for an owner's researches — used by the graph
    * BACKFILL to re-extract relationships/dates from content already gathered
    * (no re-fetching). Owner-scoped (fail closed). Optionally one research.

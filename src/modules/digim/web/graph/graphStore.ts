@@ -42,6 +42,10 @@ export interface GraphScope {
 export interface GraphReadScope {
   ownerId: string;
   researchId?: string | null;
+  /** Island across a SET of researches — e.g. an investigation root + all its
+   *  facets, so the parent shows the union of its facets' graphs. Takes
+   *  precedence over researchId when non-empty. */
+  researchIds?: string[] | null;
   mode?: 'island' | 'all';
 }
 
@@ -224,9 +228,14 @@ export class GraphStore {
     // Scope predicate + args shared by seed/fallback/edge/node queries. 'island'
     // (default when a researchId is given) restricts to one research; 'all' shows
     // the owner's whole graph across researches.
-    const island = scope.mode !== 'all' && !!scope.researchId;
-    const scopeSql = island ? 'owner_id = ? AND research_id = ?' : 'owner_id = ?';
-    const scopeArgs: any[] = island ? [scope.ownerId, scope.researchId] : [scope.ownerId];
+    // Island id set: an investigation root expands to [root, ...facets]; a leaf
+    // is just itself. Empty ⇒ not islanded.
+    const islandIds = (scope.researchIds && scope.researchIds.length > 0)
+      ? scope.researchIds
+      : (scope.researchId ? [scope.researchId] : []);
+    const island = scope.mode !== 'all' && islandIds.length > 0;
+    const scopeSql = island ? `owner_id = ? AND research_id IN (${placeholders(islandIds)})` : 'owner_id = ?';
+    const scopeArgs: any[] = island ? [scope.ownerId, ...islandIds] : [scope.ownerId];
 
     try {
       // Seed entities: exact canonical match OR name contains the focus text.
