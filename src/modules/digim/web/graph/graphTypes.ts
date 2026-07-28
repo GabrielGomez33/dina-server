@@ -17,8 +17,15 @@ export interface GraphNode {
   id: string;
   name: string;
   type: EntityType | string;
-  /** ISO time — populated for events; the temporal view's x-axis. */
+  /** ISO datetime — populated ONLY when the date fits the MySQL DATETIME window
+   *  (1000–9999 CE). Null for prehistoric/BCE/out-of-range events (which still
+   *  carry occurredSort/occurredLabel below). */
   occurredAt?: string | null;
+  /** Signed decimal year (CE positive, BCE/prehistoric negative) — the timeline
+   *  axis sorts and positions by THIS, so it spans all of history. Null = undated. */
+  occurredSort?: number | null;
+  /** Human display label for the date ("300,000 years ago", "3200 BCE", "1990"). */
+  occurredLabel?: string | null;
   /** Node weight = how often the entity appears (centrality proxy). */
   mentionCount: number;
   /** Link to the entity's vector (semantic view); null if not embedded. */
@@ -34,7 +41,12 @@ export interface GraphEdge {
   /** Edge weight = number of distinct sources that asserted this relationship. */
   corroborationCount: number;
   confidence: number;
+  /** ISO datetime — only when in the DATETIME window (1000–9999 CE). */
   occurredAt?: string | null;
+  /** Signed decimal year the timeline positions by (spans all of history). */
+  occurredSort?: number | null;
+  /** Human display label for the date. */
+  occurredLabel?: string | null;
   /** Source URLs backing this edge (provenance). */
   sources?: string[];
 }
