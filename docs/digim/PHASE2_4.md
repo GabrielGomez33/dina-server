@@ -124,9 +124,13 @@ normalization.
 
 ### 2.4b-3 — Renderer (v1)
 
-`docs/digim/graph-viewer.html` — a self-contained, dependency-free viewer for the
-`digim_graph` output. Open it in a browser (or serve it from the DINA domain so it
-can hit the live API). Two views:
+The graph viewer (`graph-viewer.html`) — a self-contained, dependency-free viewer
+for the `digim_graph` output — is a FRONT-END asset. Its single source of truth
+lives in the client repo at `client/public/graph-viewer.html` (bundled by Vite and
+served at `/dina/graph-viewer.html`; the console embeds it via an `<iframe>`). It
+formerly had a second copy under `docs/digim/`, which drifted; that copy is retired
+(see `docs/digim/README-graph-viewer.md`). Open it in a browser (or serve it from
+the DINA domain so it can hit the live API). Two views:
 
 - **Network** — force-directed graph (drag nodes, scroll to zoom, hover to
   highlight a node's edges, click for details + provenance). Node colour = entity
@@ -148,7 +152,7 @@ cloud where distance ≈ closeness of meaning.**
 | **Corpus export** | `redisManager.listEmbeddings(limit)` | Public, read-only wrapper over the existing embedding store (in-memory map or `embedding:*` SCAN). |
 | **Orchestrator** | `webResearchOrchestrator.semanticMap({filter,limit})` | Sources the vectors, projects them, returns `{points, dimensions, count, explainedVariance}`. Optional `filter` narrows the cloud to a topic. |
 | **Capability** | `digim_semantic` (DUMP) + `POST /digim/semantic` + `DigimClient.semantic()` | Reachable by the API and any foreign module through the DUMP client. |
-| **Renderer** | `docs/digim/graph-viewer.html` → **Semantic** tab | Renders the cloud with the SAME 3D camera as the network view (orbit, zoom, depth fog, auto-rotate). Points coloured by **provider**, origin axes for reference, a PCA explained-variance caption, click-to-inspect (label · provider · x/y/z · source URL). **Load data** auto-detects `points` (→ semantic) vs `nodes`+`edges` (→ network/timeline). |
+| **Renderer** | `client/public/graph-viewer.html` (client repo) → **Semantic** tab | Renders the cloud with the SAME 3D camera as the network view (orbit, zoom, depth fog, auto-rotate). Points coloured by **provider**, origin axes for reference, a PCA explained-variance caption, click-to-inspect (label · provider · x/y/z · source URL). **Load data** auto-detects `points` (→ semantic) vs `nodes`+`edges` (→ network/timeline). |
 
 Why PCA: the top-3 principal components are the 3 directions of greatest variance
 — literally the axes along which the documents differ most — so the projection is
