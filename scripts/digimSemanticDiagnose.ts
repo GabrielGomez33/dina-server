@@ -64,18 +64,22 @@ async function main() {
     // ── 1. RESOLVE THE RESEARCH ─────────────────────────────────────────────
     h('1) RESEARCH — which row is the console showing?');
     let target: any = null;
+    // Column names (see digim_intelligence CREATE): query_text, intelligence_type,
+    // generated_at. Aliased to query/level/created for readable output below.
     if (ARG && UUID_RE.test(ARG)) {
       const [rows] = await db.query(
-        `SELECT id, query, parent_id, level, created_at FROM digim_intelligence WHERE user_id=? AND id=? LIMIT 1`,
+        `SELECT id, query_text AS query, parent_id, intelligence_type AS level, generated_at AS created_at
+           FROM digim_intelligence WHERE user_id=? AND id=? LIMIT 1`,
         [OWNER, ARG],
       );
       target = (rows as any[])[0] || null;
     } else {
       const like = `%${ARG}%`;
       const [rows] = await db.query(
-        `SELECT id, query, parent_id, level, created_at FROM digim_intelligence
-          WHERE user_id=? ${ARG ? 'AND query LIKE ?' : ''}
-          ORDER BY created_at DESC LIMIT 1`,
+        `SELECT id, query_text AS query, parent_id, intelligence_type AS level, generated_at AS created_at
+           FROM digim_intelligence
+          WHERE user_id=? ${ARG ? 'AND query_text LIKE ?' : ''}
+          ORDER BY generated_at DESC LIMIT 1`,
         ARG ? [OWNER, like] : [OWNER],
       );
       target = (rows as any[])[0] || null;
@@ -90,7 +94,7 @@ async function main() {
     // ── 2. ISLAND (exactly resolveResearchScope) ────────────────────────────
     h('2) ISLAND — the research_ids the graph/semantic endpoints filter by');
     const [islandRows] = await db.query(
-      `SELECT id, query, parent_id FROM digim_intelligence WHERE user_id=? AND (id=? OR parent_id=?)`,
+      `SELECT id, query_text AS query, parent_id FROM digim_intelligence WHERE user_id=? AND (id=? OR parent_id=?)`,
       [OWNER, target.id, target.id],
     );
     const island = (islandRows as any[]).map((r) => String(r.id));
