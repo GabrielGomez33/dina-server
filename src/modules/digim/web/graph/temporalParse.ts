@@ -75,8 +75,17 @@ function normalizePhrasing(s: string): string {
 /**
  * Parse a temporal expression. `refYear` anchors relative ("N years ago")
  * expressions (inject new Date().getFullYear() in production; a constant in tests).
+ *
+ * `opts.strict` — for salvaging a date out of FREE TEXT (an entity name or a
+ * relationship object like "approximately 4,800 years ago"), where a stray small
+ * number must NOT be read as a year. In strict mode the strong signals (years-ago,
+ * BCE, century, mya, ISO) still parse, but the weak bare-year branch accepts ONLY
+ * a 4-digit year (≥1000) or a year with an explicit CE/AD marker — so
+ * "about two thousand Palestinians" and "over 167,000" stay undated, while
+ * "in 1948" and "the 1967 borders" date correctly.
  */
-export function parseTemporal(input: unknown, refYear = 2025): Temporal {
+export function parseTemporal(input: unknown, refYear = 2025, opts?: { strict?: boolean }): Temporal {
+  const strict = !!opts?.strict;
   const raw = String(input ?? '').trim();
   if (!raw || raw.toLowerCase() === 'null' || raw.toLowerCase() === 'unknown') return EMPTY;
   const s = raw.toLowerCase().replace(/[,]/g, '').replace(/\s+/g, ' ').trim();
@@ -136,7 +145,9 @@ export function parseTemporal(input: unknown, refYear = 2025): Temporal {
   const year = clean.match(/\b(ad\s*)?(\d{1,4})\s*(ce|ad)?s?\b/);
   if (year) {
     const y = parseInt(year[2], 10);
-    if (Number.isFinite(y) && y > 0) {
+    const hasEra = !!(year[1] || year[3]); // "AD"/"CE"/"AD 1500"
+    const strongEnough = !strict || y >= 1000 || hasEra; // strict: 4-digit year or explicit era only
+    if (Number.isFinite(y) && y > 0 && strongEnough) {
       return { sortValue: y, label: approx ? `circa ${y}` : raw, iso: isoIfStorable(y) };
     }
   }

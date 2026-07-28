@@ -90,6 +90,25 @@ function main(): void {
   ok(P('sometime later').sortValue === null, '"sometime later" → null');
   ok(P('the distant past').sortValue === null, '"the distant past" → null');
 
+  section('strict mode — salvaging a date from free text without false positives');
+  const S = (s: string) => parseTemporal(s, REF, { strict: true });
+  // Strong signals still parse in strict mode.
+  ok(approxEq(S('approximately 4,800 years ago').sortValue, REF - 4800), 'strict: "approximately 4,800 years ago" dates');
+  ok(approxEq(S('10,000 BCE').sortValue, -10000), 'strict: "10,000 BCE" dates');
+  ok(approxEq(S('5th century BCE').sortValue, -450), 'strict: "5th century BCE" dates');
+  ok(approxEq(S('in 1948').sortValue, 1948), 'strict: "in 1948" (4-digit year in text) dates');
+  ok(approxEq(S('the 1967 borders').sortValue, 1967), 'strict: "the 1967 borders" dates to 1967');
+  ok(approxEq(S('AD 800').sortValue, 800), 'strict: explicit-era "AD 800" dates');
+  // Weak / non-dates must NOT be mistaken for a year.
+  ok(S('about two thousand Palestinians').sortValue === null, 'strict: "about two thousand Palestinians" → null (not year 2)');
+  ok(S('over 167,000').sortValue === null, 'strict: "over 167,000" → null');
+  ok(S('more than five million years').sortValue === null, 'strict: "more than five million years" (no "ago") → null (a duration, not a date)');
+  ok(S('Australopithecus').sortValue === null, 'strict: a taxon name → null');
+  ok(S('bipedalism, dexterity, complex language').sortValue === null, 'strict: prose → null');
+  // Non-strict is unchanged (bare small year still parses).
+  ok(approxEq(parseTemporal('2', REF).sortValue, 2), 'non-strict: bare "2" still parses (unchanged)');
+  ok(parseTemporal('2', REF, { strict: true }).sortValue === null, 'strict: bare "2" → null');
+
   section('determinism / never-throws');
   ok(parseTemporal('300,000 years ago', 2025).sortValue === parseTemporal('300,000 years ago', 2025).sortValue, 'deterministic given refYear');
   let threw = false;

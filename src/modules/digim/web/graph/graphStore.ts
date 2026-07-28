@@ -65,7 +65,9 @@ export class GraphStore {
     const key = canonicalizeEntityName(input.name);
     if (!key) return null;
     const type = normalizeEntityType(input.type || 'other');
-    const when = normalizeTemporal(input.occurredAt);
+    // Salvage a date from the entity NAME when occurredAt has none (e.g. a node
+    // literally named "10,000 BCE" or "approximately 4,800 years ago").
+    const when = deriveTemporal(input.occurredAt, input.name);
     const embeddingRef = input.embeddingRef || null;
 
     try {
@@ -135,7 +137,10 @@ export class GraphStore {
       if (!subjectId || !objectId || subjectId === objectId) return null; // no self-loops / bad ends
 
       const confidence = clamp01(typeof input.confidence === 'number' ? input.confidence : 0.5);
-      const when = normalizeTemporal(input.occurredAt);
+      // Salvage a date from the relationship's OBJECT then SUBJECT text when the
+      // occurredAt field is empty — the model routinely writes the time as the
+      // object ("existed → 'approximately 4,800 years ago'"). Strict text parsing.
+      const when = deriveTemporal(input.occurredAt, input.object?.name, input.subject?.name);
 
       let edgeId = await this.findEdgeId(subjectId, predicate, objectId);
       if (edgeId) {
@@ -380,10 +385,33 @@ function placeholders(arr: unknown[]): string {
  *  string. An undated / unparseable value yields all-null. */
 interface StoredTemporal { at: string | null; sort: number | null; label: string | null; }
 
-function normalizeTemporal(v: string | null | undefined): StoredTemporal {
-  const t = parseTemporal(v, new Date().getFullYear());
+function toStored(t: { iso: string | null; sortValue: number | null; label: string | null }): StoredTemporal {
   // `iso` from parseTemporal is 'YYYY-MM-DD HH:MM:SS' already (storable-range only).
   return { at: t.iso, sort: t.sortValue, label: t.label };
+}
+
+function normalizeTemporal(v: string | null | undefined): StoredTemporal {
+  return toStored(parseTemporal(v, new Date().getFullYear()));
+}
+
+/** SALVAGE: models frequently bury a date in the entity/relationship TEXT instead
+ *  of the occurredAt field ("Homo sapiens existed → 'approximately 4,800 years
+ *  ago'"; an entity literally named "10,000 BCE"). We derive occurred_sort from
+ *  the first candidate that yields a date — occurredAt first (authoritative), then
+ *  the text. STRICT parsing on the text so a stray number ("about two thousand
+ *  Palestinians") is never mistaken for a year. This is the logic that guarantees
+ *  the timeline reflects EVERY dated fact, not only the ones the model placed
+ *  perfectly. */
+export function deriveTemporal(occurredAt: string | null | undefined, ...textCandidates: (string | null | undefined)[]): StoredTemporal {
+  const primary = normalizeTemporal(occurredAt);
+  if (primary.sort != null) return primary;
+  const year = new Date().getFullYear();
+  for (const cand of textCandidates) {
+    if (!cand) continue;
+    const t = parseTemporal(cand, year, { strict: true });
+    if (t.sortValue != null) return toStored(t);
+  }
+  return primary; // all-null
 }
 
 function clamp01(n: number): number {
