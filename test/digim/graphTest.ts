@@ -12,7 +12,7 @@
 
 import { canonicalizeEntityName, normalizePredicate, normalizeEntityType, isLowValueEntity } from '../../src/modules/digim/web/graph/entityResolution';
 import { suggestView } from '../../src/modules/digim/web/graph/graphView';
-import { rowToNode, rowToEdge } from '../../src/modules/digim/web/graph/graphStore';
+import { rowToNode, rowToEdge, deriveTemporal } from '../../src/modules/digim/web/graph/graphStore';
 import { parseTriples, GraphExtractor } from '../../src/modules/digim/web/graph/graphExtractor';
 import { projectEmbeddings } from '../../src/modules/digim/web/graph/semanticProjection';
 import { DigimWebConfig } from '../../src/modules/digim/web/config/webConfig';
@@ -112,6 +112,21 @@ async function main(): Promise<void> {
   ok(deep[0].occurredAt === '300,000 years ago', '"300,000 years ago" PRESERVED (not nulled)');
   ok(deep[1].occurredAt === '10,000 BCE', '"10,000 BCE" PRESERVED (not nulled)');
   ok(parseTriples('{"triples":[{"subject":"X Corp","predicate":"noted","object":"Y Inc","occurredAt":"null","source":1}]}', urls, 40)[0].occurredAt === null, '"null" string → null occurredAt');
+
+  // --------------------------------------------------------------------------
+  section('deriveTemporal — SALVAGE dates the model buried in entity/object text');
+  // These are the EXACT rows from the live "human species" graph that were left
+  // undated because the date sat in the object/name, not occurredAt.
+  ok(deriveTemporal(null, 'approximately 4,800 years ago').sort !== null, 'object "approximately 4,800 years ago" → salvaged (was null)');
+  ok(deriveTemporal(null, 'approximately 4,800 years ago').sort! < 0, '…and lands BCE-side (negative sort)');
+  ok(deriveTemporal(null, '10,000 BCE').sort === -10000, 'an entity literally named "10,000 BCE" → dated');
+  ok(deriveTemporal(null, 'Africa').sort === null, 'non-temporal object "Africa" → stays null');
+  ok(deriveTemporal(null, 'other species of Homo').sort === null, '"other species of Homo" → null');
+  ok(deriveTemporal(null, 'more than five million years after Sahelanthropus').sort === null, 'relative duration (no "ago") → null — never invented');
+  ok(deriveTemporal(null, 'about two thousand Palestinians').sort === null, 'cross-topic guard: "about two thousand Palestinians" → null (not year 2)');
+  // occurredAt is authoritative and takes precedence over any text.
+  ok(deriveTemporal('1990', '10,000 BCE').sort === 1990, 'occurredAt wins over object text');
+  ok(deriveTemporal(null, null, 'in 1948').sort === 1948, 'falls through to SUBJECT text when object has no date');
   ok(parseTriples('{"triples":[{"subject":"Alpha","predicate":"p","object":"Beta","source":9}]}', urls, 40)[0].sourceUrl === '', 'out-of-range source → empty URL');
   ok(parseTriples('{"triples":[{"subject":"Alpha","predicate":"p"}]}', urls, 40).length === 0, 'missing object → dropped');
   ok(parseTriples('{"triples":[{"subject":"Iran","predicate":"is","object":"iran","source":1}]}', urls, 40).length === 0, 'self-loop dropped');
