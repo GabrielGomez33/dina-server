@@ -49,6 +49,29 @@ const SCALE: Record<string, number> = {
 
 const ORDINAL_CENTURY = /(\d{1,2})(?:st|nd|rd|th)\s+century/;
 
+// Small word-numbers the model tends to write instead of digits
+// ("five million years ago"). Only 1–12 — enough for the scale-multiplier phrases
+// prose uses; larger counts are essentially always written numerically.
+const WORDNUM: Record<string, string> = {
+  one: '1', two: '2', three: '3', four: '4', five: '5', six: '6',
+  seven: '7', eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12',
+};
+
+/** Normalize natural phrasing → a digit form the matchers below accept: strip
+ *  quantitative qualifiers ("more than", "nearly"), map "a/an <scale>" → "1 <scale>",
+ *  and word-numbers → digits. */
+function normalizePhrasing(s: string): string {
+  return s
+    .replace(/\b(more than|greater than|at least|no fewer than|up to|over|nearly|almost|roughly|some)\b/g, ' ')
+    .replace(/\b(an?|one)\s+(hundred|thousand|million|billion)\b/g, '1 $2')
+    .replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/g, (m) => WORDNUM[m] || m)
+    // "3 hundred thousand" → "300 thousand"; "5 hundred" → "500".
+    .replace(/\b(\d+)\s+hundred\s+(thousand|million|billion)\b/g, (_m, n, sc) => `${Number(n) * 100} ${sc}`)
+    .replace(/\b(\d+)\s+hundred\b/g, (_m, n) => String(Number(n) * 100))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
  * Parse a temporal expression. `refYear` anchors relative ("N years ago")
  * expressions (inject new Date().getFullYear() in production; a constant in tests).
@@ -57,8 +80,10 @@ export function parseTemporal(input: unknown, refYear = 2025): Temporal {
   const raw = String(input ?? '').trim();
   if (!raw || raw.toLowerCase() === 'null' || raw.toLowerCase() === 'unknown') return EMPTY;
   const s = raw.toLowerCase().replace(/[,]/g, '').replace(/\s+/g, ' ').trim();
-  const approx = /\b(c|ca|circa|around|approx|about|~)\b|^~/.test(s);
-  const clean = s.replace(/^~/, '').replace(/\b(c|ca|circa|around|approx|about)\.?\b/g, '').trim();
+  const approx = /\b(c|ca|circa|around|approx|approximately|about|~)\b|^~/.test(s);
+  const clean = normalizePhrasing(
+    s.replace(/^~/, '').replace(/\b(c|ca|circa|around|approx|approximately|about)\.?\b/g, '').trim(),
+  );
 
   // 1) "N [scale] years ago" / "N mya" / "N kya" / "N bya"
   const ago = clean.match(/^([\d.]+)\s*(thousand|million|billion|k|m|bn|b)?\s*(?:years?\s*)?(ago|ya|mya|kya|bya|gya)\b/);
