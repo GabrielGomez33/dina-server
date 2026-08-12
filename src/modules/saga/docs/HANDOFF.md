@@ -3,7 +3,7 @@
 > **Read this first.** This is the single canonical "where are we, why, and what's next" doc for
 > the SAGA subsystem, written so the next iteration (of Claude, or of a human) can resume with zero
 > loss. It is the *living state*; the other docs are reference depth. Update the **Status ledger**
-> and **Recent prompts** sections every working session. Last updated: **2026-07-22**.
+> and **Recent prompts** sections every working session. Last updated: **2026-08-12**.
 
 Companion docs (reference, not state): `DECISION_LOG.md` (**strategic decisions + why**),
 `CLOUD_ARCHITECTURE.md` (**two-layer control/compute plane + RunPod/fal.ai plan**),
@@ -14,6 +14,32 @@ future extrapolation), `PREPRODUCTION_AND_FRAMERATE.md`, `OVERVIEW.md`, `INTEGRA
 `ENVIRONMENT.md`.
 
 ---
+
+## ADDENDUM — 2026-08-12 (cloud compute plane LIVE: first RunPod pod deployed)
+
+**The rent-GPU decision (see `DECISION_LOG.md` + `CLOUD_ARCHITECTURE.md`) is now EXECUTED — SAGA has
+a live cloud box.** State of the world:
+
+- **Persistent volume:** `saga-models` (RunPod volume id `6ba8v2g15j`), **100 GB**, data center
+  **EUR-IS-1** (Iceland). Chosen because EUR-IS-1 stocks **both RTX 4090 and RTX 5090** → we can
+  upgrade the GPU on the *same* volume later with **no model re-download**. Mounts at `/workspace`,
+  independent of pod lifecycle (survives stop/start). Standing cost ≈ **$7/mo** when no pod runs.
+- **Pod:** name `SAGA`, id `ia86bj27djuhn8`, **1× RTX 4090** (24 GB VRAM · 62 GB RAM · 9 vCPU),
+  template **RunPod PyTorch 2.8.0**, CUDA **13.0**, Ubuntu 24.04. On-demand ≈ **$0.74/hr**, billed
+  per-millisecond. **Stop the pod when idle** — only the volume bills while stopped.
+- **Access:** SSH public keys registered on the RunPod account (a Windows dev key + a primary key).
+  Two connect paths — pick by task:
+  - `ssh <pod>@ssh.runpod.io -i ~/.ssh/id_ed25519` — proxy; **NO SCP/SFTP**.
+  - `ssh root@<ip> -p <port> -i ~/.ssh/id_ed25519` — **SSH over exposed TCP, SUPPORTS SCP/SFTP** →
+    use THIS for `rsync`/`scp` of the trained LoRA. ⚠️ the `<ip>:<port>` is **EPHEMERAL** (changes
+    on every pod restart) — read the current value from the pod's **Connect** tab each session; do
+    not hardcode it.
+- **Provisioning plan (verify-live, in progress):** install ComfyUI + venv + custom nodes + models
+  **into `/workspace`** (so they persist), rsync up the trained video LoRA, smoke-test one
+  `saga-framepack.sh` render, THEN codify the proven sequence into a new `saga-cloud.sh`. The exact
+  model files / on-box locations / download sources are being mapped now.
+- **Local box unchanged:** Dina / `mirror` / `digim` stay on the local 3090 Ti — the whole point of
+  going cloud was to stop SAGA contending with them. No local changes this session.
 
 ## ADDENDUM — 2026-07-22 (session: build-vs-buy decision → hosted)
 

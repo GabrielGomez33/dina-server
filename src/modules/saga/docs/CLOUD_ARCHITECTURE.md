@@ -4,6 +4,21 @@
 > GPU compute**, not the local 24 GB 3090 Ti — this removes the Dina `mirror`/`digim` contention
 > entirely (SAGA is no longer on the same card) and turns capital cost into ~cents/clip pay-per-use.
 
+## Current deployment (live as of 2026-08-12)
+
+The compute plane is up on RunPod. Details in `HANDOFF.md` (living state); the operational essentials:
+
+- **Volume:** `saga-models`, 100 GB, **EUR-IS-1** (stocks both 4090 + 5090 → GPU-upgradeable on the
+  same volume, no re-download). Mounts `/workspace`, persists across pod stop/start. ~$7/mo idle.
+- **Pod:** `SAGA` / `ia86bj27djuhn8`, 1× RTX 4090 (24 GB · 62 GB RAM · 9 vCPU), PyTorch 2.8.0, CUDA
+  13.0, Ubuntu 24.04. ~$0.74/hr on-demand. **Stop when idle.**
+- **File transfer gotcha:** the `ssh.runpod.io` proxy does **not** support SCP/SFTP. For
+  `rsync`/`scp` (uploading the LoRA), use the **SSH-over-exposed-TCP** endpoint
+  (`root@<ip> -p <port>`). That `<ip>:<port>` is **ephemeral** — re-read it from the Connect tab
+  each session; never hardcode it in a script (pass it as an arg/env).
+- **Install target:** everything reusable (ComfyUI, venv, custom nodes, models) goes under
+  `/workspace` (the volume), NOT the container disk (wiped on stop).
+
 ## The shape
 
 Two layers, deliberately separated so the expensive thing (GPU) runs **only while rendering** and the
