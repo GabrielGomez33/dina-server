@@ -4,6 +4,18 @@
 > GPU compute**, not the local 24 GB 3090 Ti — this removes the Dina `mirror`/`digim` contention
 > entirely (SAGA is no longer on the same card) and turns capital cost into ~cents/clip pay-per-use.
 
+## Environments — naming convention (use these names everywhere)
+
+| Name | What | Role |
+|---|---|---|
+| **TUGRRPORTAL** | the SAGA server — local box, RTX 3090 Ti, hostname `tugrr-portal` | holds `SAGA_ROOT` with all trained models + the video LoRA; runs Dina/`mirror`/`digim`; repo checkout `/var/www/dina-server`. Control plane + asset origin. |
+| **HOME PORTAL** | the user's local machine — Windows, the one browsing the web | drives the RunPod console; SSH origin into RUNPOD. |
+| **RUNPOD** | the rented RunPod GPU pod — RTX 4090, EUR-IS-1 | compute plane: ComfyUI + renders. Ephemeral; `/workspace` (volume) persists. |
+
+Cross-environment flows: assets move **TUGRRPORTAL → RUNPOD** (rsync the LoRA/start frames over the
+exposed-TCP SSH endpoint); you operate RUNPOD **from HOME PORTAL** via SSH; finished renders come
+**RUNPOD → HOME PORTAL** (scp/download).
+
 ## Current deployment (live as of 2026-08-12)
 
 The compute plane is up on RunPod. Details in `HANDOFF.md` (living state); the operational essentials:
