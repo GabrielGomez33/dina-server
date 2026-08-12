@@ -6,6 +6,7 @@
 > and **Recent prompts** sections every working session. Last updated: **2026-07-22**.
 
 Companion docs (reference, not state): `DECISION_LOG.md` (**strategic decisions + why**),
+`CLOUD_ARCHITECTURE.md` (**two-layer control/compute plane + RunPod/fal.ai plan**),
 `PHASES.md` (original plan), `VERIFICATION.md` (live proof
 log), `TOOLCHAIN.md` (every tool), `RESEARCH_ANIME_PIPELINE.md` (model research),
 `REFERENCE_FIDELITY.md` (consistency laws), `USER_STORAGE.md` (per-user asset storage design +

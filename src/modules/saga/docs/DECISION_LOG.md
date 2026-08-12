@@ -80,3 +80,30 @@ Kling 3.0 ~10 s, Veo 3.1 ~8 s** — so a 20 s piece is one Sora generation or a 
    becomes the product, not a tool for one project).
 
 Absent either, self-hosting is premature optimization on a capability with no consumer yet.
+
+---
+
+## 2026-07-22 (later) — ElevenLabs non-viable → rent GPU + run SAGA; API endpoint is the destination, not step 1
+
+### Trigger
+Live test of ElevenLabs Creative: **130k-token trial spent in ~20 min**; the $100/600k-token plan
+would not suffice either. ElevenLabs is an **audio company reselling video compute at a credit
+markup** — non-viable for video volume.
+
+### Decision
+- **Do not** return to buying a GPU. **Rent** GPU compute by the hour and run the banked SAGA
+  pipeline on it. RTX 5090 rents for **~$0.25–0.32/hr**; a render is ~cents; a 100 GB persistent
+  volume for models is **~$7/mo**. This *uses* SAGA, removes Dina contention (cloud, not the local
+  card), and needs no capital.
+- **Sequencing: RunPod first, fal.ai second.** An API endpoint is the correct END STATE (it is the
+  compute plane of the two-layer architecture Dina will call), BUT "fal.ai right away" means
+  deploying/porting SAGA (custom ComfyUI graph + FramePack custom node + LoRA + multi-stage
+  orchestration) before it has ever run in the cloud — blocking all content and debugging blind.
+  RunPod runs the existing `saga-*.sh` **as-is** (first render in ~1–2 h), which is the R&D +
+  content environment; fal.ai then productionizes the **proven** pipeline.
+- **Direct model APIs** (Kling/Luma/Veo — NOT via ElevenLabs, ~$2/20s or cents) are the complement
+  for non-identity shots (environments, effects, b-roll). ElevenLabs stays only for **audio**.
+
+### Recorded to
+`CLOUD_ARCHITECTURE.md` (full two-layer design + RunPod setup + provider comparison). Next build
+step when a provider/account exists: `saga-cloud.sh` provisioner.
