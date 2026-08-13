@@ -34,10 +34,13 @@ a live cloud box.** State of the world:
     use THIS for `rsync`/`scp` of the trained LoRA. ⚠️ the `<ip>:<port>` is **EPHEMERAL** (changes
     on every pod restart) — read the current value from the pod's **Connect** tab each session; do
     not hardcode it.
-- **Provisioning plan (verify-live, in progress):** install ComfyUI + venv + custom nodes + models
-  **into `/workspace`** (so they persist), rsync up the trained video LoRA, smoke-test one
-  `saga-framepack.sh` render, THEN codify the proven sequence into a new `saga-cloud.sh`. The exact
-  model files / on-box locations / download sources are being mapped now.
+- **✅ PARITY CONFIRMED (first cloud render):** provisioned ComfyUI + venv + nodes + the fp8 model
+  set + the LoRA onto `/workspace`, and `saga-framepack.sh` rendered `cloud_first.mp4` (640², fp8,
+  `animegabriel_hy_e10` @0.9, teacache 0.05). **User verified: motion smooth, identity locked** —
+  cloud reproduces the box exactly. The full proven bring-up recipe + the hard-won operational
+  lessons (HF IP-throttling → retry-loop/rsync fallback, EUR-IS-1 outage truncating a download →
+  verify sizes, scp/rsync gotchas) are in `CLOUD_ARCHITECTURE.md`. **Next:** codify that recipe into
+  `saga-cloud.sh`, then resume creative tuning.
 - **Local box unchanged:** Dina / `mirror` / `digim` stay on the local 3090 Ti — the whole point of
   going cloud was to stop SAGA contending with them. No local changes this session.
 

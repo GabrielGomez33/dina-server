@@ -1,8 +1,8 @@
 # SAGA — Cloud Architecture (two-layer: control plane ↔ compute plane)
 
-> **Status:** target architecture, adopted 2026-07-22 (see `DECISION_LOG.md`). SAGA runs on **rented
-> GPU compute**, not the local 24 GB 3090 Ti — this removes the Dina `mirror`/`digim` contention
-> entirely (SAGA is no longer on the same card) and turns capital cost into ~cents/clip pay-per-use.
+> **Status:** LIVE — **cloud parity CONFIRMED 2026-08-12** (see §Parity milestone). SAGA runs on
+> **rented GPU compute**, not the local 24 GB 3090 Ti — this removes the Dina `mirror`/`digim`
+> contention entirely (SAGA is no longer on the same card) and turns capital cost into ~cents/clip.
 
 ## Environments — naming convention (use these names everywhere)
 
@@ -116,7 +116,56 @@ Same API destination either way — RunPod just reaches it without blocking on a
 - Direct model APIs (Kling/Luma/Veo, **not** via ElevenLabs) at ~$2/20 s (Kling) or cents (Luma) are
   the complement for shots that are **not** the user's character (environments, effects, b-roll).
 
+## Proven bring-up (verified live 2026-08-12 — the recipe to codify into `saga-cloud.sh`)
+
+Everything reusable installs under `/workspace` so it survives pod stop. New container ⇒ fresh
+`~/.bashrc`, so `source /workspace/SAGA/saga.env` each session.
+
+1. **Volume first**, pod attached to it. `apt: jq ffmpeg git tmux`.
+2. **Dir tree:** `SAGA_ROOT/{engine,tmp}` + `models/{checkpoints,diffusion_models,vae,clip_vision,text_encoders,controlnet,ipadapter,loras,upscale_models,ultralytics/bbox,loras_video/framepack}`.
+3. **ComfyUI:** clone to `engine/ComfyUI`; `python3 -m venv --system-site-packages venv` (reuse the
+   pod's torch 2.8 cu128 — no multi-GB re-download); `pip install -r requirements.txt`;
+   `rm -rf models && ln -s $SAGA_ROOT/models models`.
+4. **Nodes:** `ComfyUI-FramePackWrapper` + `ComfyUI-VideoHelperSuite` (+ their `requirements.txt`)
+   **+ `pip install peft`** (FramePackLoraSelect needs it to load the LoRA — the #1 render-time
+   failure if missing).
+5. **Models (fp8 set — the proven 24 GB config):** FramePackI2V_HY_fp8_e4m3fn
+   (`Kijai/HunyuanVideo_comfy`→diffusion_models), hunyuan_video_vae_bf16 (Kijai→vae),
+   sigclip_vision_patch14_384 (**`Comfy-Org/sigclip_vision_384`**→clip_vision), clip_l +
+   llava_llama3_fp8_scaled (`Comfy-Org/HunyuanVideo_repackaged/split_files/text_encoders/`→
+   text_encoders, flatten out of `split_files/`). **Verify sizes** (16.3G / 471M / 817M / 235M / 8.5G).
+6. **LoRA** (not on HF): rsync from TUGRRPORTAL `models/loras/animegabriel_hy_e10.safetensors`.
+   **Scripts** (if repo not cloned on the pod): rsync `/var/www/dina-server/src/modules/saga/scripts/`
+   → `/workspace/SAGA/scripts/`.
+7. **Launch** ComfyUI (`nohup venv/bin/python main.py --listen 127.0.0.1 --port 8188 &`, ~30–40 s to
+   bind — a 30 s health-check false-negatives), then `saga-framepack.sh --check`, then render.
+
+## Operational lessons (hard-won 2026-08-12 — don't relearn them)
+
+- **HuggingFace 429 from RunPod IPs** is IP-level (shared datacenter IP), bursty, and hits *auth*
+  endpoints too — a token can't fix an edge-throttled IP. Fixes: an `until hf download …; sleep 15`
+  **retry-loop**; a **fresh pod IP** (stop/start); or **rsync from TUGRRPORTAL** (slow, ~2 MB/s home
+  upload, but guaranteed). `HF_TOKEN` must be **`export`ed** and a valid token is `hf_…` format.
+  **404 ≠ 429** — a 404 means wrong repo (the loop spins uselessly); e.g. sigclip is in
+  `Comfy-Org/sigclip_vision_384`, not Kijai's.
+- **EUR-IS-1 had a network outage** that made the volume "unavailable" and **truncated a completed
+  16 GB download to 2 GB** — always **verify file sizes** after transfer on a flaky DC; stop/move
+  rather than fight a degraded DC (a fresh IP often clears both the outage and the HF throttle).
+- **rsync `chown … Operation not permitted`** on the network volume is cosmetic (data transfers; only
+  ownership fails) — add `--no-owner --no-group`.
+- **scp on Windows:** `cd` to the destination folder and copy to `.` (a `Z:\path` is misread as a
+  host); use `-P` for the port and the exposed-TCP IP (not the container hostname).
+- **`cu130` ComfyUI warning** is non-fatal — the optional comfy_kitchen CUDA backends disable on
+  cu128 and it falls back to pytorch attention (sdpa), which is exactly what the FramePack graph uses.
+
+## Parity milestone — 2026-08-12 ✅
+
+First cloud render: `saga-framepack.sh -a wired_ronin_e10_00001.png -L 90 --fps 30 -W 640 -H 640
+--lora animegabriel_hy_e10.safetensors --lora-weight 0.9 --gpu-keep 8` → `cloud_first.mp4`
+(teacache 0.05). **User confirmed: motion smooth, identity locked.** Cloud reproduces the box exactly.
+Infra chapter closed; SAGA is back in the creative testing/tuning phase, on rented GPU that never
+touches Dina's card.
+
 ## Next build step
-`saga-cloud.sh` — a provisioner that takes a fresh RunPod pod from zero to first render: mount the
-volume, run the install/setup scripts, fetch/verify models, health-check ComfyUI. Builds directly on
-the existing script suite. (Deferred until a provider is chosen and an account exists.)
+`saga-cloud.sh` — codify the §"Proven bring-up" recipe so a fresh pod goes zero-to-render in one
+command (with the HF-vs-rsync model fetch and the size-verify built in). Builds on the existing suite.
