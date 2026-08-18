@@ -31,7 +31,7 @@ FLUX_REDUX="${FLUX_REDUX:-flux1-redux-dev.safetensors}"
 SIGCLIP="${SIGCLIP:-sigclip_vision_patch14_384.safetensors}"
 FLUX_CN="${FLUX_CN:-flux-union-pro.safetensors}"
 
-OUT="saga_flux"; SEED=0; W=768; H=1344; STEPS=20; GUIDANCE=3.5; BATCH=1
+OUT="saga_flux"; SEED=0; W=768; H=1344; STEPS=20; GUIDANCE=3.5; CFG=1.0; BATCH=1
 PROMPT=""; NEG=""; ANCHOR=""; REDUX_STR="0.6"
 POSE=""; POSE_TYPE="openpose"; POSE_STR="0.7"; POSE_RAW=0
 DUMP=0; CHECK=0
@@ -44,7 +44,7 @@ while [ $# -gt 0 ]; do case "$1" in
   -a|--anchor) ANCHOR="$2"; shift 2;;  --redux-strength) REDUX_STR="$2"; shift 2;;
   --pose) POSE="$2"; shift 2;;  --pose-type) POSE_TYPE="$2"; shift 2;;
   --pose-strength) POSE_STR="$2"; shift 2;;  --pose-raw) POSE_RAW=1; shift;;
-  --steps) STEPS="$2"; shift 2;;  --guidance) GUIDANCE="$2"; shift 2;;
+  --steps) STEPS="$2"; shift 2;;  --guidance) GUIDANCE="$2"; shift 2;;  --cfg) CFG="$2"; shift 2;;
   --batch) BATCH="$2"; shift 2;;  --ckpt) FLUX_CKPT="$2"; shift 2;;
   --dump-graph) DUMP=1; shift;;  --check) CHECK=1; shift;;
   -h|--help) sed -n '2,30p' "$0"; exit 0;;
@@ -52,6 +52,15 @@ while [ $# -gt 0 ]; do case "$1" in
 esac; done
 command -v jq >/dev/null || die "jq required"
 [ -n "$PROMPT" ] || [ "$CHECK" -eq 1 ] || [ "$DUMP" -eq 1 ] || die "need -p/--prompt"
+
+# Flux-dev IGNORES the negative at cfg=1 (guidance-distilled). At cfg>1 the negative is live —
+# so raise --cfg to purge the fake artist signatures/watermarks Flux loves to stamp on "drawings".
+if awk -v c="$CFG" 'BEGIN{exit !(c>1.0)}'; then
+  [ -n "$NEG" ] || NEG="watermark, signature, text, words, letters, autograph, artist name, logo, stamp, label, border, frame, blurry, jpeg artifacts, low quality"
+  NEG_BASE='["4",0]'    # real negative conditioning
+else
+  NEG_BASE='["5",0]'    # zeroed (distilled default)
+fi
 
 upload(){ local f="$1"; [ -f "$f" ] || die "file not found: $f"; curl -sf -F "image=@${f}" -F "overwrite=true" "$COMFY/upload/image" | jq -r '.name'; }
 
@@ -81,7 +90,7 @@ if [ -n "$ANCHOR" ]; then
 fi
 
 # ---- ControlNet (pose) chain: applied to positive+negative AFTER FluxGuidance ----
-POSEJSON=""; KS_POS='["3",0]'; KS_NEG='["5",0]'
+POSEJSON=""; KS_POS='["3",0]'; KS_NEG="$NEG_BASE"
 if [ -n "$POSE" ]; then
   { [ "$CHECK" -eq 1 ] || [ "$DUMP" -eq 1 ]; } || PZ=$(upload "$POSE"); PZ="${PZ:-POSE.png}"
   local_cn_img='["23",0]'; PRE=''
@@ -93,7 +102,7 @@ if [ -n "$POSE" ]; then
  "20":{"class_type":"ControlNetLoader","inputs":{"control_net_name":"'"$FLUX_CN"'"}},
  "21":{"class_type":"SetUnionControlNetType","inputs":{"control_net":["20",0],"type":"'"$POSE_TYPE"'"}},
  "22":{"class_type":"LoadImage","inputs":{"image":"'"$PZ"'"}}'"$PRE"',
- "24":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["3",0],"negative":["5",0],"control_net":["21",0],"image":'"$local_cn_img"',"vae":["1",2],"strength":'"$POSE_STR"',"start_percent":0.0,"end_percent":1.0}}'
+ "24":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["3",0],"negative":'"$NEG_BASE"',"control_net":["21",0],"image":'"$local_cn_img"',"vae":["1",2],"strength":'"$POSE_STR"',"start_percent":0.0,"end_percent":1.0}}'
   KS_POS='["24",0]'; KS_NEG='["24",1]'
 fi
 
@@ -104,7 +113,7 @@ GRAPH='{
  "4":{"class_type":"CLIPTextEncode","inputs":{"text":'"$(jq -Rn --arg s "$NEG" '$s')"',"clip":["1",1]}},
  "5":{"class_type":"ConditioningZeroOut","inputs":{"conditioning":["4",0]}},
  "6":{"class_type":"EmptySD3LatentImage","inputs":{"width":'"$W"',"height":'"$H"',"batch_size":'"$BATCH"'}},
- "7":{"class_type":"KSampler","inputs":{"model":["1",0],"positive":'"$KS_POS"',"negative":'"$KS_NEG"',"latent_image":["6",0],"seed":'"$SEED"',"steps":'"$STEPS"',"cfg":1.0,"sampler_name":"euler","scheduler":"simple","denoise":1.0}},
+ "7":{"class_type":"KSampler","inputs":{"model":["1",0],"positive":'"$KS_POS"',"negative":'"$KS_NEG"',"latent_image":["6",0],"seed":'"$SEED"',"steps":'"$STEPS"',"cfg":'"$CFG"',"sampler_name":"euler","scheduler":"simple","denoise":1.0}},
  "8":{"class_type":"VAEDecode","inputs":{"samples":["7",0],"vae":["1",2]}},
  "9":{"class_type":"SaveImage","inputs":{"images":["8",0],"filename_prefix":"'"$OUT"'"}}'"$REDUX$POSEJSON"'
 }'
