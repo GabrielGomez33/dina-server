@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # saga-flux.sh — Flux.1-dev image gen: txt2img + optional Redux (character) + optional ControlNet (pose).
 # ============================================================================
-# The IMAGE stage of the self-hosted pipeline. Three DECOUPLED controls (the Gabriel recipe on Flux):
+# The IMAGE stage of the self-hosted pipeline. Four DECOUPLED controls (the Gabriel recipe on Flux):
 #   • PROMPT  → style (the charcoal look)
-#   • -a REF  → Redux: character/appearance carried from a reference image
+#   • --lora NAME → a TRAINED character LoRA: identity baked in, pose still driven by the PROMPT
+#   • -a REF  → Redux: character/appearance carried from a reference image (locks composition)
 #   • --pose REF → ControlNet: FORCES the pose (structural; the prompt/Redux can't override it)
-# Use --pose to build a varied, on-model LoRA dataset (pose from ControlNet, character from Redux).
+# Bootstrap path: Redux (-a) clones ONE canonical into a training set → train a LoRA →
+# thereafter use --lora, which follows pose prompts (Redux/ControlNet then only for edge cases).
 #
 # Models:
 #   models/checkpoints/flux1-dev-fp8.safetensors      (FLUX_CKPT)  all-in-one fp8
@@ -34,6 +36,7 @@ FLUX_CN="${FLUX_CN:-flux-union-pro.safetensors}"
 OUT="saga_flux"; SEED=0; W=768; H=1344; STEPS=20; GUIDANCE=3.5; CFG=1.0; BATCH=1
 PROMPT=""; NEG=""; ANCHOR=""; REDUX_STR="0.6"
 POSE=""; POSE_TYPE="openpose"; POSE_STR="0.7"; POSE_RAW=0
+LORA=""; LORA_STR="0.9"
 DUMP=0; CHECK=0
 die(){ echo "❌ $*" >&2; exit 1; }
 
@@ -44,6 +47,7 @@ while [ $# -gt 0 ]; do case "$1" in
   -a|--anchor) ANCHOR="$2"; shift 2;;  --redux-strength) REDUX_STR="$2"; shift 2;;
   --pose) POSE="$2"; shift 2;;  --pose-type) POSE_TYPE="$2"; shift 2;;
   --pose-strength) POSE_STR="$2"; shift 2;;  --pose-raw) POSE_RAW=1; shift;;
+  --lora) LORA="$2"; shift 2;;  --lora-strength) LORA_STR="$2"; shift 2;;
   --steps) STEPS="$2"; shift 2;;  --guidance) GUIDANCE="$2"; shift 2;;  --cfg) CFG="$2"; shift 2;;
   --batch) BATCH="$2"; shift 2;;  --ckpt) FLUX_CKPT="$2"; shift 2;;
   --dump-graph) DUMP=1; shift;;  --check) CHECK=1; shift;;
@@ -65,6 +69,7 @@ fi
 upload(){ local f="$1"; [ -f "$f" ] || die "file not found: $f"; curl -sf -F "image=@${f}" -F "overwrite=true" "$COMFY/upload/image" | jq -r '.name'; }
 
 NODES='["CheckpointLoaderSimple","CLIPTextEncode","FluxGuidance","ConditioningZeroOut","EmptySD3LatentImage","KSampler","VAEDecode","SaveImage"]'
+[ -n "$LORA" ]   && NODES=$(echo "$NODES" | jq -c '. + ["LoraLoaderModelOnly"]')
 [ -n "$ANCHOR" ] && NODES=$(echo "$NODES" | jq -c '. + ["StyleModelLoader","CLIPVisionLoader","LoadImage","CLIPVisionEncode","StyleModelApply"]')
 [ -n "$POSE" ]   && NODES=$(echo "$NODES" | jq -c '. + ["ControlNetLoader","SetUnionControlNetType","ControlNetApplyAdvanced","LoadImage"]')
 { [ -n "$POSE" ] && [ "$POSE_RAW" -eq 0 ]; } && NODES=$(echo "$NODES" | jq -c '. + ["DWPreprocessor"]')
@@ -75,6 +80,16 @@ preflight(){
   done
   [ "$miss" -eq 0 ] && echo "✔ preflight ok — all node classes present$([ -n "$ANCHOR" ] && echo ' (+redux)')$([ -n "$POSE" ] && echo ' (+pose)')" || return 1
 }
+
+# ---- LoRA (character identity) chain: model-only, inserted between checkpoint and KSampler ----
+# A trained character LoRA follows pose prompts (unlike Redux, which locks composition), so this
+# is the on-model path once the LoRA exists. Text encoders stay frozen → LoraLoaderModelOnly.
+LORAJSON=""; MODEL_SRC='["1",0]'
+if [ -n "$LORA" ]; then
+  MODEL_SRC='["30",0]'
+  LORAJSON=',
+ "30":{"class_type":"LoraLoaderModelOnly","inputs":{"model":["1",0],"lora_name":"'"$LORA"'","strength_model":'"$LORA_STR"'}}'
+fi
 
 # ---- Redux (character) chain: positive text conditioning is augmented before FluxGuidance ----
 REDUX=""; FG_COND='["2",0]'
@@ -113,9 +128,9 @@ GRAPH='{
  "4":{"class_type":"CLIPTextEncode","inputs":{"text":'"$(jq -Rn --arg s "$NEG" '$s')"',"clip":["1",1]}},
  "5":{"class_type":"ConditioningZeroOut","inputs":{"conditioning":["4",0]}},
  "6":{"class_type":"EmptySD3LatentImage","inputs":{"width":'"$W"',"height":'"$H"',"batch_size":'"$BATCH"'}},
- "7":{"class_type":"KSampler","inputs":{"model":["1",0],"positive":'"$KS_POS"',"negative":'"$KS_NEG"',"latent_image":["6",0],"seed":'"$SEED"',"steps":'"$STEPS"',"cfg":'"$CFG"',"sampler_name":"euler","scheduler":"simple","denoise":1.0}},
+ "7":{"class_type":"KSampler","inputs":{"model":'"$MODEL_SRC"',"positive":'"$KS_POS"',"negative":'"$KS_NEG"',"latent_image":["6",0],"seed":'"$SEED"',"steps":'"$STEPS"',"cfg":'"$CFG"',"sampler_name":"euler","scheduler":"simple","denoise":1.0}},
  "8":{"class_type":"VAEDecode","inputs":{"samples":["7",0],"vae":["1",2]}},
- "9":{"class_type":"SaveImage","inputs":{"images":["8",0],"filename_prefix":"'"$OUT"'"}}'"$REDUX$POSEJSON"'
+ "9":{"class_type":"SaveImage","inputs":{"images":["8",0],"filename_prefix":"'"$OUT"'"}}'"$LORAJSON$REDUX$POSEJSON"'
 }'
 
 [ "$DUMP" -eq 1 ] && { echo "$GRAPH"; exit 0; }
@@ -123,7 +138,7 @@ preflight || die "preflight failed (see above)"
 [ "$CHECK" -eq 1 ] && exit 0
 echo "$GRAPH" | jq -e . >/dev/null || die "internal: malformed graph JSON"
 
-echo "▶ flux${ANCHOR:+ +redux}${POSE:+ +pose}: '$OUT'  ${W}x${H}  g=$GUIDANCE  seed=$SEED${ANCHOR:+  char=$(basename "$ANCHOR")@${REDUX_STR}}${POSE:+  pose=$(basename "$POSE")@${POSE_STR}/${POSE_TYPE}}"
+echo "▶ flux${LORA:+ +lora}${ANCHOR:+ +redux}${POSE:+ +pose}: '$OUT'  ${W}x${H}  g=$GUIDANCE  seed=$SEED${LORA:+  lora=$(basename "$LORA")@${LORA_STR}}${ANCHOR:+  char=$(basename "$ANCHOR")@${REDUX_STR}}${POSE:+  pose=$(basename "$POSE")@${POSE_STR}/${POSE_TYPE}}"
 PID=$(curl -sf -X POST "$COMFY/prompt" -d "$(jq -n --argjson p "$GRAPH" '{prompt:$p}')" | jq -r '.prompt_id // empty')
 [ -n "$PID" ] || die "graph rejected (run --dump-graph | jq and diff vs /object_info)"
 echo "  submitted: $PID"

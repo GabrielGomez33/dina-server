@@ -1,0 +1,86 @@
+# ai-toolkit FLUX.1-dev character-LoRA config (template).
+# ============================================================================
+# The IMAGE-model analogue of the diffusion-pipe video templates: bakes ONE
+# character's identity into Flux.1-dev so txt2img renders them on-model while
+# the PROMPT still drives pose/framing/expression (a trained LoRA follows pose
+# prompts — unlike Redux, which clones the reference's whole composition).
+#
+# Filled by saga-flux-lora-train.sh (sed substitutes the AT_TOKEN_AT slots), then run with
+# ai-toolkit's run.py inside its own venv. Requires the FLUX.1-dev license
+# accepted on the HF account (ai-toolkit pulls the full dev weights).
+#
+# VERIFY-LIVE: schema tracks ostris/ai-toolkit's Flux example (config/examples/
+# train_lora_flux_24gb.yaml). If ai-toolkit changes keys, diff against that file.
+# 24 GB (RTX 4090): quantize=true is REQUIRED — the fp8 base + LoRA fit; without
+# it the run OOMs. On a 32 GB 5090 you may set quantize=false for a quality bump.
+# ============================================================================
+job: extension
+config:
+  name: "@NAME@"
+  process:
+    - type: "sd_trainer"
+      training_folder: "@OUTPUT_DIR@"
+      device: cuda:0
+      # trigger_word is appended to any caption that lacks it, so the token always
+      # co-occurs with the character. Keep it rare/non-lexical (e.g. l1ttl3one).
+      trigger_word: "@TRIGGER@"
+      network:
+        type: "lora"
+        linear: @RANK@
+        linear_alpha: @RANK@
+      save:
+        dtype: float16
+        save_every: @SAVE_EVERY@
+        max_step_saves_to_keep: 4
+        push_to_hub: false
+      datasets:
+        # Flat folder of image + same-stem .txt caption pairs (saga-flux-lora-dataset.sh).
+        - folder_path: "@DATASET@"
+          caption_ext: "txt"
+          # Drop the caption entirely 5% of the time so the trigger can carry identity
+          # on its own (prevents over-reliance on caption wording at inference).
+          caption_dropout_rate: 0.05
+          shuffle_tokens: false
+          cache_latents_to_disk: true
+          resolution: [ @RESOLUTIONS@ ]
+      train:
+        batch_size: 1
+        steps: @STEPS@
+        gradient_accumulation_steps: 1
+        train_unet: true
+        train_text_encoder: false   # Flux text encoders stay frozen (standard for character LoRA)
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        optimizer: "adamw8bit"
+        lr: @LR@
+        # EMA smooths the weights across steps — steadier identity, less step-to-step drift.
+        ema_config:
+          use_ema: true
+          ema_decay: 0.99
+        dtype: bf16
+      model:
+        name_or_path: "@MODEL_PATH@"
+        is_flux: true
+        quantize: @QUANTIZE@   # true → fp8 in-memory, fits 24 GB. false → needs ~32 GB.
+      # Mid-training test renders. These prompts deliberately ask for DIFFERENT poses
+      # than the (pose-similar) Redux-bootstrapped dataset — if the samples show varied
+      # poses on-model, the LoRA generalized and ControlNet is unnecessary. If every
+      # sample snaps back to the training pose, it overfit → add ControlNet for round 2.
+      sample:
+        sampler: "flowmatch"
+        sample_every: @SAVE_EVERY@
+        width: 1024
+        height: 1024
+        prompts:
+          - "@TRIGGER@ standing centered, full body, arms at sides, charcoal and graphite pencil drawing, plain off-white paper background"
+          - "@TRIGGER@ sitting cross-legged on the floor, full body, charcoal and graphite pencil drawing, plain off-white paper background"
+          - "@TRIGGER@ running, mid-stride, dynamic pose, full body, charcoal and graphite pencil drawing, plain off-white paper background"
+          - "@TRIGGER@ reaching one arm up, looking upward, full body, charcoal and graphite pencil drawing, plain off-white paper background"
+        neg: ""              # Flux is guidance-distilled; negative is unused at sample time
+        seed: 42
+        walk_seed: true
+        guidance_scale: 3.5
+        sample_steps: 20
+meta:
+  name: "@NAME@"
+  version: "1.0"
