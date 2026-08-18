@@ -97,13 +97,44 @@ if [ "$DRY" -eq 1 ]; then
 fi
 [ -f "$RUNPY" ] || die "ai-toolkit run.py not found at $RUNPY (clone ostris/ai-toolkit there, or set AIT_ROOT), or use --dry-run"
 [ -n "${AITPY:-}" ] || die "ai-toolkit venv python not found under $AIT_ROOT (venv/ or venv-ait/) — create it, or use --dry-run"
-[ -n "${HF_TOKEN:-}" ] || echo "⚠️  HF_TOKEN not exported — the FLUX.1-dev pull will fail if the model isn't already cached. export HF_TOKEN=hf_… first."
+[ -n "${HF_TOKEN:-}" ] || echo "⚠️  HF_TOKEN not exported — the FLUX.1-dev pull will fail if the model isn't already cached. export HF_TOKEN=hf_… first (a valid token is hf_… ~37 chars; verify with HfApi().whoami)."
 
-# fragmentation guard for the 24 GB fit (same lesson as the video trainer).
+# --- environment hardening (each was a real RunPod failure mode; see docs/CLOUD_ARCHITECTURE.md) ---
+# 1) fragmentation guard for the 24 GB fit (same lesson as the video trainer).
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-export HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-1}"
+# 2) HF transfer: the Xet backend drops mid-download on RunPod IPs ("receiver dropped, Internal
+#    Writer Error") — disable it for plain resumable HTTPS. Do NOT enable hf_transfer here: it
+#    errors hard if the package is absent.
+export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
+# 3) HF cache location: the ~34 GB FLUX.1-dev cache (transformer 23.8G + T5 9.5G + CLIP + VAE)
+#    must NOT land on the small container disk (/root/.cache → EDQUOT). Park it on the volume,
+#    and size the volume for models + this cache (a 100 GB volume is tight; 200 GB is comfortable).
+export HF_HOME="${HF_HOME:-$SAGA_ROOT/hf_home/huggingface}"; mkdir -p "$HF_HOME"
+
+# 4) torchaudio: ai-toolkit imports it unconditionally, but a bleeding-edge torch (e.g. 2.13/cu130)
+#    can have NO matching torchaudio wheel. Image-LoRA never uses audio → a stub satisfies the import.
+if ! "$AITPY" -c 'import torchaudio' >/dev/null 2>&1; then
+  echo "⚠️  torchaudio not importable in the ai-toolkit venv (blocks ai-toolkit's config import)."
+  echo "    It's audio-only — stub it (safe for image LoRA):"
+  echo "      SP=\$($AITPY -c 'import os,torch;print(os.path.dirname(os.path.dirname(torch.__file__)))')"
+  echo "      mkdir -p \"\$SP/torchaudio\" && printf 'import sys,unittest.mock as _m\\n__version__=\"0.0.0+stub\"\\ndef __getattr__(n): return _m.MagicMock()\\nfor s in (\"transforms\",\"functional\",\"io\",\"datasets\",\"models\",\"sox_effects\",\"backend\",\"utils\",\"compliance\",\"pipelines\"): sys.modules.setdefault(\"torchaudio.\"+s,_m.MagicMock())\\n' > \"\$SP/torchaudio/__init__.py\""
+  die "install or stub torchaudio, then re-run"
+fi
+
+# 5) GPU drain: ai-toolkit needs the whole card; a running ComfyUI holds ~20 GB → instant OOM at
+#    the quantize step. Refuse to launch into a card that's already occupied (kill ComfyUI first).
+FREE=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+if [ -n "$FREE" ] && [ "$FREE" -lt 20000 ]; then
+  echo "❌ only ${FREE} MiB free on GPU 0 — Flux LoRA (fp8) needs ~22 GB." >&2
+  echo "   Something else holds the card (usually ComfyUI). Free it and retry:" >&2
+  echo "     nvidia-smi                 # note the PID holding the memory" >&2
+  echo "     kill -9 <pid>              # pkill -f 'ComfyUI/main.py' MISSES it (cmdline is 'python main.py')" >&2
+  die "insufficient free VRAM"
+fi
 
 echo "▶ launching ai-toolkit (one GPU: pause ComfyUI-heavy work while it runs)…"
+echo "   HF_HOME=$HF_HOME  HF_HUB_DISABLE_XET=$HF_HUB_DISABLE_XET  GPU free=${FREE:-?}MiB"
+echo "   TIP: run under tmux so an SSH drop can't kill the ~2 h job."
 ( cd "$AIT_ROOT" && $CMD ) || die "training failed (see log above)"
 
 RESULT="$OUT_DIR/$NAMESTEM/${NAMESTEM}.safetensors"

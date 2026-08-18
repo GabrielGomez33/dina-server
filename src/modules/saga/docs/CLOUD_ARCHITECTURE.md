@@ -166,6 +166,45 @@ First cloud render: `saga-framepack.sh -a wired_ronin_e10_00001.png -L 90 --fps 
 Infra chapter closed; SAGA is back in the creative testing/tuning phase, on rented GPU that never
 touches Dina's card.
 
+## Flux image-LoRA on the pod (ai-toolkit) — bring-up + the gauntlet (2026-08-18)
+
+Training a Flux.1-dev **character** LoRA on the pod (Little One) via ostris/**ai-toolkit** (venv-ait,
+separate from ComfyUI's venv). `saga-flux-lora-dataset.sh` builds the flat image+txt set;
+`saga-flux-lora-train.sh` fills `training/lora_flux.yaml.tmpl` and launches `run.py`. Every failure
+below was hit for real and is now guarded by the script — don't relearn them:
+
+- **Free the GPU first.** ai-toolkit needs ~22 GB; a running **ComfyUI holds ~20 GB** and the run OOMs
+  at the *quantize* step (`transformer.to(...)`). Kill ComfyUI before training. `pkill -f
+  "ComfyUI/main.py"` **misses** — the real cmdline is `…/venv/bin/python main.py --listen`, so kill by
+  PID: `nvidia-smi` → `kill -9 <pid>`. The trainer now refuses to launch below 20 GB free.
+- **torchaudio import wall.** ai-toolkit's `config_modules.py` does `import torchaudio` unconditionally.
+  The pod's bleeding-edge **torch `2.13.0+cu130` has NO matching torchaudio wheel** (cu130 index tops out
+  at 2.11) → `ModuleNotFoundError`. Image-LoRA never uses audio, so **stub it**: write a fake
+  `torchaudio/__init__.py` in venv-ait's site-packages (module `__getattr__` → `MagicMock`, plus
+  `sys.modules.setdefault("torchaudio.<sub>", MagicMock())` for submodule imports). The trainer detects
+  the missing module and prints the exact stub command.
+- **HF Xet backend drops.** The new Xet transfer fails mid-download on RunPod IPs
+  (`File reconstruction error: Internal Writer Error: Failed to send data: receiver dropped`, in
+  `xet_get`). Fix: `export HF_HUB_DISABLE_XET=1` → plain resumable HTTPS. Do **not** set
+  `HF_HUB_ENABLE_HF_TRANSFER=1` (errors if the package is absent). The trainer exports the disable.
+- **Disk: cache goes to the container disk by default → EDQUOT.** HF caches to `/root/.cache/huggingface`
+  on the **~30 GB container overlay** (quota'd); the FLUX.1-dev training set is **~34 GB** (transformer
+  23.8 G bf16 + T5-XXL 9.5 G + CLIP 246 M + VAE 168 M) → `[Errno 122] Disk quota exceeded`. Set
+  `HF_HOME=/workspace/hf_home/huggingface` to park it on the volume. **The volume has a quota too**:
+  MooseFS `df` shows the *cluster* (petabytes) but EDQUOT fires at *your* volume's limit — a **100 GB
+  volume is too tight** with ~70 GB of models already present; **bumped to 200 GB** (non-destructive
+  resize; may need a pod stop/start to apply on a live pod). The trainer sets `HF_HOME` to the volume.
+- **Valid HF token required even with the license accepted.** ai-toolkit pulls gated FLUX.1-dev; a real
+  token is `hf_…` (~37 chars). Verify before the 24 GB pull: `HfApi().whoami(token=…)['name']`. A
+  malformed token 401s at `whoami-v2`.
+
+**First successful train (2026-08-18):** rank 16, 494 U-Net modules (TE frozen), 28-image dataset
+bucketed at 704×832 + 928×1120, quantize=true, ~2.87 s/step, ~2 h for 2500 steps on the 4090. Samples
+every 250 steps → `tmp/lora/little_one/samples/` (prompts request unseen poses = the generalization
+read for the v1→v2 bootstrap).
+
 ## Next build step
 `saga-cloud.sh` — codify the §"Proven bring-up" recipe so a fresh pod goes zero-to-render in one
 command (with the HF-vs-rsync model fetch and the size-verify built in). Builds on the existing suite.
+Fold in the Flux-LoRA env (`HF_HOME` on the volume, `HF_HUB_DISABLE_XET=1`, the torchaudio stub) so
+`saga.env` carries them and a fresh pod trains without re-hitting the gauntlet above.
