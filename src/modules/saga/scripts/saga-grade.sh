@@ -53,6 +53,10 @@ case "$PRESET" in
   # + analog chromatic aberration (rgbashift) + heavy film grain + vignette. Pushes hard
   # toward Serial Experiments Lain / degraded VHS anime, away from clean-real.
   lain-heavy) VF="${BLOOM_SOFT}[bl];[bl]eq=saturation=0.50:contrast=1.14:brightness=-0.03:gamma=0.92,rgbashift=rh=-2:bh=2,noise=alls=26:allf=t+u,vignette=PI/5";;
+  # lain-warm = the Lain analog texture (soft bloom + heavy grain + vignette) but WARM-tinted and
+  # far less desaturated, so warm/hopeful footage (glowing gold maps) keeps its warmth instead of
+  # going cold-purple. The anthem/hopeful counterpart to lain-heavy.
+  lain-warm)  VF="${BLOOM_SOFT}[bl];[bl]eq=saturation=0.86:contrast=1.10:brightness=-0.01:gamma=0.96,colorbalance=rs=0.05:gs=0.02:bs=-0.06:rm=0.04:bm=-0.05,noise=alls=20:allf=t+u,vignette=PI/5";;
   bloom)      VF="$BLOOM";;
   lain)       VF="eq=saturation=0.68:contrast=1.10:brightness=-0.015,noise=alls=14:allf=t+u";;
   grain)      VF="noise=alls=12:allf=t+u";;
