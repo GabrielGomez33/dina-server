@@ -48,6 +48,10 @@ case "$PRESET" in
   # soft = softness without the dirt: gentle glow, matte haze (lift blacks / pull highlights via curves),
   # saturation kept ~0.94 so the rosy cheeks survive, light grain, gentle vignette. The Little One look.
   soft)       VF="${BLOOM_GENTLE}[bl];[bl]eq=saturation=0.94:contrast=1.03:brightness=0.005,curves=all='0/0.03 0.5/0.52 1/0.98',noise=alls=8:allf=t+u,vignette=PI/6";;
+  # soft-heavy = the SOFT look carried to a HEAVY finish: soft-wide Orton bloom + matte lifted-black
+  # haze, palette kept WARM (sat ~0.90, gentle warm colorbalance — no cold desaturation), then HEAVY
+  # film grain + strong vignette. The warm anthem's grade: soft and dreamy, but with real analog weight.
+  soft-heavy) VF="${BLOOM_SOFT}[bl];[bl]eq=saturation=0.90:contrast=1.05:brightness=0.0:gamma=0.98,colorbalance=rs=0.04:gs=0.01:bs=-0.05:rm=0.03:bm=-0.04,curves=all='0/0.03 0.5/0.52 1/0.98',noise=alls=24:allf=t+u,vignette=PI/5";;
   lain-bloom) VF="${BLOOM}[bl];[bl]eq=saturation=0.72:contrast=1.08:brightness=-0.01,noise=alls=12:allf=t+u";;
   # lain-heavy = the DIRTY analog degrade: strong desaturation + gamma crush + soft bloom
   # + analog chromatic aberration (rgbashift) + heavy film grain + vignette. Pushes hard
@@ -61,7 +65,7 @@ case "$PRESET" in
   lain)       VF="eq=saturation=0.68:contrast=1.10:brightness=-0.015,noise=alls=14:allf=t+u";;
   grain)      VF="noise=alls=12:allf=t+u";;
   none)       cp -f "$IN" "$OUT"; echo "$OUT"; exit 0;;
-  *) die "unknown --preset: $PRESET (soft|lain-bloom|lain-heavy|bloom|lain|grain|none)";;
+  *) die "unknown --preset: $PRESET (soft|soft-heavy|lain-bloom|lain-heavy|lain-warm|bloom|lain|grain|none)";;
 esac
 
 echo "▶ grade $(basename "$IN") [$PRESET]$([ "$IMG" -eq 1 ] && echo ' (still)')" >&2
