@@ -19,11 +19,17 @@
 #   saga-flux.sh -p "PROMPT" -o name                                   # txt2img
 #   saga-flux.sh -p "PROMPT" -a char.png --redux-strength 0.4 \
 #                --pose pose.jpg --pose-strength 0.7 -o name           # character + forced pose
+#   saga-flux.sh -p "PROMPT" --init src.png --denoise 0.5 \
+#                --lora little_one_v2.safetensors -o name              # img2img EDIT (keep composition)
 #   saga-flux.sh --pose pose.jpg --check                               # preflight incl. pose nodes
 #
 # --pose REF preprocesses REF into an OpenPose skeleton (DWPreprocessor) and drives ControlNet.
 #   --pose-raw : REF is ALREADY a skeleton image — skip preprocessing.
 #   --pose-type openpose|depth|canny   (default openpose)   --pose-strength F (default 0.7)
+# --init IMG --denoise D : img2img. VAEEncode IMG into the start latent and only partially
+#   renoise it (denoise<1.0), so the source COMPOSITION/BACKGROUND is preserved while the prompt
+#   shifts pose/lighting. Composes with --lora (stays on-model). 0.4=subtle · 0.5–0.6=pose shift ·
+#   0.7+=large change. This is how FLF end-keyframes are made (edit the approved still, keep its bg).
 # ============================================================================
 set -uo pipefail
 COMFY="${COMFY:-http://127.0.0.1:8188}"
@@ -37,6 +43,7 @@ OUT="saga_flux"; SEED=0; W=768; H=1344; STEPS=20; GUIDANCE=3.5; CFG=1.0; BATCH=1
 PROMPT=""; NEG=""; ANCHOR=""; REDUX_STR="0.6"
 POSE=""; POSE_TYPE="openpose"; POSE_STR="0.7"; POSE_RAW=0
 LORA=""; LORA_STR="0.9"
+INIT=""; DENOISE="1.0"
 DUMP=0; CHECK=0
 die(){ echo "❌ $*" >&2; exit 1; }
 
@@ -48,6 +55,7 @@ while [ $# -gt 0 ]; do case "$1" in
   --pose) POSE="$2"; shift 2;;  --pose-type) POSE_TYPE="$2"; shift 2;;
   --pose-strength) POSE_STR="$2"; shift 2;;  --pose-raw) POSE_RAW=1; shift;;
   --lora) LORA="$2"; shift 2;;  --lora-strength) LORA_STR="$2"; shift 2;;
+  --init) INIT="$2"; shift 2;;  --denoise) DENOISE="$2"; shift 2;;
   --steps) STEPS="$2"; shift 2;;  --guidance) GUIDANCE="$2"; shift 2;;  --cfg) CFG="$2"; shift 2;;
   --batch) BATCH="$2"; shift 2;;  --ckpt) FLUX_CKPT="$2"; shift 2;;
   --dump-graph) DUMP=1; shift;;  --check) CHECK=1; shift;;
@@ -70,6 +78,7 @@ upload(){ local f="$1"; [ -f "$f" ] || die "file not found: $f"; curl -sf -F "im
 
 NODES='["CheckpointLoaderSimple","CLIPTextEncode","FluxGuidance","ConditioningZeroOut","EmptySD3LatentImage","KSampler","VAEDecode","SaveImage"]'
 [ -n "$LORA" ]   && NODES=$(echo "$NODES" | jq -c '. + ["LoraLoaderModelOnly"]')
+[ -n "$INIT" ]   && NODES=$(echo "$NODES" | jq -c '. + ["LoadImage","VAEEncode"]')
 [ -n "$ANCHOR" ] && NODES=$(echo "$NODES" | jq -c '. + ["StyleModelLoader","CLIPVisionLoader","LoadImage","CLIPVisionEncode","StyleModelApply"]')
 [ -n "$POSE" ]   && NODES=$(echo "$NODES" | jq -c '. + ["ControlNetLoader","SetUnionControlNetType","ControlNetApplyAdvanced","LoadImage"]')
 { [ -n "$POSE" ] && [ "$POSE_RAW" -eq 0 ]; } && NODES=$(echo "$NODES" | jq -c '. + ["DWPreprocessor"]')
@@ -89,6 +98,19 @@ if [ -n "$LORA" ]; then
   MODEL_SRC='["30",0]'
   LORAJSON=',
  "30":{"class_type":"LoraLoaderModelOnly","inputs":{"model":["1",0],"lora_name":"'"$LORA"'","strength_model":'"$LORA_STR"'}}'
+fi
+
+# ---- img2img (edit) chain: VAEEncode the source into the start latent, renoise partially ----
+# When --init is given the KSampler starts from the encoded source (not an empty latent) and only
+# denoises by $DENOISE, so composition/background survive while the prompt shifts pose/lighting.
+# Composes with --lora → on-model edits. Node ids 40/41 avoid the redux(12)/pose(22/23) LoadImage ids.
+INITJSON=""; LATENT_SRC='["6",0]'; DENOISE_VAL="1.0"
+if [ -n "$INIT" ]; then
+  { [ "$CHECK" -eq 1 ] || [ "$DUMP" -eq 1 ]; } || IZ=$(upload "$INIT"); IZ="${IZ:-INIT.png}"
+  LATENT_SRC='["41",0]'; DENOISE_VAL="$DENOISE"
+  INITJSON=',
+ "40":{"class_type":"LoadImage","inputs":{"image":"'"$IZ"'"}},
+ "41":{"class_type":"VAEEncode","inputs":{"pixels":["40",0],"vae":["1",2]}}'
 fi
 
 # ---- Redux (character) chain: positive text conditioning is augmented before FluxGuidance ----
@@ -128,9 +150,9 @@ GRAPH='{
  "4":{"class_type":"CLIPTextEncode","inputs":{"text":'"$(jq -Rn --arg s "$NEG" '$s')"',"clip":["1",1]}},
  "5":{"class_type":"ConditioningZeroOut","inputs":{"conditioning":["4",0]}},
  "6":{"class_type":"EmptySD3LatentImage","inputs":{"width":'"$W"',"height":'"$H"',"batch_size":'"$BATCH"'}},
- "7":{"class_type":"KSampler","inputs":{"model":'"$MODEL_SRC"',"positive":'"$KS_POS"',"negative":'"$KS_NEG"',"latent_image":["6",0],"seed":'"$SEED"',"steps":'"$STEPS"',"cfg":'"$CFG"',"sampler_name":"euler","scheduler":"simple","denoise":1.0}},
+ "7":{"class_type":"KSampler","inputs":{"model":'"$MODEL_SRC"',"positive":'"$KS_POS"',"negative":'"$KS_NEG"',"latent_image":'"$LATENT_SRC"',"seed":'"$SEED"',"steps":'"$STEPS"',"cfg":'"$CFG"',"sampler_name":"euler","scheduler":"simple","denoise":'"$DENOISE_VAL"'}},
  "8":{"class_type":"VAEDecode","inputs":{"samples":["7",0],"vae":["1",2]}},
- "9":{"class_type":"SaveImage","inputs":{"images":["8",0],"filename_prefix":"'"$OUT"'"}}'"$LORAJSON$REDUX$POSEJSON"'
+ "9":{"class_type":"SaveImage","inputs":{"images":["8",0],"filename_prefix":"'"$OUT"'"}}'"$LORAJSON$INITJSON$REDUX$POSEJSON"'
 }'
 
 [ "$DUMP" -eq 1 ] && { echo "$GRAPH"; exit 0; }
@@ -138,7 +160,7 @@ preflight || die "preflight failed (see above)"
 [ "$CHECK" -eq 1 ] && exit 0
 echo "$GRAPH" | jq -e . >/dev/null || die "internal: malformed graph JSON"
 
-echo "▶ flux${LORA:+ +lora}${ANCHOR:+ +redux}${POSE:+ +pose}: '$OUT'  ${W}x${H}  g=$GUIDANCE  seed=$SEED${LORA:+  lora=$(basename "$LORA")@${LORA_STR}}${ANCHOR:+  char=$(basename "$ANCHOR")@${REDUX_STR}}${POSE:+  pose=$(basename "$POSE")@${POSE_STR}/${POSE_TYPE}}"
+echo "▶ flux${LORA:+ +lora}${INIT:+ +img2img}${ANCHOR:+ +redux}${POSE:+ +pose}: '$OUT'  ${W}x${H}  g=$GUIDANCE  seed=$SEED${LORA:+  lora=$(basename "$LORA")@${LORA_STR}}${INIT:+  init=$(basename "$INIT")@denoise${DENOISE}}${ANCHOR:+  char=$(basename "$ANCHOR")@${REDUX_STR}}${POSE:+  pose=$(basename "$POSE")@${POSE_STR}/${POSE_TYPE}}"
 PID=$(curl -sf -X POST "$COMFY/prompt" -d "$(jq -n --argjson p "$GRAPH" '{prompt:$p}')" | jq -r '.prompt_id // empty')
 [ -n "$PID" ] || die "graph rejected (run --dump-graph | jq and diff vs /object_info)"
 echo "  submitted: $PID"
