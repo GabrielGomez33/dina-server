@@ -54,7 +54,7 @@ command -v ffprobe >/dev/null || die "ffprobe required"
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 COVER="scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1"
-FS=$((W/18))          # caption font size ~ frame width / 18
+FS=$((W/20))          # caption font size ~ frame width / 20 (wrapped to fit — see norm)
 BB=$((W/45))          # caption box padding
 LIST="$WORK/list.txt"; : > "$LIST"; SCENES=(); DURS=()
 
@@ -65,8 +65,21 @@ norm(){ # <visual> <seconds> <caption> <outfile>
     *)                               ins=(-stream_loop -1 -i "$vis");;
   esac
   if [ -n "$cap" ]; then
-    local cf="$WORK/cap_$(basename "$out").txt"; printf '%s' "$cap" > "$cf"
-    vf="$vf,drawtext=fontfile=${FONT}:textfile=${cf}:fontcolor=white:fontsize=${FS}:x=(w-tw)/2:y=h*0.80:box=1:boxcolor=black@0.35:boxborderw=${BB}:line_spacing=10"
+    # Fit captions INSIDE the frame: word-wrap to the safe width, then draw each line
+    # individually centered (works on every ffmpeg build — no text_align dependency) and
+    # stack the lines bottom-anchored so multi-line captions stay on-screen.
+    local wrapchars wrapped nlines ln=0 line cf
+    wrapchars=$(awk -v w="$W" -v fs="$FS" 'BEGIN{c=int(0.86*w/(0.56*fs)); if(c<8)c=8; print c}')
+    wrapped=$(printf '%s' "$cap" | fold -s -w "$wrapchars" | sed 's/[[:space:]]*$//')
+    nlines=$(printf '%s\n' "$wrapped" | grep -c .)
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      cf="$WORK/cap_$(basename "$out")_${ln}.txt"; printf '%s' "$line" > "$cf"
+      vf="$vf,drawtext=fontfile=${FONT}:textfile=${cf}:fontcolor=white:fontsize=${FS}:x=(w-tw)/2:y=h*0.82-($((nlines-1))-${ln})*(${FS}*1.34):box=1:boxcolor=black@0.38:boxborderw=$((BB/2)):line_spacing=6"
+      ln=$((ln+1))
+    done <<WRAPEOF
+$wrapped
+WRAPEOF
   fi
   ffmpeg -y "${ins[@]}" -t "$secs" -an -vf "$vf" -r 30 -pix_fmt yuv420p \
     -c:v libx264 -preset veryfast -crf 18 "$out" >/dev/null 2>&1 || die "scene render failed: $vis"
