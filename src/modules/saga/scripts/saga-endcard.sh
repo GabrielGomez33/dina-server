@@ -39,13 +39,16 @@ esac; done
 command -v ffmpeg >/dev/null || die "ffmpeg required"
 
 # ---- the shared old-film MOTION finish (applied in both modes) --------------
-# gate weave: scale 3% over, then crop back with a slow per-frame sub-pixel offset (film gate wobble)
-# noise:      live grain (allf=t → fresh each frame, so it MOVES)
-# eq flicker: brightness wobble from summed sines, eval=frame (the "flicker")
+# Tuned CALM, not strobing: a slow gate drift (sub-Hz, ~1px), a gentle brightness
+# BREATH (low-amplitude sub-Hz sines, not fast flicker), and light live grain. The
+# card feels alive and analog without the jarring jitter/flash.
+#   drift : scale 2% over, crop back with a very slow small offset (slow gate wander)
+#   noise : light live grain (allf=t → moves, but subtle)
+#   eq    : slow brightness breath (eval=frame; ~1.4Hz + 3Hz, tiny amplitude)
 COVER="scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setsar=1"
-WEAVE="scale=iw*1.03:ih*1.03,crop=${W}:${H}:x='(iw-ow)/2+2.5*sin(2*PI*t*1.7)':y='(ih-oh)/2+3.5*sin(2*PI*t*1.1)'"
-FILM_LIGHT="${WEAVE},vignette=PI/5,noise=alls=11:allf=t,eq=eval=frame:contrast=1.03:brightness='0.018*sin(2*PI*t*8)+0.011*sin(2*PI*t*21)+0.007*sin(2*PI*t*44)'"
-FILM_HEAVY="vignette=PI/4,noise=alls=20:allf=t+u,eq=eval=frame:contrast=1.06:brightness='0.020*sin(2*PI*t*9)+0.012*sin(2*PI*t*23)+0.008*sin(2*PI*t*47)'"
+WEAVE="scale=iw*1.02:ih*1.02,crop=${W}:${H}:x='(iw-ow)/2+1.2*sin(2*PI*t*0.35)':y='(ih-oh)/2+1.6*sin(2*PI*t*0.28)'"
+FILM_LIGHT="${WEAVE},vignette=PI/5,noise=alls=7:allf=t,eq=eval=frame:contrast=1.02:brightness='0.006*sin(2*PI*t*1.4)+0.004*sin(2*PI*t*3.1)'"
+FILM_HEAVY="vignette=PI/4,noise=alls=12:allf=t,eq=eval=frame:contrast=1.03:brightness='0.008*sin(2*PI*t*1.6)+0.005*sin(2*PI*t*3.4)'"
 
 if [ -n "$IMG" ]; then
   # --- mode 1: animate a designed still into flickering old film ---

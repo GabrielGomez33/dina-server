@@ -14,7 +14,9 @@
 #             scaled to COVER 1080x1920. So you can assemble from stills now and
 #             swap in animated clips later — same manifest.
 #   seconds : how long the scene shows.
-#   caption : on-screen text, burned bottom-center (leave empty for none).
+#   caption : on-screen text, burned bottom-center, wrapped to fit + fading in/out
+#             (leave empty for none). Split with "||" for sequential in-shot phrases
+#             that reveal one after another, e.g.  A place to solve || A place to explore
 #   Blank lines and lines starting with # are ignored.
 #
 # USAGE:
@@ -65,21 +67,33 @@ norm(){ # <visual> <seconds> <caption> <outfile>
     *)                               ins=(-stream_loop -1 -i "$vis");;
   esac
   if [ -n "$cap" ]; then
-    # Fit captions INSIDE the frame: word-wrap to the safe width, then draw each line
-    # individually centered (works on every ffmpeg build — no text_align dependency) and
-    # stack the lines bottom-anchored so multi-line captions stay on-screen.
-    local wrapchars wrapped nlines ln=0 line cf
+    # Captions, calm reveal: split on "||" into sequential phrases; each phrase fades in and out
+    # within its own even slice of the scene's time (so "A || B" shows A, fades, then B). Every
+    # phrase word-wraps to the safe width and each line is drawn individually centered + bottom-
+    # anchored (no text_align dependency). Fade envelope: alpha=clip(min((t-t0)/f,(t1-t)/f),0,1).
+    local wrapchars j phrase t0 t1 F alpha wrapped nlines ln line cf
+    local -a PHR=(); mapfile -t PHR < <(printf '%s' "$cap" | sed 's/||/\n/g')
+    local nphr=${#PHR[@]}
     wrapchars=$(awk -v w="$W" -v fs="$FS" 'BEGIN{c=int(0.86*w/(0.56*fs)); if(c<8)c=8; print c}')
-    wrapped=$(printf '%s' "$cap" | fold -s -w "$wrapchars" | sed 's/[[:space:]]*$//')
-    nlines=$(printf '%s\n' "$wrapped" | grep -c .)
-    while IFS= read -r line; do
-      [ -z "$line" ] && continue
-      cf="$WORK/cap_$(basename "$out")_${ln}.txt"; printf '%s' "$line" > "$cf"
-      vf="$vf,drawtext=fontfile=${FONT}:textfile=${cf}:fontcolor=white:fontsize=${FS}:x=(w-tw)/2:y=h*0.82-($((nlines-1))-${ln})*(${FS}*1.34):box=1:boxcolor=black@0.38:boxborderw=$((BB/2)):line_spacing=6"
-      ln=$((ln+1))
-    done <<WRAPEOF
+    for ((j=0;j<nphr;j++)); do
+      phrase="$(printf '%s' "${PHR[j]}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+      [ -z "$phrase" ] && continue
+      read -r t0 t1 F < <(awk -v s="$secs" -v n="$nphr" -v jj="$j" 'BEGIN{
+        w0=0.3; w1=s-0.3; if(w1<w0+0.6){w0=0; w1=s}; sl=(w1-w0)/n;
+        a=w0+jj*sl+0.06; b=w0+(jj+1)*sl-0.06; f=sl/3; if(f>0.5)f=0.5; if(f<0.15)f=0.15;
+        printf "%.3f %.3f %.3f", a, b, f}')
+      alpha="clip(min((t-${t0})/${F},(${t1}-t)/${F}),0,1)"
+      wrapped=$(printf '%s' "$phrase" | fold -s -w "$wrapchars" | sed 's/[[:space:]]*$//')
+      nlines=$(printf '%s\n' "$wrapped" | grep -c .); ln=0
+      while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        cf="$WORK/cap_$(basename "$out")_${j}_${ln}.txt"; printf '%s' "$line" > "$cf"
+        vf="$vf,drawtext=fontfile=${FONT}:textfile=${cf}:fontcolor=white:fontsize=${FS}:x=(w-tw)/2:y=h*0.82-($((nlines-1))-${ln})*(${FS}*1.34):box=1:boxcolor=black@0.38:boxborderw=$((BB/2)):line_spacing=6:alpha='${alpha}'"
+        ln=$((ln+1))
+      done <<WRAPEOF
 $wrapped
 WRAPEOF
+    done
   fi
   ffmpeg -y "${ins[@]}" -t "$secs" -an -vf "$vf" -r 30 -pix_fmt yuv420p \
     -c:v libx264 -preset veryfast -crf 18 "$out" >/dev/null 2>&1 || die "scene render failed: $vis"
