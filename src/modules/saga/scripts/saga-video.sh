@@ -110,7 +110,10 @@ printf "    endcard %ss  scene@%ss  VO@%ss %q\n" "$ENDCARD_SEC" "$ENDCARD_START"
 if want animate; then
   echo "── animate ──"
   miss=0; for ((k=1;k<=N;k++)); do [ -f "$SHOTS_DIR/shot$k.png" ] || { echo "  ✗ missing curated keyframe: $SHOTS_DIR/shot$k.png" >&2; miss=1; }; done
-  [ "$miss" -eq 0 ] || die "place your picked keyframes as shots/shot1..$N.png first (curation is manual by design)"
+  if [ "$miss" -ne 0 ]; then
+    [ "$PLAN" -eq 1 ] && echo "  (plan: place your picked keyframes as shots/shot1..$N.png before a real run)" >&2 \
+      || die "place your picked keyframes as shots/shot1..$N.png first (curation is manual by design)"
+  fi
   TC=(--no-teacache); awk -v t="$TEACACHE" 'BEGIN{exit !(t+0>0)}' && TC=(--teacache "$TEACACHE")
   for ((k=0;k<N;k++)); do
     run bash "$HERE/saga-framepack.sh" -a "$SHOTS_DIR/shot$((k+1)).png" -o "$WORKDIR/clip$((k+1))" \
