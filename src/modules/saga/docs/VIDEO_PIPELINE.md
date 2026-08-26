@@ -68,9 +68,20 @@ Everything talks to a local ComfyUI over HTTP; ffmpeg/TTS run on the box. `sourc
 - **`source saga-env.sh` activates the ComfyUI venv** — don't source it inside `venv-chatter` (it switches
   you back). Set `HF_HOME` on the volume to keep model downloads off the container disk.
 
-## Reproduce / make the next video
+## Reproduce / make the next video — the one-command driver
 
-1. Storyboard → per-beat: shot prompt, duration, caption, VO line (see marketing/VIDEO-STORYBOARDS.md).
-2. Generate keyframes in-scene (saga-flux + v2 LoRA) → animate (saga-framepack) → post (upscale+grade).
-3. Narrate (saga-vo, beat-placed) → end-card (saga-endcard) → assemble (`saga-assemble.sh --xfade 0.7`
-   `-a vo.wav -b music -e endcard.mp4`). Same scripts, new data.
+`saga-video.sh` reads one manifest (`videos/*.video` — parallel bash arrays) and runs the mechanical
+downstream **animate → post → end-card → audio → assemble** with review gates. VO offsets are
+auto-computed from the durations + xfade. Keyframe curation stays manual (the taste checkpoint).
+
+1. Author `videos/vidN.video` from the storyboard (copy `vid3.video`): per shot a duration, motion
+   prompt, caption (use `||` for a two-phrase reveal), VO line. Set grade/xfade/music/voice up top.
+2. Curate keyframes: generate on-model shots (saga-flux + the LoRA), pick the best, place as
+   `<workdir>/shots/shot1..N.png`. Drop `endcard_src.png` + the music track in `<workdir>`.
+3. Dry-run then run:
+   ```
+   saga-video.sh -c videos/vidN.video --plan      # prints the whole plan, runs nothing
+   saga-video.sh -c videos/vidN.video             # runs with review gates
+   saga-video.sh -c videos/vidN.video --from audio --yes   # resume a stage, unattended
+   ```
+   Output: `<workdir>/final.mp4`. Same scripts, new data — `vid3.video` is the proven reference.

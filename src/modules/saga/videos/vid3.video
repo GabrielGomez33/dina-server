@@ -1,0 +1,49 @@
+# vid3.video — Video 3 "You're Not Complicated. You're Uncharted." (the proven reference manifest)
+# Sourced by saga-video.sh. Parallel arrays, one entry per shot. Captions may use "||" for
+# sequential in-shot phrase reveals. VO_OFFSET blank = auto (scene start + VO_LEAD).
+#
+# Curate the keyframes first: generate on-model shots (saga-flux + little_one_v2), pick the best,
+# place as <workdir>/shots/shot1..4.png. Also drop endcard_src.png and backingtrack1.wav in <workdir>.
+# Then:  saga-video.sh -c vid3.video --plan     (dry run)
+#        saga-video.sh -c vid3.video            (run, with review gates)
+
+TITLE="Video 3 — You're Not Complicated. You're Uncharted."
+
+# character / image (keyframe curation is manual; these are recorded for reference)
+LORA=little_one_v2.safetensors; LORA_STR=0.9; GUIDANCE=3.5; STEPS=28
+
+# animation (FramePack)
+VID_W=640; VID_H=1120; FPS=30; GPU_KEEP=8; TEACACHE=0     # TEACACHE=0 → --no-teacache (max motion)
+
+# post / continuity / audio / music
+GRADE=soft-heavy; UPSCALE=1920; XFADE=0.7
+ENDCARD_IMG=endcard_src.png; ENDCARD_SEC=2.5
+MUSIC=backingtrack1.wav; MUSIC_DB=-18
+VOICE=af_heart; VOICE_SPEED=0.9; VO_LEAD=0.2
+VO_ENDCARD="Explore you."
+
+DUR=(4 5 6 3)
+
+MOTION=(
+"the small round soft grey creature stands and gazes up at the giant mirror shaped like a blank map, the mirror surface shimmers softly to life, faint light ripples across the map, the creature sways gently, slow floaty dreamlike motion, static camera, calm"
+"the small round soft grey creature glides slowly forward toward the giant map-mirror, soft glowing regions and gentle rivers begin to bloom across the map surface, warm light spreading outward, the creature drifts closer gently, slow floaty dreamlike motion, static camera"
+"the giant map blooms fully with warm glowing regions, small areas lighting up one by one across the map, soft rivers of light flowing, the small round soft grey creature watches in gentle wonder with a soft blink, warm golden light growing brighter, slow floaty motion, static camera"
+"the small round soft grey creature gently lifts one tiny stub arm and reaches out to touch the glowing map, where it touches the map glows warmer and fuller, soft warm light blooming outward from its touch, tender slow reaching motion, static camera"
+)
+
+CAPTION=(
+"You're not complicated."
+"You're just uncharted."
+"Not a problem to solve. || A place to explore."
+"Mirror is the map."
+)
+
+VO=(
+"People call you complicated."
+"When they mean they haven't taken the time to understand you."
+"You're not a problem to solve. You're a place to explore."
+"Mirror is the map."
+)
+
+# blank = auto-place at the shot's scene-start + VO_LEAD (matches the proven V3 beats)
+VO_OFFSET=( "" "" "" "" )
