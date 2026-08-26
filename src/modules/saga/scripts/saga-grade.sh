@@ -6,7 +6,9 @@
 # film grain and muting/contrasting the palette. Presets are reusable across the
 # whole show's aesthetic — not specific to one clip.
 #
-#   saga-grade.sh <input.mp4|.png|.jpg> [--preset soft|lain|lain-bloom|bloom|grain|none] [-o out]
+#   saga-grade.sh <input.mp4|.png|.jpg> [--preset soft|lain|lain-bloom|bloom|grain|none] [--upscale 1920] [-o out]
+#     --upscale N = lanczos-resample to N px tall (keep aspect) BEFORE grading, so grain/bloom land at
+#                   final res. Makes post one pass (upscale+grade). Soft lanczos keeps the dreamy look.
 #     Accepts a VIDEO or a STILL (png/jpg/webp) — outputs the same kind (video grain is temporal).
 #     soft = the SOFT look (Little One): gentle Orton glow + matte lifted-black haze + light grain
 #            + soft vignette, palette PRESERVED (keeps rosy cheeks / soft grey). Softer, not dirtier.
@@ -26,11 +28,12 @@
 # ============================================================================
 set -uo pipefail
 : "${SAGA_ROOT:?set SAGA_ROOT}"
-IN=""; PRESET="lain"; OUT=""
+IN=""; PRESET="lain"; OUT=""; UPSCALE=0
 die(){ echo "❌ $*" >&2; exit 1; }
 while [ $# -gt 0 ]; do case "$1" in
   --preset) PRESET="$2"; shift 2;; -o|--out) OUT="$2"; shift 2;;
-  -h|--help) sed -n '2,16p' "$0"; exit 0;;
+  --upscale) UPSCALE="$2"; shift 2;;
+  -h|--help) sed -n '2,18p' "$0"; exit 0;;
   -*) die "unknown arg: $1";;
   *) IN="$1"; shift;;
 esac; done
@@ -67,6 +70,11 @@ case "$PRESET" in
   none)       cp -f "$IN" "$OUT"; echo "$OUT"; exit 0;;
   *) die "unknown --preset: $PRESET (soft|soft-heavy|lain-bloom|lain-heavy|lain-warm|bloom|lain|grain|none)";;
 esac
+
+# --upscale N : lanczos-resample to N px tall (keep aspect, even width) BEFORE the grade, so grain/bloom
+# sit at final resolution. Soft lanczos preserves the dreamy look (vs ESRGAN crisping). This makes
+# post a single named pass: saga-grade.sh clip.mp4 --preset soft-heavy --upscale 1920 -o clip_post.mp4
+if awk -v u="$UPSCALE" 'BEGIN{exit !(u+0>0)}'; then VF="scale=-2:${UPSCALE}:flags=lanczos,${VF}"; fi
 
 echo "▶ grade $(basename "$IN") [$PRESET]$([ "$IMG" -eq 1 ] && echo ' (still)')" >&2
 if [ "$IMG" -eq 1 ]; then
