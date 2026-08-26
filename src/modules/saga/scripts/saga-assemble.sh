@@ -95,12 +95,12 @@ $wrapped
 WRAPEOF
     done
   fi
-  ffmpeg -y "${ins[@]}" -t "$secs" -an -vf "$vf" -r 30 -pix_fmt yuv420p \
+  ffmpeg -nostdin -y "${ins[@]}" -t "$secs" -an -vf "$vf" -r 30 -pix_fmt yuv420p \
     -c:v libx264 -preset veryfast -crf 18 "$out" >/dev/null 2>&1 || die "scene render failed: $vis"
 }
 
 i=0
-while IFS='|' read -r vis secs cap || [ -n "$vis" ]; do
+while IFS='|' read -r vis secs cap <&3 || [ -n "$vis" ]; do
   vis="$(echo "${vis:-}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
   secs="$(echo "${secs:-}" | tr -dc '0-9.')"
   cap="$(echo "${cap:-}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
@@ -112,7 +112,7 @@ while IFS='|' read -r vis secs cap || [ -n "$vis" ]; do
   echo "file '$out'" >> "$LIST"; SCENES+=("$out"); DURS+=("$secs")
   echo "  scene $i: $(basename "$vis")  ${secs}s${cap:+  \"$cap\"}"
   i=$((i+1))
-done < "$MAN"
+done 3< "$MAN"
 [ "$i" -gt 0 ] || die "no scenes parsed from manifest"
 
 if [ -n "$ENDCARD" ]; then
@@ -138,24 +138,24 @@ if [ "$XF_ON" = "1" ] && [ "${#SCENES[@]}" -ge 2 ]; then
     running="$lbl"; sumd=$(awk -v a="$sumd" -v b="${DURS[k]}" 'BEGIN{printf "%.3f", a+b}')
   done
   fc="${fc%;}"
-  ffmpeg -y "${args[@]}" -filter_complex "$fc" -map "[vout]" -r 30 -pix_fmt yuv420p \
+  ffmpeg -nostdin -y "${args[@]}" -filter_complex "$fc" -map "[vout]" -r 30 -pix_fmt yuv420p \
     -c:v libx264 -preset veryfast -crf 18 "$BODY" >/dev/null 2>&1 \
     || die "xfade assembly failed (check scene sizes/fps are uniform)"
   echo "  transition: xfade ${XF}s dissolves (continuous)"
 else
-  ffmpeg -y -f concat -safe 0 -i "$LIST" -c copy "$BODY" >/dev/null 2>&1 \
-    || ffmpeg -y -f concat -safe 0 -i "$LIST" -c:v libx264 -crf 18 -pix_fmt yuv420p "$BODY" >/dev/null 2>&1 \
+  ffmpeg -nostdin -y -f concat -safe 0 -i "$LIST" -c copy "$BODY" >/dev/null 2>&1 \
+    || ffmpeg -nostdin -y -f concat -safe 0 -i "$LIST" -c:v libx264 -crf 18 -pix_fmt yuv420p "$BODY" >/dev/null 2>&1 \
     || die "concat failed"
 fi
 DUR="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$BODY")"
 
 if [ -n "$VO" ] && [ -f "$VO" ]; then
   if [ -n "$MUSIC" ] && [ -f "$MUSIC" ]; then
-    ffmpeg -y -i "$BODY" -i "$VO" -stream_loop -1 -i "$MUSIC" \
+    ffmpeg -nostdin -y -i "$BODY" -i "$VO" -stream_loop -1 -i "$MUSIC" \
       -filter_complex "[2:a]volume=${MUSIC_DB}dB[m];[1:a][m]amix=inputs=2:duration=longest:dropout_transition=0[a]" \
       -map 0:v -map "[a]" -t "$DUR" -c:v copy -c:a aac -b:a 192k "$OUT" >/dev/null 2>&1 || die "mux (video+VO+music) failed"
   else
-    ffmpeg -y -i "$BODY" -i "$VO" -map 0:v -map 1:a -t "$DUR" -c:v copy -c:a aac -b:a 192k "$OUT" >/dev/null 2>&1 || die "mux (video+VO) failed"
+    ffmpeg -nostdin -y -i "$BODY" -i "$VO" -map 0:v -map 1:a -t "$DUR" -c:v copy -c:a aac -b:a 192k "$OUT" >/dev/null 2>&1 || die "mux (video+VO) failed"
   fi
 else
   cp "$BODY" "$OUT"

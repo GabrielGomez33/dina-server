@@ -78,10 +78,10 @@ for ((k=0;k<N;k++)); do
 done
 VO_ENDCARD_AT=$(awk -v s="$ENDCARD_START" -v l="$VO_LEAD" 'BEGIN{printf "%.2f", s+l}')
 
-run(){ # echo (always) + execute (unless --plan)
+run(){ # echo (always) + execute (unless --plan); fail LOUD so a broken stage stops the driver
   echo "  \$ $*"
   [ "$PLAN" -eq 1 ] && return 0
-  "$@"
+  "$@" || die "stage command failed (exit $?): $*"
 }
 gate(){ # review pause between stages
   [ "$PLAN" -eq 1 ] && return 0
