@@ -314,3 +314,72 @@ jobs:
       - name: Cleanup SSH key
         if: always()
         run: rm -f ~/.ssh/deploy_key
+
+  # ===========================================================================
+  # DEPLOY TO STAGING  (develop + STAGING_ENABLED only)
+  # ---------------------------------------------------------------------------
+  # Same-host, fully isolated staging dina-server on 9445 / dina_staging, driven
+  # from ecosystem.staging.config.js. Never runs unless vars.STAGING_ENABLED is
+  # 'true', so turning staging off is a one-switch kill. Reuses the SERVER_* SSH
+  # secrets; the staging checkout path is STAGING_DEPLOY_PATH. No tag/release —
+  # staging is validated end-to-end by mirror-server's acceptance sim once
+  # mirror-staging points at this DINA (USE_DINA_STUB=false, DINA_* -> 9445).
+  # ===========================================================================
+  deploy-staging:
+    name: Deploy to Staging
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop' && vars.STAGING_ENABLED == 'true'
+    environment:
+      name: staging
+
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Snapshot staging for rollback
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'SNAP'
+          cd ${{ secrets.STAGING_DEPLOY_PATH }}
+          git rev-parse HEAD > /tmp/.dina-server-staging-rollback-commit
+          SNAP
+
+      - name: Deploy dina-server (staging)
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'DEPLOY'
+          set -e
+          cd ${{ secrets.STAGING_DEPLOY_PATH }}
+          echo "[1/6] Pull develop"; git fetch origin develop; git reset --hard origin/develop
+          echo "[2/6] Install";      npm ci
+          echo "[3/6] Build";        npm run build
+          [ -f dist/index.js ] || { echo "ERROR: dist/index.js missing"; exit 1; }
+          [ -f dist/modules/mirror/index.js ] || { echo "ERROR: mirror module not built"; exit 1; }
+          echo "[4/6] Prune";        npm prune --omit=dev
+          echo "[5/6] Migrations (report only)"; npm run migrate:status || true
+          echo "[6/6] Restart staging PM2"; sudo pm2 restart ecosystem.staging.config.js
+          sleep 15; sudo pm2 list | grep -E 'dina-server-staging' || true
+          DEPLOY
+
+      - name: Staging health check
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'HEALTH'
+          set -e
+          for i in $(seq 1 15); do
+            CODE=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:9445/dina/api/v1/health || echo 000)
+            [ "$CODE" = "200" ] && { echo "staging dina health OK"; exit 0; }
+            echo "attempt $i: $CODE"; sleep 5
+          done
+          echo "::error::staging dina health check failed"; exit 1
+          HEALTH
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
