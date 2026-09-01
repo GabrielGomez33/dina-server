@@ -320,11 +320,17 @@ export class WebResearchStore {
   /** IDs of content older than `retentionDays` (eligible for pruning). */
   async getExpiredContentIds(retentionDays: number, limit: number): Promise<string[]> {
     try {
+      // NOTE: DB.query runs via pool.execute() (prepared protocol), which cannot
+      // bind the INTERVAL quantity or LIMIT as `?` — that yields "Incorrect
+      // arguments to mysqld_stmt_execute". Both values are coerced to bounded
+      // integers here, so inlining them is injection-safe and avoids the bind.
+      const days = Math.max(1, Math.floor(retentionDays));
+      const lim = Math.max(1, Math.min(Math.floor(limit), 5000));
       const rows = await DB.query(
         `SELECT id FROM digim_content
-         WHERE gathered_at < (NOW() - INTERVAL ? DAY)
-         ORDER BY gathered_at ASC LIMIT ?`,
-        [Math.max(1, retentionDays), Math.max(1, Math.min(limit, 5000))],
+         WHERE gathered_at < (NOW() - INTERVAL ${days} DAY)
+         ORDER BY gathered_at ASC LIMIT ${lim}`,
+        [],
         true
       );
       return Array.isArray(rows) ? rows.map((r) => r.id) : [];
