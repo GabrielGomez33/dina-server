@@ -1548,12 +1548,23 @@ private mapRowToUser(row: any): DinaUser {
 
   private async healConnectionPool(): Promise<void> {
     console.log('🔧 Healing connection pool...');
-    
-    if (this.pool) {
-      await this.pool.end();
-    }
-    
+
+    // SWAP-THEN-END: stand up the new pool (establishIntelligentConnection
+    // reassigns this.pool to a fresh, tested pool) BEFORE ending the old one.
+    // The previous order (end old -> establish new) left this.pool pointing at a
+    // CLOSED pool for the duration of the re-establish, so any concurrent
+    // scheduled query (heartbeats, retention sweeps, security lookups) threw
+    // "Pool is closed." Keeping the old pool live until the new one is ready
+    // removes that window; ending it afterwards drains its in-flight queries.
+    const oldPool = this.pool;
     await this.establishIntelligentConnection();
+    if (oldPool && oldPool !== this.pool) {
+      try {
+        await oldPool.end();
+      } catch (err) {
+        console.warn(`⚠️ Old pool drain failed during heal (non-fatal): ${(err as Error).message}`);
+      }
+    }
     console.log('✅ Connection pool healed');
   }
 
