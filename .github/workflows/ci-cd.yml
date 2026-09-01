@@ -369,16 +369,30 @@ jobs:
 
       - name: Staging health check
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'HEALTH'
-          set -e
-          for i in $(seq 1 15); do
-            CODE=$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:9445/dina/api/v1/health || echo 000)
-            [ "$CODE" = "200" ] && { echo "staging dina health OK"; exit 0; }
-            echo "attempt $i: $CODE"; sleep 5
+          # Loop LOCALLY and run curl as an ssh command argument (the proven prod
+          # pattern above). The previous heredoc-over-ssh form ran a remote LOGIN
+          # shell, where the in-loop `exit 0` did not propagate as the ssh exit
+          # code — the step reported failure even when dina returned HTTP 200.
+          echo "Running staging health check (9445)..."
+          MAX_RETRIES=15
+          RETRY_INTERVAL=5
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Attempt $i/$MAX_RETRIES..."
+            HTTP_CODE=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+              ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+              "curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:9445/dina/api/v1/health" \
+              2>/dev/null || echo "000")
+            echo "Staging health response: HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Staging dina health PASSED"
+              exit 0
+            fi
+            if [ "$i" -lt "$MAX_RETRIES" ]; then
+              sleep $RETRY_INTERVAL
+            fi
           done
-          echo "::error::staging dina health check failed"; exit 1
-          HEALTH
+          echo "::error::staging dina health check failed after $MAX_RETRIES attempts"
+          exit 1
 
       - name: Cleanup SSH key
         if: always()
