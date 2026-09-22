@@ -1,0 +1,68 @@
+# vid5.video — Video 5 "What's Your Blind Spot?"  (no-voice, visual-storytelling build)
+# ============================================================================
+# This is also the TEMPLATE. Copy it per video. Sourced by saga-video.sh (parallel bash arrays).
+#
+# HOW A BEAT WORKS
+#   Each shot k needs a curated keyframe  <workdir>/shots/shotK.png.
+#   • move   beat: one moving take from that keyframe (FramePack), guided by MOTION[k].
+#   • reveal beat: a before→after transformation. Also curate  shots/shotK_end.png (make it from
+#                  shotK.png with `saga-flux --init shotK.png --denoise 0.5 --lora ...`), mark
+#                  REVEAL[k]="reveal", and Wan (saga-flf) interpolates shotK → shotK_end.
+#
+# AUDIO IS OPTIONAL (this video is music+visuals):
+#   • Leave VO=()  → no narration; the story is carried by the visuals + captions + music.
+#   • To narrate instead, fill VO=( "line1" ... ) (one per shot) + VO_ENDCARD; Kokoro renders it,
+#     beat-placed automatically. Everything else stays the same.
+#
+# Then:  saga-video.sh -c vid5.video --plan     (dry run)   /   saga-video.sh -c vid5.video
+
+TITLE="Video 5 — What's Your Blind Spot?"
+
+# character / image (keyframe curation is manual; recorded for reference)
+LORA=little_one_v2.safetensors; LORA_STR=0.9; GUIDANCE=3.5; STEPS=28
+
+# animation
+VID_W=640; VID_H=1120; FPS=30; GPU_KEEP=8; TEACACHE=0
+
+# post / continuity
+GRADE=soft-heavy; UPSCALE=1920; XFADE=0.7
+ENDCARD_IMG=endcard_src.png; ENDCARD_SEC=2
+
+# music (this format leans on it — drop your track in the workdir; leave empty for silent)
+MUSIC=blindspot_bed.wav; MUSIC_DB=-16
+
+# voice: OFF for this video (kept as an option — fill VO=() below to turn narration back on)
+VOICE=af_heart; VOICE_SPEED=0.9; VO_LEAD=0.2
+VO=()
+VO_ENDCARD=""
+
+DUR=(4 5 5 4)
+
+# which beats are before→after reveals (need shots/shotK_end.png); "" = a single moving take
+REVEAL=( "" "reveal" "reveal" "" )
+
+# reference prompts for curating the START keyframes (what to generate + pick)
+IMG_PROMPT=(
+"l1ttl3one, a small round soft charcoal-grey creature gazing happily at its own clear reflection in a soft glowing oval mirror, warm calm light, moody hand-drawn charcoal and graphite, plain soft background, no text"
+"l1ttl3one, the small round grey creature before the glowing mirror, its clear reflection, calm — (end keyframe shot2_end: a soft dark smudge on the mirror over the creature's chest)"
+"l1ttl3one, the small round grey creature before the mirror with a soft dark smudge over its chest in the reflection — (end keyframe shot3_end: the smudge wiped clean, the reflection clear and a touch warmer)"
+"l1ttl3one, the small round grey creature before the mirror, a clear warm full reflection, gentle contentment, moody hand-drawn charcoal and graphite, no text"
+)
+
+# motion / transformation guidance per beat
+MOTION=(
+"the small round soft grey creature gazes happily at its own reflection in the soft glowing mirror, a gentle sway and a soft blink, warm calm light, slow floaty motion, static camera"
+"a soft dark smudge slowly appears on the mirror over the creature's chest, the small grey creature keeps looking past it, unaware, gentle slow motion, a faint unease, static camera"
+"the soft smudge on the mirror gently wipes away in a soft sweep of light, the reflection turns clear, the small grey creature gives a soft surprised look, tender slow motion, static camera"
+"the mirror shows a clearer, warmer, fuller reflection of the small grey creature, it nods softly, warm golden light glowing gently, slow floaty motion, static camera"
+)
+
+# on-screen text (minimal hooks — the visuals lead)
+CAPTION=(
+"everyone has one."
+"the one thing you can't see"
+"because you're on the inside."
+"Mirror shows you — gently."
+)
+
+VO_OFFSET=( "" "" "" "" )

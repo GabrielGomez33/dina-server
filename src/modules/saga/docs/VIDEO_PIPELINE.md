@@ -74,6 +74,14 @@ Everything talks to a local ComfyUI over HTTP; ffmpeg/TTS run on the box. `sourc
 downstream **animate → post → end-card → audio → assemble** with review gates. VO offsets are
 auto-computed from the durations + xfade. Keyframe curation stays manual (the taste checkpoint).
 
+- **Beat types:** a beat is a *move* (one moving take, FramePack) or a *reveal* (before→after, Wan FLF).
+  Mark `REVEAL[k]="reveal"` and curate `shots/shotK_end.png` (make it from `shotK.png` with
+  `saga-flux --init … --denoise 0.5`), and the driver interpolates the transformation — a smudge
+  appearing/clearing, a bloom, a turn. This is how the visuals *tell* the story without a voice.
+- **Audio is optional:** leave `VO=()` for a music+visuals video (the audio stage no-ops, assemble runs
+  with music only); fill `VO=(…)` to narrate (Kokoro, beat-placed). `vid3.video` = voiced reference,
+  `vid5.video` = no-voice + reveals reference.
+
 1. Author `videos/vidN.video` from the storyboard (copy `vid3.video`): per shot a duration, motion
    prompt, caption (use `||` for a two-phrase reveal), VO line. Set grade/xfade/music/voice up top.
 2. Curate keyframes: generate on-model shots (saga-flux + the LoRA), pick the best, place as
