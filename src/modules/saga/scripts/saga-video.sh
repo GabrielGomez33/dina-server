@@ -47,7 +47,7 @@ GRADE="soft-heavy"; UPSCALE=1920; XFADE=0.7
 ENDCARD_IMG="endcard_src.png"; ENDCARD_SEC=2.5
 MUSIC=""; MUSIC_DB=-18; VOICE="af_heart"; VOICE_SPEED=0.9; VO_LEAD=0.2; VO_ENDCARD=""
 NEG="human, person, human legs, walking, articulated fingers, fast motion, camera pan, zoom, morphing, warping, text, watermark, extra limbs"
-DUR=(); MOTION=(); CAPTION=(); VO=(); VO_OFFSET=(); IMG_PROMPT=(); REVEAL=()
+DUR=(); MOTION=(); CAPTION=(); VO=(); VO_OFFSET=(); IMG_PROMPT=(); REVEAL=(); GRADE_AT=()
 # shellcheck disable=SC1090
 source "$CONFIG"
 
@@ -146,10 +146,13 @@ if want animate; then
 fi
 
 # ---- POST: upscale + grade (one pass) ---------------------------------------
+# GRADE is the default preset; GRADE_AT[k] overrides it per beat, so a piece can travel a COLOR ARC
+# (e.g. soft-cool on the lonely opening beats → soft-heavy on the warm payoff). See visual-storytelling.
 if want post; then
-  echo "── post (upscale+grade $GRADE @ ${UPSCALE}px) ──"
+  echo "── post (upscale @ ${UPSCALE}px, grade default=$GRADE) ──"
   for ((k=1;k<=N;k++)); do
-    run bash "$HERE/saga-grade.sh" "$WORKDIR/clip$k.mp4" --preset "$GRADE" --upscale "$UPSCALE" -o "$POST_DIR/clip${k}_post.mp4"
+    g="$GRADE"; [ -n "${GRADE_AT[k-1]:-}" ] && g="${GRADE_AT[k-1]}"
+    run bash "$HERE/saga-grade.sh" "$WORKDIR/clip$k.mp4" --preset "$g" --upscale "$UPSCALE" -o "$POST_DIR/clip${k}_post.mp4"
   done
   gate "the graded clips (post/clip*_post.mp4)"
 fi

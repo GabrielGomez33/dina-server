@@ -1,0 +1,59 @@
+# notenough.video — "Not Enough → Enough"  (emotional wordless build, per the visual-storytelling skill)
+# ============================================================================
+# Story (kishōtenketsu, conflict-free): Little One feels small beside a dazzling light, strains to BE
+# it and fails, slumps at a mirror expecting nothing — then sees the warm glow it was casting all along.
+# It was already enough.  ONE feeling: not-enough → enough.  The TURN is beat 4 (the reveal), landed on
+# the music swell.  Color ARC: cool/lonely (beats 1-3) → warm/full (beats 4-6).  Music-led, no voice.
+#
+# Curate 6 START keyframes shots/shot1..6.png + 1 END keyframe shots/shot4_end.png (the glow reveal,
+# made from shot4.png with `saga-flux --init shot4.png --denoise 0.5 …`). Drop enough_bed.wav +
+# endcard_src.png in the workdir. Then: saga-video.sh -c notenough.video --plan  → then run.
+
+TITLE="Not Enough → Enough"
+
+LORA=little_one_v2.safetensors; LORA_STR=0.9; GUIDANCE=3.5; STEPS=28
+VID_W=640; VID_H=1120; FPS=30; GPU_KEEP=8; TEACACHE=0
+
+# post: default warm; per-beat GRADE_AT paints the cold→warm arc (lonely cool → warm payoff)
+GRADE=soft-heavy; UPSCALE=1920; XFADE=0.7
+GRADE_AT=( "soft-cool" "soft-cool" "soft-cool" "soft-heavy" "soft-heavy" "soft-heavy" )
+
+ENDCARD_IMG=endcard_src.png; ENDCARD_SEC=2
+MUSIC=enough_bed.wav; MUSIC_DB=-16
+
+# no voice (music-led). Fill VO=() to narrate.
+VOICE=af_heart; VOICE_SPEED=0.9; VO_LEAD=0.2
+VO=()
+VO_ENDCARD=""
+
+# varied durations: holds (take b3, afterglow b6) and the reveal (b4) get room; peak is slowest.
+DUR=(4 4 3 4 3 4)
+
+# beat 4 is the REVEAL (dull reflection → the warm glow blooms): FLF shot4 → shot4_end
+REVEAL=( "" "" "" "reveal" "" "" )
+
+# START-keyframe reference prompts (curate + pick). Stack ≥3 emotion channels; carry the color arc.
+IMG_PROMPT=(
+"l1ttl3one, a small round soft charcoal-grey creature very small at the bottom of a tall frame, cool desaturated blue moonlight, gazing up wistfully at a bright dazzling glowing shape drifting high above, tuft slightly drooped, lonely, vast empty cool space above, moody hand-drawn charcoal, no text"
+"l1ttl3one, the small round grey creature stretching upward on tiptoe stub-legs, straining to reach the distant bright light, hopeful effort, cool dim blue light, moody hand-drawn charcoal, no text"
+"l1ttl3one, the small round grey creature slumped small and low, sitting in front of a soft dark oval mirror, head lowered, expecting nothing, cool desaturated blue shadow, low key, moody hand-drawn charcoal, no text"
+"l1ttl3one, the small round grey creature sitting before the oval mirror, a dim plain grey reflection, cool low blue light, moody hand-drawn charcoal, no text — (end keyframe shot4_end: a soft warm golden glow revealed radiating from its own back and around it in the reflection, eyes widening in wonder, warm amber bloom, cheeks catching gold)"
+"l1ttl3one, the small round grey creature sitting up straighter, touching the soft warm golden glow around itself, rosy cheeks, quiet contentment, warm amber light, moody hand-drawn charcoal, no text"
+"l1ttl3one, the small round grey creature glowing softly warm and full, looking gently and calmly toward the viewer, peaceful, rosy cheeks, warm amber light, moody hand-drawn charcoal, no text"
+)
+
+# motion per beat: speed word (eased), anticipation, a secondary action, follow-through, aliveness,
+# and a verb-of-becoming on the reveal.
+MOTION=(
+"the small grey creature slowly gazes up following the drifting bright light, then looks down at its own small body and gently deflates, tuft drooping, a slow sad blink, very slow gentle motion, cool still air, static camera"
+"the small grey creature dips down then stretches upward on tiptoe reaching for the distant light, straining, then softly sinks back down and tries once more, endearing effort, eased motion, tuft settling a moment after, static camera"
+"the small grey creature trudges to the mirror and slumps down with a heavy sigh, then goes completely still, wide quiet eyes, only a slow breath and one slow blink, a held stillness, static camera"
+"a soft warm golden glow slowly blooms and radiates from the small grey creature's own back and around it in the reflection, its eyes widen in dawning wonder, warm amber light gently spreading and brightening, tender slow motion of becoming, static camera"
+"the small grey creature slowly reaches to touch the warm glow around itself, then gently straightens and sits tall, cheeks warming rosy, a soft settle, warm light steadying, eased motion, static camera"
+"the small grey creature rests softly, glowing warm and full, a slow gentle breath and a soft calm blink, looking gently toward the viewer, warm amber light holding steady, very slow motion, static camera"
+)
+
+# captions: silent until the resonance — one shareable line on the afterglow (the "heart" frame)
+CAPTION=( "" "" "" "" "" "you were always enough." )
+
+VO_OFFSET=( "" "" "" "" "" "" )

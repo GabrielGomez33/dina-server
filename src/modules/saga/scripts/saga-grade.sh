@@ -55,6 +55,10 @@ case "$PRESET" in
   # haze, palette kept WARM (sat ~0.90, gentle warm colorbalance — no cold desaturation), then HEAVY
   # film grain + strong vignette. The warm anthem's grade: soft and dreamy, but with real analog weight.
   soft-heavy) VF="${BLOOM_SOFT}[bl];[bl]eq=saturation=0.90:contrast=1.05:brightness=0.0:gamma=0.98,colorbalance=rs=0.04:gs=0.01:bs=-0.05:rm=0.03:bm=-0.04,curves=all='0/0.03 0.5/0.52 1/0.98',noise=alls=24:allf=t+u,vignette=PI/5";;
+  # soft-cool = the LONELY end of the emotional color arc: cool-blue tinted, desaturated, dimmed
+  # (mids pulled down), matte, heavier grain + a stronger vignette (dark isolating edges). Pair with
+  # soft-heavy on the payoff beats for a cold→warm arc across a piece (see visual-storytelling skill).
+  soft-cool)  VF="${BLOOM_SOFT}[bl];[bl]eq=saturation=0.72:contrast=1.05:brightness=-0.03:gamma=0.95,colorbalance=rs=-0.05:gs=-0.01:bs=0.08:rm=-0.04:bm=0.06,curves=all='0/0.02 0.5/0.46 1/0.92',noise=alls=18:allf=t+u,vignette=PI/4";;
   lain-bloom) VF="${BLOOM}[bl];[bl]eq=saturation=0.72:contrast=1.08:brightness=-0.01,noise=alls=12:allf=t+u";;
   # lain-heavy = the DIRTY analog degrade: strong desaturation + gamma crush + soft bloom
   # + analog chromatic aberration (rgbashift) + heavy film grain + vignette. Pushes hard
@@ -68,7 +72,7 @@ case "$PRESET" in
   lain)       VF="eq=saturation=0.68:contrast=1.10:brightness=-0.015,noise=alls=14:allf=t+u";;
   grain)      VF="noise=alls=12:allf=t+u";;
   none)       cp -f "$IN" "$OUT"; echo "$OUT"; exit 0;;
-  *) die "unknown --preset: $PRESET (soft|soft-heavy|lain-bloom|lain-heavy|lain-warm|bloom|lain|grain|none)";;
+  *) die "unknown --preset: $PRESET (soft|soft-heavy|soft-cool|lain-bloom|lain-heavy|lain-warm|bloom|lain|grain|none)";;
 esac
 
 # --upscale N : lanczos-resample to N px tall (keep aspect, even width) BEFORE the grade, so grain/bloom
