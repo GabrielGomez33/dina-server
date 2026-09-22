@@ -25,6 +25,25 @@ source: **retrain on a tight, uniform, self-curated dataset.**
   dataset.** Don't fight wander with prompt hacks or compositing — fix the dataset (tight, uniform, curated)
   and retrain. Bootstrap: v1 generates the candidate pool → cull to a uniform set → v2.
 
+### Consistency in NEW scenes (full-body, multi-beat) — the character block
+Generating the character into new scenes/poses/lighting (a mirror, a color arc, 6 different beats)
+re-opens the drift the LoRA alone can't fully hold. Observed drift: **tails appear, the body goes
+tall/lanky with long limbs, hair ranges from none to too much, skin turns furry or seal-slick.** Rules:
+1. **Consistency comes from the POSITIVE prompt, not negatives.** At **cfg 1.0 Flux-dev ignores the
+   negative entirely** (and we must stay at cfg 1.0 — higher brings haze + kills seed variety). So
+   "no tail / no fur" as a negative does nothing.
+2. **Pin identity with a fixed CHARACTER BLOCK repeated verbatim in every beat's prompt** — stated
+   positively (negations like "no tail" are unreliable): *"a small round pear-shaped creature, chubby
+   rounded body wider at the bottom, big glossy black eyes, soft rosy cheeks, tiny short stub arms and
+   tiny stub legs, smooth soft matte charcoal-grey skin, a tiny tuft of exactly three thin hair strands
+   on top."* Same words every time = same build.
+3. **Never ask for anatomy the blob lacks** (stretch tall, on tiptoe, reach far) — it substitutes a
+   taller articulated/human body (the lanky drift). Show effort as **puffing up rounder**, leaning,
+   tilting — motion that keeps the round silhouette. (Real motion comes from FramePack, not the pose.)
+4. **Curate for the build**, then, if a beat still drifts, escalate: bump LoRA strength (0.9→0.95),
+   **hero-anchor** the off-model beats (Redux `-a hero.png --redux-strength ~0.35` to carry the build),
+   or if it's systemic, a **v3 retrain** on a tighter set that includes the exact tuft + matte skin.
+
 ## The character
 Mirror's mascot: a **small, round, soft charcoal-grey character** — big round head, large glossy black
 eyes, soft rosy cheeks, tiny stub arms and legs, a tiny hair tuft on top, tender/endearing. Plain

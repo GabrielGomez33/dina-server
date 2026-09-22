@@ -32,25 +32,29 @@ DUR=(4 4 3 4 3 4)
 # beat 4 is the REVEAL (dull reflection → the warm glow blooms): FLF shot4 → shot4_end
 REVEAL=( "" "" "" "reveal" "" "" )
 
-# START-keyframe reference prompts (curate + pick). Stack ≥3 emotion channels; carry the color arc.
+# START-keyframe reference prompts. IDENTITY IS PINNED by a fixed character block repeated verbatim
+# every beat (consistency must come from the POSITIVE prompt — Flux-dev ignores negatives at cfg 1.0).
+# Do NOT ask for anatomy the blob lacks (stretch tall / tiptoe / reach far) or it drifts lanky/human —
+# effort is shown as PUFFING UP ROUNDER, not stretching. Round pear build · stub limbs · no tail ·
+# smooth matte skin · a 3-strand tuft — stated positively (negations are unreliable in the prompt).
 IMG_PROMPT=(
-"l1ttl3one, a small round soft charcoal-grey creature very small at the bottom of a tall frame, cool desaturated blue moonlight, gazing up wistfully at a bright dazzling glowing shape drifting high above, tuft slightly drooped, lonely, vast empty cool space above, moody hand-drawn charcoal, no text"
-"l1ttl3one, the small round grey creature stretching upward on tiptoe stub-legs, straining to reach the distant bright light, hopeful effort, cool dim blue light, moody hand-drawn charcoal, no text"
-"l1ttl3one, the small round grey creature slumped small and low, sitting in front of a soft dark oval mirror, head lowered, expecting nothing, cool desaturated blue shadow, low key, moody hand-drawn charcoal, no text"
-"l1ttl3one, the small round grey creature sitting before the oval mirror, a dim plain grey reflection, cool low blue light, moody hand-drawn charcoal, no text — (end keyframe shot4_end: a soft warm golden glow revealed radiating from its own back and around it in the reflection, eyes widening in wonder, warm amber bloom, cheeks catching gold)"
-"l1ttl3one, the small round grey creature sitting up straighter, touching the soft warm golden glow around itself, rosy cheeks, quiet contentment, warm amber light, moody hand-drawn charcoal, no text"
-"l1ttl3one, the small round grey creature glowing softly warm and full, looking gently and calmly toward the viewer, peaceful, rosy cheeks, warm amber light, moody hand-drawn charcoal, no text"
+"l1ttl3one, a small round pear-shaped creature, chubby rounded body wider at the bottom, big glossy black eyes, soft rosy cheeks, tiny short stub arms and tiny stub legs, smooth soft matte charcoal-grey skin, a tiny tuft of exactly three thin hair strands on top of the head, very small at the bottom of a tall frame gazing up wistfully at a bright dazzling glowing shape drifting high above, tuft drooped, lonely, vast empty cool space above, cool desaturated blue moonlight, moody hand-drawn charcoal, no text"
+"l1ttl3one, a small round pear-shaped creature, chubby rounded body wider at the bottom, big glossy black eyes, soft rosy cheeks, tiny short stub arms and tiny stub legs, smooth soft matte charcoal-grey skin, a tiny tuft of exactly three thin hair strands on top of the head, puffing itself up rounder and glowing faintly, straining to shine as bright as the distant light, hopeful effort, cool dim blue light, moody hand-drawn charcoal, no text"
+"l1ttl3one, a small round pear-shaped creature, chubby rounded body wider at the bottom, big glossy black eyes, soft rosy cheeks, tiny short stub arms and tiny stub legs, smooth soft matte charcoal-grey skin, a tiny tuft of exactly three thin hair strands on top of the head, slumped low and small sitting in front of a soft dark oval mirror, head lowered, cool desaturated blue shadow, low key, moody hand-drawn charcoal, no text"
+"l1ttl3one, a small round pear-shaped creature, chubby rounded body wider at the bottom, big glossy black eyes, soft rosy cheeks, tiny short stub arms and tiny stub legs, smooth soft matte charcoal-grey skin, a tiny tuft of exactly three thin hair strands on top of the head, sitting before an oval mirror with a dim plain grey reflection, cool low blue light, moody hand-drawn charcoal, no text — (end keyframe shot4_end: a soft warm golden glow revealed radiating from its own body and around it in the reflection, eyes widening in wonder, warm amber bloom, cheeks catching gold)"
+"l1ttl3one, a small round pear-shaped creature, chubby rounded body wider at the bottom, big glossy black eyes, soft rosy cheeks, tiny short stub arms and tiny stub legs, smooth soft matte charcoal-grey skin, a tiny tuft of exactly three thin hair strands on top of the head, sitting up a little and touching a soft warm golden glow around itself, rosy cheeks, quiet contentment, warm amber light, moody hand-drawn charcoal, no text"
+"l1ttl3one, a small round pear-shaped creature, chubby rounded body wider at the bottom, big glossy black eyes, soft rosy cheeks, tiny short stub arms and tiny stub legs, smooth soft matte charcoal-grey skin, a tiny tuft of exactly three thin hair strands on top of the head, glowing softly warm and full, looking gently toward the viewer, peaceful, rosy cheeks, warm amber light, moody hand-drawn charcoal, no text"
 )
 
 # motion per beat: speed word (eased), anticipation, a secondary action, follow-through, aliveness,
 # and a verb-of-becoming on the reveal.
 MOTION=(
-"the small grey creature slowly gazes up following the drifting bright light, then looks down at its own small body and gently deflates, tuft drooping, a slow sad blink, very slow gentle motion, cool still air, static camera"
-"the small grey creature dips down then stretches upward on tiptoe reaching for the distant light, straining, then softly sinks back down and tries once more, endearing effort, eased motion, tuft settling a moment after, static camera"
-"the small grey creature trudges to the mirror and slumps down with a heavy sigh, then goes completely still, wide quiet eyes, only a slow breath and one slow blink, a held stillness, static camera"
-"a soft warm golden glow slowly blooms and radiates from the small grey creature's own back and around it in the reflection, its eyes widen in dawning wonder, warm amber light gently spreading and brightening, tender slow motion of becoming, static camera"
-"the small grey creature slowly reaches to touch the warm glow around itself, then gently straightens and sits tall, cheeks warming rosy, a soft settle, warm light steadying, eased motion, static camera"
-"the small grey creature rests softly, glowing warm and full, a slow gentle breath and a soft calm blink, looking gently toward the viewer, warm amber light holding steady, very slow motion, static camera"
+"the small round creature slowly gazes up following the drifting bright light, then lowers its gaze to itself and gently deflates, tuft drooping, a slow sad blink, very slow gentle motion, cool still air, static camera"
+"the small round creature puffs itself up rounder and glows faintly, straining to shine, then softly deflates back to its small round self and tries once more, endearing effort, eased squash and stretch, tuft settling a moment after, static camera"
+"the small round creature settles down in front of the mirror and slumps with a heavy sigh, then goes completely still, wide quiet eyes, only a slow breath and one slow blink, a held stillness, static camera"
+"a soft warm golden glow slowly blooms and radiates from the small round creature's own body and around it in the reflection, its eyes widen in dawning wonder, warm amber light gently spreading and brightening, tender slow motion of becoming, static camera"
+"the small round creature gently rounds up warmly and softly touches the glow around itself, its cheeks warming rosy, a soft contented settle, warm light steadying, eased motion, static camera"
+"the small round creature rests softly, glowing warm and full, a slow gentle breath and a soft calm blink, looking gently toward the viewer, warm amber light holding steady, very slow motion, static camera"
 )
 
 # captions: silent until the resonance — one shareable line on the afterglow (the "heart" frame)
