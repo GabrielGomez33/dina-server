@@ -44,8 +44,15 @@ Pick ONE and compress it to **5–8 beats** across ~18–24s. The beat that matt
   → **ten** (an unexpected turn — not conflict, a re-frame) → *ketsu* (reconciliation). Lets a piece
   feel profound without a villain.
 
+**The magic word is "Because of that."** Emotion comes from **change the character *causes*, beat by
+beat** — not a list of states. Old pieces were "every day, every day, every day" (no causality). Chain
+them: *because it flinched, it peeked; because it peeked, it reached; because it touched, it saw.* Each
+beat must force the next.
+
 **The emotional pivot is the whole game.** A mid-piece shift — *alone→seen, hiding→held, not-enough→
-enough, searching→found* — is what makes a viewer feel. Build toward it, land it clearly, let it breathe.
+enough, searching→found* — is what makes a viewer feel; the feeling is generated *in the flip*, not in
+either state. Place the turn at **~55–65% of the runtime** so the payoff can breathe, **land it on the
+music's swell**, then hold.
 
 ## Make us care in the first 3 seconds (the hook + empathy)
 
@@ -55,7 +62,11 @@ Short-form lives or dies in ~3 seconds. Earn empathy immediately:
   vulnerability instantly — a tiny sigh, a hopeful look, a too-heavy posture. We bond to what is soft
   and a little bit fragile.
 - **A small, legible want.** Give the character one clear desire in the first beats (to reach the
-  light, to see itself, to not be alone). Want = the engine of attention.
+  light, to see itself, to not be alone). Want = the engine of attention. (The **want** is external and
+  animatable — "reach the light"; the **need** is the truth underneath — "accept myself." Let the
+  character chase the want while the film delivers the need; the turn is often where the want is
+  revealed as the wrong thing. Mirror's recurring shape: *wants to be more; needs to see it was
+  already enough.*)
 - **"Save the cat."** One tiny sympathetic action (a hopeful reach, a shy smile) and the audience is
   on their side. Do it early.
 - **Start in motion or on a feeling**, never on a logo. The scroll stops for an emotion, not a brand.
@@ -119,6 +130,12 @@ For **every** beat, decide these five. This is the core of the skill — run it 
 Storyboard it, then ask: **strip every caption — does the emotion still land from the pictures and
 music alone?** If no, the images aren't doing the work yet. Fix the images, not the captions. That is
 the whole craft.
+
+**The arc-check — all five vectors must travel from beat 1 to the last beat:**
+**cool→warm · dark→light · small/far→close · slumped→lifted · fast→slow-at-the-peak.** If all five move
+across the piece, you have a real emotional arc. If any stays flat, so will the feeling. Plus: a held
+"take" before the payoff, and living micro-motion (breath, blink, drift) in every single clip so
+nothing reads as dead.
 
 ## References
 
