@@ -111,8 +111,16 @@ pip install --no-deps \
   pillow imageio imageio-ffmpeg tqdm easydict einops safetensors huggingface_hub \
   opencv-python-headless scipy trimesh xatlas pymeshfix igraph rembg onnxruntime
 pip install transformers open3d pyvista            # allowed to pull their own (non-torch) deps
+pip install pymatting "scikit-image<0.27"          # rembg extras (bg removal); silences the missing-dep warning
 pip install "git+https://github.com/EasternJournalist/utils3d.git"   # if API errors: pin to the commit in TRELLIS/setup.sh
 pip install --no-build-isolation "git+https://github.com/NVlabs/nvdiffrast.git"  # install only; no compile until first raster call (never)
+
+# ---- make the TRELLIS repo importable: it is NOT a pip package (`trellis/` lives in the clone) ----
+# A .pth in site-packages puts the repo root on sys.path for every invocation in this venv, so no
+# caller needs a PYTHONPATH= prefix. (saga-trellis.py also self-adds the path as a belt-and-suspenders.)
+SITEPKGS="$(python -c 'import site,sys;print(site.getsitepackages()[0])')"
+echo "$TRELLIS_HOME" > "$SITEPKGS/trellis_repo.pth"
+echo "  path:   $SITEPKGS/trellis_repo.pth -> $TRELLIS_HOME" >&2
 
 # ---- smoke test: import torch + trellis + trimesh, report backends (no GPU work) ----
 step "preflight (--check)"

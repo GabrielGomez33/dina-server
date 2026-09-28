@@ -39,6 +39,26 @@ os.environ.setdefault("ATTN_BACKEND", "sdpa")
 os.environ.setdefault("SPARSE_ATTN_BACKEND", "sdpa")
 os.environ.setdefault("SPCONV_ALGO", "native")
 
+# --- put the TRELLIS repo on sys.path (it is NOT a pip package; `trellis/` lives in the clone) ---
+# Resolve TRELLIS_HOME from the env, else SAGA_ROOT/engine/TRELLIS, else ../engine/TRELLIS relative
+# to this script (scripts/ and engine/ are siblings under SAGA_ROOT on the pod).
+def _add_trellis_to_path():
+    import sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.environ.get("TRELLIS_HOME", ""),
+        os.path.join(os.environ.get("SAGA_ROOT", ""), "engine", "TRELLIS") if os.environ.get("SAGA_ROOT") else "",
+        os.path.normpath(os.path.join(here, "..", "engine", "TRELLIS")),
+    ]
+    for c in candidates:
+        if c and os.path.isdir(os.path.join(c, "trellis")):
+            if c not in sys.path:
+                sys.path.insert(0, c)
+            return c
+    return None
+
+_TRELLIS_HOME = _add_trellis_to_path()
+
 
 def log(*a):
     print(*a, file=sys.stderr, flush=True)
