@@ -254,8 +254,11 @@ def main():
             tag=f"{args.pose}_{cname}_{p}"; path=os.path.join(outd,tag+".png")
             if p=="depth":
                 lineart_compositor(False); set_world((0,0,0)); all_mesh_materials(meshes, depth_mat)
-                near,far = view_depth_range(meshes)           # auto-fit range to this shot for full contrast
-                log(f"depth range: near={near:.3f} far={far:.3f}  (camR={R:.3f})")
+                near,vfar = view_depth_range(meshes)
+                # map from nearest surface to just past the CENTRE plane (camR), not the invisible back —
+                # so the visible front bulge uses the full white→black gradient (punchy control signal).
+                far = R + (R-near)*0.2
+                log(f"depth range: near={near:.3f} far={far:.3f}  (camR={R:.3f} full-far={vfar:.3f})")
                 depth_mr.inputs["From Min"].default_value=near; depth_mr.inputs["From Max"].default_value=far
                 render_to(path,args.res,1)
             elif p=="lineart":
