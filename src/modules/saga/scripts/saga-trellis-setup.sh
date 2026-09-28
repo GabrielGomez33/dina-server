@@ -119,7 +119,7 @@ pip install \
 step "pure-python deps"
 pip install --no-deps \
   pillow imageio imageio-ffmpeg tqdm easydict einops safetensors huggingface_hub \
-  opencv-python-headless scipy trimesh xatlas pymeshfix igraph rembg onnxruntime
+  opencv-python-headless scipy trimesh xatlas pymeshfix igraph rembg onnxruntime plyfile
 pip install transformers open3d pyvista            # allowed to pull their own (non-torch) deps
 pip install pymatting "scikit-image<0.27"          # rembg extras (bg removal); silences the missing-dep warning
 pip install "git+https://github.com/EasternJournalist/utils3d.git"   # if API errors: pin to the commit in TRELLIS/setup.sh
