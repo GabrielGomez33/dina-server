@@ -56,14 +56,17 @@ CAMS = {
     "high": (0, 45), "low": (0, -18),
 }
 
+# All limb bones swing about their LOCAL X (read from the rig's rest axes): arms local-X ≈ world Z
+# (raise/lower), legs local-X = world X (kick fwd/back), spine/head local-X = world X (lean/nod).
+# Signs are first estimates — the calibration render confirms/flips them, then these are final.
 POSES = {
     "rest": [],
-    "reach": [("bone_6","z",-70),("bone_7","z",-25),("bone_10","z",70),("bone_11","z",25),("bone_4","x",-12)],
-    "crouch": [("bone_1","x",25),("bone_14","x",50),("bone_15","x",-70),("bone_18","x",50),("bone_19","x",-70)],
-    "jump": [("bone_6","z",-55),("bone_10","z",55),("bone_14","x",30),("bone_15","x",-40),
-             ("bone_18","x",30),("bone_19","x",-40),("bone_4","x",-15)],
-    "run": [("bone_6","z",-35),("bone_10","z",20),("bone_14","x",35),("bone_18","x",-35),("bone_1","x",12)],
-    "wave": [("bone_6","z",-95),("bone_7","z",-30),("bone_4","z",8)],
+    "reach": [("bone_6","x",80),("bone_7","x",25),("bone_10","x",80),("bone_11","x",25),("bone_4","x",-12)],
+    "wave":  [("bone_6","x",95),("bone_7","x",20),("bone_4","x",6)],
+    "crouch":[("bone_1","x",18),("bone_14","x",-45),("bone_15","x",70),("bone_18","x",-45),("bone_19","x",70)],
+    "jump":  [("bone_6","x",70),("bone_10","x",70),("bone_14","x",35),("bone_15","x",-45),
+              ("bone_18","x",35),("bone_19","x",-45),("bone_4","x",-14)],
+    "run":   [("bone_6","x",45),("bone_10","x",-30),("bone_14","x",-40),("bone_18","x",40),("bone_1","x",10)],
 }
 
 LENS, SENSOR = 50.0, 36.0
