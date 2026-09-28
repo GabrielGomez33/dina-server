@@ -54,6 +54,16 @@ if [ "${FORCE:-0}" = "1" ]; then
   rm -rf "$TRELLIS_HOME"
 fi
 
+# ---- system GL libs (nvdiffrast/moderngl/open3d link libEGL/libGL at import) ----
+# Not pip deps — provided by the OS. Written to the container overlay, not the /workspace quota.
+step "system GL libs (libEGL/libGL) via apt"
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get update -qq && apt-get install -y --no-install-recommends \
+    libegl1 libgl1 libgles2 libglvnd0 libglib2.0-0 || echo "  ⚠ apt install failed — install libegl1/libgl1 manually if import fails on libEGL.so.1" >&2
+else
+  echo "  ⚠ no apt-get — ensure libEGL.so.1 / libGL.so.1 are present (nvdiffrast imports them)" >&2
+fi
+
 # ---- clone TRELLIS + submodules (FlexiCubes lives here) ----
 step "clone TRELLIS (+ submodules)"
 if [ ! -d "$TRELLIS_HOME/.git" ]; then
