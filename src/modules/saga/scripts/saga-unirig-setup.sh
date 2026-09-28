@@ -107,6 +107,28 @@ PY
   echo "  wrote local SDPA shim to $SP/flash_attn (fallback)" >&2
 fi
 
+# ---- patch the skeleton model config: pin opt-350m's real architecture + force eager attention ----
+# UniRig builds the OPT LLM via AutoConfig.from_pretrained("facebook/opt-350m", hidden_size=1024, …)
+# without pinning num_attention_heads, so on transformers 4.51.3 it falls back to OPTConfig's DEFAULT
+# of 12 → "embed_dim 1024 must be divisible by num_heads 12". Pin the true opt-350m dims (16/24/4096)
+# and force eager so OPT never needs a flash-attn varlen kernel the SDPA shim doesn't provide.
+step "patch skeleton model config (opt-350m heads/layers/ffn + eager)"
+CFG="configs/model/unirig_ar_350m_1024_81920_float32.yaml"
+if [ -f "$CFG" ]; then
+  python - "$CFG" <<'PY'
+import sys
+p=sys.argv[1]; s=open(p).read()
+s=s.replace("_attn_implementation: flash_attention_2","_attn_implementation: eager")
+if "num_attention_heads:" not in s:
+    s=s.replace("  word_embed_proj_dim: 1024\n",
+                "  word_embed_proj_dim: 1024\n  num_attention_heads: 16\n  num_hidden_layers: 24\n  ffn_dim: 4096\n")
+open(p,"w").write(s)
+print("  patched",p)
+PY
+else
+  echo "  ⚠ $CFG not found — skipping (config layout may have changed)" >&2
+fi
+
 # ---- spconv sm_120 (fafraob prebuilt) + PyG compiled ops (official cu128) ----
 step "spconv (sm_120) + torch_scatter/torch_cluster (cu128)"
 pip install \
