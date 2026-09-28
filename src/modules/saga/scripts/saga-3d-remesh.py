@@ -47,7 +47,12 @@ def parse_args():
     ap.add_argument("--target-faces", type=int, default=40000)
     ap.add_argument("--height", type=float, default=2.0)
     ap.add_argument("--symmetric", action="store_true")
-    ap.add_argument("--rot-x", type=float, default=0.0)
+    ap.add_argument("--no-upright", action="store_true",
+                    help="skip auto-upright (rotate the longest axis to vertical, head up)")
+    ap.add_argument("--flip", action="store_true", help="180° about X after upright (if it lands head-down)")
+    ap.add_argument("--rot-x", type=float, default=0.0, help="manual X rotation (deg); disables auto-upright")
+    ap.add_argument("--rot-y", type=float, default=0.0)
+    ap.add_argument("--rot-z", type=float, default=0.0)
     return ap.parse_args(argv_after_ddash())
 
 
@@ -96,6 +101,62 @@ def preclean(obj, merge_dist):
     bm.to_mesh(me)
     bm.free()
     me.update()
+
+
+def keep_largest_component(obj):
+    """Delete all but the largest connected face-island (removes voxel-remesh specks). Returns island count."""
+    me = obj.data
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    visited = set()
+    islands = []
+    for f in bm.faces:
+        if f in visited:
+            continue
+        stack = [f]
+        comp = []
+        while stack:
+            cf = stack.pop()
+            if cf in visited:
+                continue
+            visited.add(cf)
+            comp.append(cf)
+            for e in cf.edges:
+                for lf in e.link_faces:
+                    if lf not in visited:
+                        stack.append(lf)
+        islands.append(comp)
+    n = len(islands)
+    if n > 1:
+        islands.sort(key=len, reverse=True)
+        dead = [f for comp in islands[1:] for f in comp]
+        bmesh.ops.delete(bm, geom=dead, context="FACES")
+        loose = [v for v in bm.verts if not v.link_faces]
+        if loose:
+            bmesh.ops.delete(bm, geom=loose, context="VERTS")
+    bm.to_mesh(me)
+    bm.free()
+    me.update()
+    return n
+
+
+def auto_upright(obj, flip):
+    """Rotate so the LONGEST bbox axis is vertical (Blender Z), head up. Little One is taller than wide,
+    so the longest extent is its height. Returns a short description of what happened."""
+    import math
+    apply_transforms(obj)
+    d = dims(obj)
+    up = max(range(3), key=lambda i: d[i])  # 0=X 1=Y 2=Z
+    select_only(obj)
+    if up == 1:      # Y longest → bring to Z. -90° about X sends -Y (the inferred head) to +Z (up).
+        obj.rotation_euler = (math.radians(-90), 0, 0)
+    elif up == 0:    # X longest → bring to Z.
+        obj.rotation_euler = (0, math.radians(90), 0)
+    # up == 2 already vertical → no rotation
+    if flip:
+        obj.rotation_euler.rotate_axis("X", math.radians(180))
+    apply_transforms(obj)
+    return {0: "X", 1: "Y", 2: "Z"}[up]
 
 
 def voxel_remesh(obj, voxel_size):
@@ -183,16 +244,24 @@ def main():
     # drop materials/UVs — geometry proxy only
     obj.data.materials.clear()
 
-    if abs(args.rot_x) > 1e-6:
+    d_raw = dims(obj)
+    log(f"imported: {len(obj.data.vertices)} verts / {len(obj.data.polygons)} faces  "
+        f"raw XYZ extents={d_raw.x:.3f} x {d_raw.y:.3f} x {d_raw.z:.3f}")
+
+    # orient upright: manual rotation if any --rot-* given, else auto (longest axis → vertical, head up)
+    manual = abs(args.rot_x) > 1e-6 or abs(args.rot_y) > 1e-6 or abs(args.rot_z) > 1e-6
+    if manual:
         import math
         select_only(obj)
-        obj.rotation_euler[0] += math.radians(args.rot_x)
-    apply_transforms(obj)
+        obj.rotation_euler = (math.radians(args.rot_x), math.radians(args.rot_y), math.radians(args.rot_z))
+        apply_transforms(obj)
+        log(f"manual rotation applied: ({args.rot_x},{args.rot_y},{args.rot_z})°")
+    elif not args.no_upright:
+        longest = auto_upright(obj, args.flip)
+        log(f"auto-upright: longest axis was {longest} → now vertical (Blender Z){' +flip' if args.flip else ''}")
 
     d0 = dims(obj)
-    log(f"imported: {len(obj.data.vertices)} verts / {len(obj.data.polygons)} faces  "
-        f"bbox(WxDxH)={d0.x:.3f} x {d0.y:.3f} x {d0.z:.3f}  "
-        f"(H should be the largest if upright)")
+    log(f"oriented: bbox(WxDxH)={d0.x:.3f} x {d0.y:.3f} x {d0.z:.3f}  (H=Z should now be the largest)")
 
     # scale-relative merge distance for pre-clean
     merge = max(d0) * 0.0004
@@ -203,6 +272,9 @@ def main():
         log(f"voxel remesh: size={vsize:.5f} (res={args.voxel_res})")
         voxel_remesh(obj, vsize)
         log(f"after voxel: {len(obj.data.vertices)} verts / {len(obj.data.polygons)} faces")
+        islands = keep_largest_component(obj)
+        if islands > 1:
+            log(f"kept largest of {islands} islands (removed {islands - 1} floating speck(s))")
 
     if args.quad and args.quad > 0:
         log(f"quadriflow → ~{args.quad} quads (symmetric={args.symmetric})")
