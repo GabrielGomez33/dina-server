@@ -161,15 +161,18 @@ def mat_depth():
     return m, mr   # caller sets mr From Min/Max per camera from the actual mesh depth range
 
 def view_depth_range(meshes):
-    """Nearest/farthest EUCLIDEAN distance from camera over the mesh (matches shader 'View Distance')."""
+    """Nearest/farthest EUCLIDEAN distance from camera over the DEFORMED (evaluated) mesh — matches
+    what the shader's 'View Distance' actually sees (skinned glTF verts move under the armature)."""
+    deps=bpy.context.evaluated_depsgraph_get()
     cam=bpy.context.scene.camera; loc=cam.matrix_world.translation
     near=1e18; far=-1e18
     for o in meshes:
-        mw=o.matrix_world
-        for v in o.data.vertices:
+        ev=o.evaluated_get(deps); me=ev.to_mesh(); mw=ev.matrix_world
+        for v in me.vertices:
             d=(mw @ v.co - loc).length
             if d<near: near=d
             if d>far: far=d
+        ev.to_mesh_clear()
     pad=(far-near)*0.02 or 0.01
     return near-pad, far+pad
 
@@ -252,6 +255,7 @@ def main():
             if p=="depth":
                 lineart_compositor(False); set_world((0,0,0)); all_mesh_materials(meshes, depth_mat)
                 near,far = view_depth_range(meshes)           # auto-fit range to this shot for full contrast
+                log(f"depth range: near={near:.3f} far={far:.3f}  (camR={R:.3f})")
                 depth_mr.inputs["From Min"].default_value=near; depth_mr.inputs["From Max"].default_value=far
                 render_to(path,args.res,1)
             elif p=="lineart":
