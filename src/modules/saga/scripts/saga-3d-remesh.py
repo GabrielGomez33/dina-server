@@ -47,6 +47,8 @@ def parse_args():
     ap.add_argument("--target-faces", type=int, default=40000)
     ap.add_argument("--height", type=float, default=2.0)
     ap.add_argument("--symmetric", action="store_true")
+    ap.add_argument("--symmetrize", action="store_true",
+                    help="enforce exact bilateral symmetry (Blender mesh.symmetrize across the wider horizontal axis)")
     ap.add_argument("--no-upright", action="store_true",
                     help="skip auto-upright (rotate the longest axis to vertical, head up)")
     ap.add_argument("--flip", action="store_true", help="180° about X after upright (if it lands head-down)")
@@ -158,6 +160,16 @@ def auto_upright(obj, flip):
     apply_transforms(obj)
     return {0: "X", 1: "Y", 2: "Z"}[up]
 
+
+def symmetrize_mesh(obj, axis):
+    """Exact bilateral symmetry via Blender's robust bisect+mirror+weld. axis in {'X','Y'} (up is Z)."""
+    select_only(obj)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.symmetrize(direction="POSITIVE_" + axis)   # keep +axis half, mirror onto -axis
+    bpy.ops.mesh.remove_doubles(threshold=1e-4)
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode="OBJECT")
 
 def voxel_remesh(obj, voxel_size):
     select_only(obj)
@@ -286,6 +298,11 @@ def main():
 
     select_only(obj)
     bpy.ops.object.shade_smooth()
+
+    if args.symmetrize:
+        d=dims(obj); ax = "X" if d.x >= d.y else "Y"   # wider horizontal axis = left-right (up is Z)
+        symmetrize_mesh(obj, ax)
+        log(f"symmetrized across {ax}=0 → {len(obj.data.vertices)} verts / {len(obj.data.polygons)} faces")
 
     normalize(obj, args.height)
     dF = dims(obj)
