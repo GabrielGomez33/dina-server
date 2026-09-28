@@ -147,18 +147,30 @@ def mat_white_emit():
     o=nt.nodes.new("ShaderNodeOutputMaterial"); nt.links.new(e.outputs["Emission"],o.inputs["Surface"])
     return m
 
-def mat_depth(near, far):
+def mat_depth():
     m = bpy.data.materials.new("depth"); m.use_nodes=True
     nt=m.node_tree; nt.nodes.clear()
     cam=nt.nodes.new("ShaderNodeCameraData")
     mr=nt.nodes.new("ShaderNodeMapRange")
-    mr.inputs["From Min"].default_value=near; mr.inputs["From Max"].default_value=far
     mr.inputs["To Min"].default_value=1.0;   mr.inputs["To Max"].default_value=0.0   # near=white, far=black
     mr.clamp=True
     nt.links.new(cam.outputs["View Z Depth"], mr.inputs["Value"])
     e=nt.nodes.new("ShaderNodeEmission"); nt.links.new(mr.outputs["Result"], e.inputs["Color"])
     o=nt.nodes.new("ShaderNodeOutputMaterial"); nt.links.new(e.outputs["Emission"], o.inputs["Surface"])
-    return m
+    return m, mr   # caller sets mr From Min/Max per camera from the actual mesh depth range
+
+def view_depth_range(meshes):
+    """Actual nearest/farthest camera-space depth over the mesh, for full-contrast depth mapping."""
+    cam=bpy.context.scene.camera; inv=cam.matrix_world.inverted()
+    near=1e18; far=-1e18
+    for o in meshes:
+        mw=o.matrix_world
+        for v in o.data.vertices:
+            z=-(inv @ (mw @ v.co)).z          # view depth: camera looks down -Z
+            if z<near: near=z
+            if z>far: far=z
+    pad=(far-near)*0.02 or 0.01
+    return near-pad, far+pad
 
 def set_world(color):
     w = bpy.data.worlds.new("w"); w.use_nodes=True
@@ -187,9 +199,11 @@ def lineart_compositor(on):
     rl=nt.nodes.new("CompositorNodeRLayers")
     f=nt.nodes.new("CompositorNodeFilter"); f.filter_type="SOBEL"
     nt.links.new(rl.outputs["Normal"], f.inputs["Image"])
-    # Sobel gives bright edges on black; invert + boost so we get crisp black lines on white
-    br=nt.nodes.new("CompositorNodeBrightContrast"); br.inputs["Contrast"].default_value=40.0
-    nt.links.new(f.outputs["Image"], br.inputs["Image"])
+    # Sobel on the RGB normal gives COLORED edges → collapse to luminance so lines are monochrome,
+    # boost contrast, then invert → crisp BLACK lines on WHITE.
+    bw=nt.nodes.new("CompositorNodeRGBToBW"); nt.links.new(f.outputs["Image"], bw.inputs["Image"])
+    br=nt.nodes.new("CompositorNodeBrightContrast"); br.inputs["Contrast"].default_value=60.0
+    nt.links.new(bw.outputs["Val"], br.inputs["Image"])
     inv=nt.nodes.new("CompositorNodeInvert"); nt.links.new(br.outputs["Image"], inv.inputs["Color"])
     comp=nt.nodes.new("CompositorNodeComposite"); nt.links.new(inv.outputs["Color"], comp.inputs["Image"])
 
@@ -227,7 +241,7 @@ def main():
     scene.view_settings.view_transform="Standard"     # linear — do NOT tone-map control signals
     scene.render.film_transparent=False
     # depth range = the character's actual camera-distance band, for full contrast
-    depth_mat=mat_depth(R-size*0.7, R+size*0.7); white_mat=mat_white_emit(); clay_mat=mat_clay()
+    depth_mat, depth_mr = mat_depth(); white_mat=mat_white_emit(); clay_mat=mat_clay()
 
     for cname in cams:
         if cname not in CAMS: log(f"⚠ unknown cam '{cname}'"); continue
@@ -236,6 +250,8 @@ def main():
             tag=f"{args.pose}_{cname}_{p}"; path=os.path.join(outd,tag+".png")
             if p=="depth":
                 lineart_compositor(False); set_world((0,0,0)); all_mesh_materials(meshes, depth_mat)
+                near,far = view_depth_range(meshes)           # auto-fit range to this shot for full contrast
+                depth_mr.inputs["From Min"].default_value=near; depth_mr.inputs["From Max"].default_value=far
                 render_to(path,args.res,1)
             elif p=="lineart":
                 set_world((1,1,1)); all_mesh_materials(meshes, white_mat); lineart_compositor(True)
