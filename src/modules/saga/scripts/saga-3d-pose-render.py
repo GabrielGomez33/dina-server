@@ -154,21 +154,22 @@ def mat_depth():
     mr=nt.nodes.new("ShaderNodeMapRange")
     mr.inputs["To Min"].default_value=1.0;   mr.inputs["To Max"].default_value=0.0   # near=white, far=black
     mr.clamp=True
-    nt.links.new(cam.outputs["View Z Depth"], mr.inputs["Value"])
+    # euclidean distance to camera (always positive) — matches the Python range calc exactly, no sign ambiguity
+    nt.links.new(cam.outputs["View Distance"], mr.inputs["Value"])
     e=nt.nodes.new("ShaderNodeEmission"); nt.links.new(mr.outputs["Result"], e.inputs["Color"])
     o=nt.nodes.new("ShaderNodeOutputMaterial"); nt.links.new(e.outputs["Emission"], o.inputs["Surface"])
     return m, mr   # caller sets mr From Min/Max per camera from the actual mesh depth range
 
 def view_depth_range(meshes):
-    """Actual nearest/farthest camera-space depth over the mesh, for full-contrast depth mapping."""
-    cam=bpy.context.scene.camera; inv=cam.matrix_world.inverted()
+    """Nearest/farthest EUCLIDEAN distance from camera over the mesh (matches shader 'View Distance')."""
+    cam=bpy.context.scene.camera; loc=cam.matrix_world.translation
     near=1e18; far=-1e18
     for o in meshes:
         mw=o.matrix_world
         for v in o.data.vertices:
-            z=-(inv @ (mw @ v.co)).z          # view depth: camera looks down -Z
-            if z<near: near=z
-            if z>far: far=z
+            d=(mw @ v.co - loc).length
+            if d<near: near=d
+            if d>far: far=d
     pad=(far-near)*0.02 or 0.01
     return near-pad, far+pad
 
