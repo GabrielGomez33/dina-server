@@ -60,6 +60,35 @@ def _add_trellis_to_path():
 _TRELLIS_HOME = _add_trellis_to_path()
 
 
+# --- kaolin shim: FlexiCubes' only runtime kaolin use is `from kaolin.utils.testing import
+# check_tensor` (a tensor shape/dtype VALIDATOR, not a compute op). kaolin has no clean cu128/sm_120
+# wheel and is the historical Blackwell build-hell dep, so rather than build it we register a no-op
+# check_tensor when kaolin is absent. If a real kaolin is ever installed, we defer to it. ---
+def _stub_kaolin_if_absent():
+    import importlib.util
+    import sys
+    import types
+    try:
+        if importlib.util.find_spec("kaolin") is not None:
+            return False  # real kaolin present — use it
+    except Exception:
+        pass
+    kaolin = types.ModuleType("kaolin")
+    utils = types.ModuleType("kaolin.utils")
+    testing = types.ModuleType("kaolin.utils.testing")
+
+    def check_tensor(*_a, **_k):  # kaolin's validator raises on mismatch; skipping it is safe here
+        return True
+
+    testing.check_tensor = check_tensor
+    utils.testing = testing
+    kaolin.utils = utils
+    sys.modules["kaolin"] = kaolin
+    sys.modules["kaolin.utils"] = utils
+    sys.modules["kaolin.utils.testing"] = testing
+    return True
+
+
 def log(*a):
     print(*a, file=sys.stderr, flush=True)
 
@@ -96,6 +125,8 @@ def main():
         log("  ⚠ CUDA not available to torch — mesh gen will be unusably slow / fail")
 
     # ---- import trellis (this is where a broken attention/spconv backend surfaces) ----
+    if _stub_kaolin_if_absent():
+        log("  kaolin absent → shimmed check_tensor (validator only; no build needed)")
     try:
         from trellis.pipelines import TrellisImageTo3DPipeline
     except Exception as e:

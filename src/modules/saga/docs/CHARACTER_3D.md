@@ -34,9 +34,12 @@ deletes **every nvcc/JIT compile** on Blackwell. What remains, and how each avoi
   `cumm_cu128-0.8.2` + `spconv_cu128-2.3.8`, cp310–cp313) — install cumm+spconv of the same flavor
   together. `SPCONV_ALGO=native` (skips the startup auto-benchmark). NO source build.
 - **FlexiCubes:** pure-python git submodule (mesh extraction) — no compile.
-- **kaolin / diffoctreerast / vox2seq:** NOT needed for geometry-only. kaolin is never imported at
-  runtime (the infamous #243 blocker was a dead end); diffoctreerast is a try/except optional;
-  vox2seq only serves the `serialized` attention mode. Skip all three.
+- **kaolin / diffoctreerast / vox2seq:** NOT needed for geometry-only, so none are built. kaolin's
+  ONLY runtime use is `flexicubes.py: from kaolin.utils.testing import check_tensor` (a tensor
+  shape/dtype VALIDATOR, not a compute op — all other kaolin refs are in `examples/`); since kaolin
+  is the historical Blackwell build-hell dep with no clean cu128/sm_120 wheel, saga-trellis.py
+  **shims that one symbol** (a no-op `check_tensor`) instead of building it. diffoctreerast is a
+  try/except optional; vox2seq only serves the `serialized` attention mode. Skip all three.
 - **nvdiffrast:** pip-installed ONLY so an import resolves; it JIT-compiles on a *rasterize call we
   never make* → no nvcc. **diff-gaussian-rasterization:** skipped entirely (lazy-imported inside
   gaussian render, which geometry-only never calls).
