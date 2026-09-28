@@ -6,21 +6,26 @@
 # cameras around the character, and renders — per pose × camera — the control
 # signals that drive diffusion downstream:
 #   • depth  : camera-distance grayscale (near=bright)         → ControlNet depth
-#   • lineart: Freestyle black outline on white                → ControlNet lineart/canny
-#   • clay   : neutral matte render (our eyes-only reference)
+#   • lineart: compositor Sobel edge, black-on-white           → ControlNet lineart/canny
+#   • clay   : neutral matte render (eyes-only ref; also a clean source for
+#              ComfyUI canny/softedge/normal preprocessors)
 # The mesh is a PROXY: these grey/line passes become the on-brand charcoal frame
 # when fed to Flux (+ character LoRA) in Stage 5. Nothing here is the final look.
+#
+# CRITICAL: view transform is forced to STANDARD (linear) so depth/lineart aren't
+# tone-mapped by AgX (a control signal must be linear). Depth range is calibrated
+# to the actual CAMERA distance (View Z Depth is camera-relative, ~2× model size).
 #
 # Run (headless, Blender 4.x with GPU):
 #   blender -b -P saga-3d-pose-render.py -- --in little_one_rigged.glb --out renders \
 #           --pose rest --cams front,3q_l,3q_r,side_l --passes depth,lineart,clay
 #   # calibrate a joint's local axis (learn which way a bone swings):
-#   blender -b -P saga-3d-pose-render.py -- --in ... --out cal --rot "bone_6:z-45" --cams front
+#   blender -b -P saga-3d-pose-render.py -- --in ... --out cal --rot "bone_6:z-45" --cams front --passes clay
 #
-# --list-poses prints the built-in library. --rot overrides/augments a pose ad hoc
-# ("bone:AxisDeg,.." e.g. "bone_6:z-45,bone_7:z-30"; axis x|y|z, degrees, bone-local).
-# Bone roles for Little One (from the UniRig hierarchy): root=bone_0; spine=1,2,3;
-# head=4,tuft=5; armR=6..9; armL=10..13; legR=14..17; legL=18..21.
+# --list-poses prints the library. --rot augments a pose ad hoc ("bone:AxisDeg,.."
+# e.g. "bone_6:z-45,bone_7:z-30"; axis x|y|z, degrees, bone-local).
+# Little One bone roles (UniRig hierarchy): root=bone_0; spine=1,2,3; head=4,tuft=5;
+# armR=6..9; armL=10..13; legR=14..17; legL=18..21.
 # ============================================================================
 import bpy, sys, os, math
 from mathutils import Vector
@@ -34,8 +39,8 @@ def parse_args():
     ap.add_argument("--in", dest="inp", required=True)
     ap.add_argument("--out", default="renders")
     ap.add_argument("--pose", default="rest")
-    ap.add_argument("--rot", default="", help="ad hoc bone rotations 'bone:axisDeg,..' e.g. bone_6:z-45")
-    ap.add_argument("--cams", default="front,3q_l,3q_r,side_l", help="comma list of named angles")
+    ap.add_argument("--rot", default="")
+    ap.add_argument("--cams", default="front,3q_l,3q_r,side_l")
     ap.add_argument("--passes", default="depth,lineart,clay")
     ap.add_argument("--res", type=int, default=768)
     ap.add_argument("--samples", type=int, default=24)
@@ -44,7 +49,6 @@ def parse_args():
 
 def log(*a): print("  [pose-render]", *a, file=sys.stderr, flush=True)
 
-# ---- camera angles: (azimuth deg around Y-up, elevation deg) ----
 CAMS = {
     "front": (0, 0), "back": (180, 0),
     "3q_l": (-35, 8), "3q_r": (35, 8),
@@ -52,9 +56,6 @@ CAMS = {
     "high": (0, 45), "low": (0, -18),
 }
 
-# ---- pose library: role → list of (bone, axis, degrees) local rotations. Refined after axis calibration. ----
-# 'rest' is the bind pose (validates skin/cameras/passes). The action poses are FIRST GUESSES at the bone
-# local axes; the first calibration render tells us the true axis/sign and we correct these in place.
 POSES = {
     "rest": [],
     "reach": [("bone_6","z",-70),("bone_7","z",-25),("bone_10","z",70),("bone_11","z",25),("bone_4","x",-12)],
@@ -65,11 +66,13 @@ POSES = {
     "wave": [("bone_6","z",-95),("bone_7","z",-30),("bone_4","z",8)],
 }
 
-def clear_scene():
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+LENS, SENSOR = 50.0, 36.0
+def cam_radius(size):
+    fov = 2*math.atan(SENSOR/2/LENS)
+    return (size*1.15/2)/math.tan(fov/2) + size*0.5
 
-def import_glb(p):
-    bpy.ops.import_scene.gltf(filepath=p)
+def clear_scene(): bpy.ops.wm.read_factory_settings(use_empty=True)
+def import_glb(p): bpy.ops.import_scene.gltf(filepath=p)
 
 def find_objs():
     arm = next((o for o in bpy.data.objects if o.type=="ARMATURE"), None)
@@ -77,7 +80,7 @@ def find_objs():
     return arm, meshes
 
 def world_bbox(meshes):
-    lo = Vector(( 1e9, 1e9, 1e9)); hi = Vector((-1e9,-1e9,-1e9))
+    lo = Vector(( 1e9,)*3); hi = Vector((-1e9,)*3)
     for o in meshes:
         for c in o.bound_box:
             w = o.matrix_world @ Vector(c)
@@ -89,7 +92,7 @@ def apply_pose(arm, ops):
     if arm is None: return
     bpy.context.view_layer.objects.active = arm
     bpy.ops.object.mode_set(mode="POSE")
-    for pb in arm.pose.bones:                       # reset to rest
+    for pb in arm.pose.bones:
         pb.rotation_mode = "XYZ"; pb.rotation_euler = (0,0,0)
     ax = {"x":0,"y":1,"z":2}
     for bone, axis, deg in ops:
@@ -112,21 +115,20 @@ def setup_gpu(scene):
             log(f"{dt} unavailable: {e}")
     scene.cycles.device = "CPU"; log("GPU not available → CPU")
 
-def place_camera(center, size, az, el, res):
+def place_camera(center, size, az, el):
+    for o in [o for o in bpy.data.objects if o.type=="CAMERA"]:
+        bpy.data.objects.remove(o, do_unlink=True)
     cam_data = bpy.data.cameras.new("cam"); cam = bpy.data.objects.new("cam", cam_data)
     bpy.context.scene.collection.objects.link(cam)
-    cam_data.lens = 50; cam_data.sensor_width = 36
-    fov = 2*math.atan(cam_data.sensor_width/2/cam_data.lens)
-    R = (size*1.15/2)/math.tan(fov/2) + size*0.5     # frame the character with margin
+    cam_data.lens = LENS; cam_data.sensor_width = SENSOR
+    R = cam_radius(size)
     a, e = math.radians(az), math.radians(el)
     pos = Vector((center.x + R*math.cos(e)*math.sin(a),
                   center.y + R*math.sin(e),
                   center.z + R*math.cos(e)*math.cos(a)))
     cam.location = pos
-    d = (center - pos).normalized()
-    cam.rotation_euler = d.to_track_quat("-Z","Y").to_euler()
+    cam.rotation_euler = (center - pos).to_track_quat("-Z","Y").to_euler()
     bpy.context.scene.camera = cam
-    return cam
 
 def all_mesh_materials(meshes, mat):
     for o in meshes:
@@ -134,15 +136,14 @@ def all_mesh_materials(meshes, mat):
 
 def mat_clay():
     m = bpy.data.materials.new("clay"); m.use_nodes=True
-    bsdf = m.node_tree.nodes.get("Principled BSDF")
-    bsdf.inputs["Base Color"].default_value = (0.8,0.8,0.82,1)
-    bsdf.inputs["Roughness"].default_value = 0.8
+    b = m.node_tree.nodes.get("Principled BSDF")
+    b.inputs["Base Color"].default_value=(0.8,0.8,0.82,1); b.inputs["Roughness"].default_value=0.85
     return m
 
 def mat_white_emit():
     m = bpy.data.materials.new("white"); m.use_nodes=True
     nt=m.node_tree; nt.nodes.clear()
-    e=nt.nodes.new("ShaderNodeEmission"); e.inputs["Color"].default_value=(1,1,1,1); e.inputs["Strength"].default_value=1.0
+    e=nt.nodes.new("ShaderNodeEmission"); e.inputs["Color"].default_value=(1,1,1,1)
     o=nt.nodes.new("ShaderNodeOutputMaterial"); nt.links.new(e.outputs["Emission"],o.inputs["Surface"])
     return m
 
@@ -153,6 +154,7 @@ def mat_depth(near, far):
     mr=nt.nodes.new("ShaderNodeMapRange")
     mr.inputs["From Min"].default_value=near; mr.inputs["From Max"].default_value=far
     mr.inputs["To Min"].default_value=1.0;   mr.inputs["To Max"].default_value=0.0   # near=white, far=black
+    mr.clamp=True
     nt.links.new(cam.outputs["View Z Depth"], mr.inputs["Value"])
     e=nt.nodes.new("ShaderNodeEmission"); nt.links.new(mr.outputs["Result"], e.inputs["Color"])
     o=nt.nodes.new("ShaderNodeOutputMaterial"); nt.links.new(e.outputs["Emission"], o.inputs["Surface"])
@@ -164,12 +166,35 @@ def set_world(color):
     bg.inputs["Color"].default_value=(*color,1); bg.inputs["Strength"].default_value=1.0
     bpy.context.scene.world=w
 
-def add_key_light(center, size):
+def clear_lights():
+    for o in [o for o in bpy.data.objects if o.type=="LIGHT"]:
+        bpy.data.objects.remove(o, do_unlink=True)
+
+def add_key_light():
     l=bpy.data.lights.new("key","SUN"); l.energy=3.0
     o=bpy.data.objects.new("key",l); bpy.context.scene.collection.objects.link(o)
     o.rotation_euler=(math.radians(55),0,math.radians(30))
 
-def render_to(path, scene, res, samples):
+def lineart_compositor(on):
+    """Sobel edge on the camera-space Normal pass → black lines on white. Robust headless alt to Freestyle."""
+    scene=bpy.context.scene
+    vl=scene.view_layers[0]
+    if not on:
+        scene.use_nodes=False; return
+    vl.use_pass_normal=True
+    scene.use_nodes=True
+    nt=scene.node_tree; nt.nodes.clear()
+    rl=nt.nodes.new("CompositorNodeRLayers")
+    f=nt.nodes.new("CompositorNodeFilter"); f.filter_type="SOBEL"
+    nt.links.new(rl.outputs["Normal"], f.inputs["Image"])
+    # Sobel gives bright edges on black; invert + boost so we get crisp black lines on white
+    br=nt.nodes.new("CompositorNodeBrightContrast"); br.inputs["Contrast"].default_value=40.0
+    nt.links.new(f.outputs["Image"], br.inputs["Image"])
+    inv=nt.nodes.new("CompositorNodeInvert"); nt.links.new(br.outputs["Image"], inv.inputs["Color"])
+    comp=nt.nodes.new("CompositorNodeComposite"); nt.links.new(inv.outputs["Color"], comp.inputs["Image"])
+
+def render_to(path, res, samples):
+    scene=bpy.context.scene
     scene.render.resolution_x=res; scene.render.resolution_y=res
     scene.render.image_settings.file_format="PNG"
     scene.cycles.samples=samples
@@ -181,7 +206,7 @@ def main():
     if args.list_poses:
         print("poses:", ", ".join(POSES)); return
     inp=os.path.abspath(args.inp); outd=os.path.abspath(args.out); os.makedirs(outd, exist_ok=True)
-    ops = list(POSES.get(args.pose, []))
+    ops=list(POSES.get(args.pose, []))
     if args.rot:
         for tok in args.rot.split(","):
             b,spec=tok.split(":"); ops.append((b, spec[0].lower(), float(spec[1:])))
@@ -194,36 +219,33 @@ def main():
     log(f"armature: {arm.name if arm else 'NONE'}   meshes: {[m.name for m in meshes]}")
     apply_pose(arm, ops)
     lo,hi = world_bbox(meshes); center=(lo+hi)/2; size=max((hi-lo).x,(hi-lo).y,(hi-lo).z)
-    log(f"pose='{args.pose}'{' +rot' if args.rot else ''}  bbox size={size:.2f}  cams={cams}  passes={passes}")
+    R=cam_radius(size)
+    log(f"pose='{args.pose}'{' +rot' if args.rot else ''}  size={size:.2f}  camR={R:.2f}  cams={cams}  passes={passes}")
 
     scene=bpy.context.scene
     setup_gpu(scene)
+    scene.view_settings.view_transform="Standard"     # linear — do NOT tone-map control signals
     scene.render.film_transparent=False
-    depth_mat=mat_depth(size*0.4, size*1.8); white_mat=mat_white_emit(); clay_mat=mat_clay()
+    # depth range = the character's actual camera-distance band, for full contrast
+    depth_mat=mat_depth(R-size*0.7, R+size*0.7); white_mat=mat_white_emit(); clay_mat=mat_clay()
 
     for cname in cams:
         if cname not in CAMS: log(f"⚠ unknown cam '{cname}'"); continue
-        az,el=CAMS[cname]
-        # fresh camera each angle
-        for o in [o for o in bpy.data.objects if o.type=="CAMERA"]: bpy.data.objects.remove(o, do_unlink=True)
-        place_camera(center, size, az, el, args.res)
+        az,el=CAMS[cname]; place_camera(center,size,az,el)
         for p in passes:
-            tag=f"{args.pose}_{cname}_{p}"
+            tag=f"{args.pose}_{cname}_{p}"; path=os.path.join(outd,tag+".png")
             if p=="depth":
-                scene.render.use_freestyle=False; set_world((0,0,0)); all_mesh_materials(meshes, depth_mat)
-                render_to(os.path.join(outd,tag+".png"), scene, args.res, 1)
+                lineart_compositor(False); set_world((0,0,0)); all_mesh_materials(meshes, depth_mat)
+                render_to(path,args.res,1)
             elif p=="lineart":
-                scene.render.use_freestyle=True
-                vl=scene.view_layers[0]; vl.use_freestyle=True
-                scene.render.line_thickness=1.4
-                set_world((1,1,1)); all_mesh_materials(meshes, white_mat)
-                render_to(os.path.join(outd,tag+".png"), scene, args.res, 1)
-                scene.render.use_freestyle=False
+                set_world((1,1,1)); all_mesh_materials(meshes, white_mat); lineart_compositor(True)
+                render_to(path,args.res,1); lineart_compositor(False)
             elif p=="clay":
-                scene.render.use_freestyle=False; set_world((0.05,0.05,0.06)); all_mesh_materials(meshes, clay_mat)
-                for o in [o for o in bpy.data.objects if o.type=="LIGHT"]: bpy.data.objects.remove(o, do_unlink=True)
-                add_key_light(center,size)
-                render_to(os.path.join(outd,tag+".png"), scene, args.res, args.samples)
+                lineart_compositor(False); set_world((0.12,0.12,0.13)); all_mesh_materials(meshes, clay_mat)
+                clear_lights(); add_key_light()
+                render_to(path,args.res,args.samples)
+            else:
+                log(f"⚠ unknown pass '{p}'"); continue
             log(f"✅ {tag}.png")
     print(f"RENDERS {outd}")
 
