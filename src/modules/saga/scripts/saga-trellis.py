@@ -38,6 +38,8 @@ import argparse
 os.environ.setdefault("ATTN_BACKEND", "sdpa")
 os.environ.setdefault("SPARSE_ATTN_BACKEND", "sdpa")
 os.environ.setdefault("SPCONV_ALGO", "native")
+# persist the torch.hub cache (DINOv2 image encoder) on the volume, not the ephemeral overlay
+os.environ.setdefault("TORCH_HOME", os.path.join(os.environ.get("SAGA_ROOT", "/workspace/SAGA"), "torch_hub"))
 
 # --- put the TRELLIS repo on sys.path (it is NOT a pip package; `trellis/` lives in the clone) ---
 # Resolve TRELLIS_HOME from the env, else SAGA_ROOT/engine/TRELLIS, else ../engine/TRELLIS relative
@@ -169,7 +171,15 @@ def main():
 
     log(f"▶ TRELLIS {args.model}  views={len(images)}  seed={args.seed}  "
         f"ss={args.ss_steps}/{args.ss_cfg}  slat={args.slat_steps}/{args.slat_cfg}")
-    log("  loading pipeline (first run downloads weights to HF cache)…")
+    # TRELLIS loads the DINOv2 image encoder via torch.hub.load(), which validates the repo with a
+    # GitHub API call that rate-limits (HTTP 403) on shared IPs. The zipball download itself is fine —
+    # only the validation call fails — so no-op it (we trust facebookresearch/dinov2).
+    try:
+        torch.hub._validate_not_a_forked_repo = lambda *a, **k: None
+    except Exception:
+        pass
+
+    log(f"  loading pipeline (torch hub cache: {os.environ.get('TORCH_HOME')})…")
     pipeline = TrellisImageTo3DPipeline.from_pretrained(args.model)
     pipeline.cuda()
 
