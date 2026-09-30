@@ -25,10 +25,28 @@
 # present. So after export we RE-IMPORT and assert a real armature + skinned mesh
 # exist (and that weights are non-zero); otherwise we exit non-zero.
 # ============================================================================
-import bpy, sys, os
+import bpy, bmesh, sys, os
 
 def argv(): return sys.argv[sys.argv.index("--")+1:] if "--" in sys.argv else []
 def log(*a): print("  [reskin]", *a, file=sys.stderr, flush=True)
+
+def weld_mesh(mesh, eps):
+    """Merge coincident vertices (merge-by-distance) to repair UniRig's output,
+    which unwelds the surface into TRIANGLE SOUP — a separate vertex per triangle
+    (≈3× verts, one component per face, every edge non-manifold). Welding restores
+    shared vertices → a single watertight component whose weights are continuous,
+    so posing can't tear it apart and weight-smoothing can diffuse across the real
+    surface. Done with bmesh so it runs headless (no 3D-viewport context needed).
+    Merged verts' skin weights (the deform layer) are carried onto the survivor."""
+    me = mesh.data
+    before = len(me.vertices)
+    bm = bmesh.new(); bm.from_mesh(me)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=eps)
+    bm.to_mesh(me); bm.free()
+    me.update()
+    after = len(me.vertices)
+    log(f"weld (merge-by-distance eps={eps}): {before} → {after} verts")
+    return before, after
 
 def has_armature_mod(mesh, arm):
     return any(md.type == "ARMATURE" and md.object == arm for md in mesh.modifiers)
@@ -137,6 +155,8 @@ def main():
     ap.add_argument("--out", default="")
     ap.add_argument("--iters", type=int, default=20, help="weight-smoothing passes (more = softer seams)")
     ap.add_argument("--factor", type=float, default=0.5, help="per-pass smoothing strength 0..1")
+    ap.add_argument("--weld", type=float, default=1e-4,
+                    help="merge-by-distance epsilon to repair UniRig triangle-soup (0 = skip welding)")
     args = ap.parse_args(argv())
     inp = os.path.abspath(args.inp)
     out = os.path.abspath(args.out) if args.out else os.path.splitext(inp)[0] + "_reskinned.glb"
@@ -160,6 +180,13 @@ def main():
     log(f"armature: {arm.name}  bones: {len(arm.data.bones)}  mesh: '{main_mesh.name}' "
         f"({len(main_mesh.data.vertices)} verts)  incoming weighted verts={wv0}")
 
+    # repair UniRig triangle-soup FIRST: weld coincident verts into a single
+    # watertight surface so weights are continuous and smoothing can diffuse
+    # across the real mesh (on soup, each vert only touches its own triangle).
+    if args.weld and args.weld > 0:
+        weld_mesh(main_mesh, args.weld)
+
+    wv0 = total_weighted_verts(main_mesh)
     if wv0 > 0:
         if not has_armature_mod(main_mesh, arm):
             mod = main_mesh.modifiers.new(name="Armature", type="ARMATURE"); mod.object = arm
