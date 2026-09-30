@@ -64,14 +64,21 @@ CAMS = {
 #   hips bone_20 (R) / bone_24 (L), knees bone_21 / bone_25; spine bone_1; head bone_4.
 # Arms swing up/down about LOCAL X (SAME sign both sides: +X raise, -X lower) and fwd/back about local Z.
 # Legs & spine swing about local X. Magnitudes/signs are estimates confirmed by render, then finalized.
+# Poses are authored INSIDE this character's safe range of motion. Its arms mount at
+# the base of a giant head with no neck, so they CANNOT go overhead (they enter the
+# head) and CANNOT go fully straight-down (they enter the wide belly). Caps used:
+#   arm raise  ≲ +30  (hand stays clear of the head)
+#   arm lower  ≳ -60  (hand stays clear of the belly)
+#   spine/neck bends kept gentle so the thin neck doesn't crease/self-intersect.
+# +X raises an arm, -X lowers it (both shoulders same sign: bone_6 R, bone_13 L).
 POSES = {
-    "rest": [],                                                  # T-pose (bind)
-    "arms_down": [("bone_6","x",-78),("bone_13","x",-78)],       # natural standing, arms at sides
-    "reach":     [("bone_6","x",55),("bone_13","x",55),("bone_4","x",-10)],   # both arms up + look up
-    "wave":      [("bone_6","x",-78),("bone_13","x",40),("bone_14","x",20)],  # left down, right raised wave
-    "crouch":    [("bone_1","x",20),("bone_6","x",-50),("bone_13","x",-50),
-                  ("bone_20","x",45),("bone_21","x",-70),("bone_24","x",45),("bone_25","x",-70)],
-    "run":       [("bone_6","x",-30),("bone_13","x",-55),("bone_20","x",40),("bone_24","x",-40),("bone_1","x",12)],
+    "rest":      [],                                             # T-pose (bind)
+    "arms_down": [("bone_6","x",-58),("bone_13","x",-58)],       # relaxed at sides, clear of belly
+    "reach":     [("bone_6","x",28),("bone_13","x",28),("bone_4","x",-8)],    # arms up-and-out, clear of head
+    "wave":      [("bone_6","x",-55),("bone_13","x",28),("bone_14","x",22)],  # R at side, L raised out + elbow
+    "crouch":    [("bone_1","x",12),("bone_6","x",-45),("bone_13","x",-45),
+                  ("bone_20","x",40),("bone_21","x",-60),("bone_24","x",40),("bone_25","x",-60)],
+    "run":       [("bone_6","x",-30),("bone_13","x",-45),("bone_20","x",35),("bone_24","x",-35),("bone_1","x",10)],
 }
 
 LENS, SENSOR = 50.0, 36.0
