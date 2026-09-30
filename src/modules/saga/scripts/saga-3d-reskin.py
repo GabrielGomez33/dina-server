@@ -237,6 +237,13 @@ def main():
     wv1 = total_weighted_verts(main_mesh)
     log(f"after reskin: {wv1}/{len(main_mesh.data.vertices)} verts weighted")
 
+    # SMOOTH SHADING before export is REQUIRED: with flat faces the glTF exporter writes a
+    # separate vertex per face corner (re-souping our welded mesh back to ~3x verts), which
+    # breaks any downstream per-surface op. Smooth shading shares the vertex normal so the
+    # exporter keeps shared (welded) vertices — the file stays ~40k and truly connected.
+    for p in main_mesh.data.polygons:
+        p.use_smooth = True
+
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     bpy.ops.object.select_all(action="DESELECT")
     main_mesh.select_set(True); arm.select_set(True)
