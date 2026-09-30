@@ -126,9 +126,11 @@ def place_camera(center, size, az, el):
     cam_data.lens = LENS; cam_data.sensor_width = SENSOR
     R = cam_radius(size)
     a, e = math.radians(az), math.radians(el)
+    # Blender scene is Z-UP (glTF Y-up is converted on import). Orbit azimuth about +Z, elevation above
+    # the horizon; front (az0,el0) sits at -Y looking +Y. to_track_quat('-Z','Y') keeps world +Z as frame-up.
     pos = Vector((center.x + R*math.cos(e)*math.sin(a),
-                  center.y + R*math.sin(e),
-                  center.z + R*math.cos(e)*math.cos(a)))
+                  center.y - R*math.cos(e)*math.cos(a),
+                  center.z + R*math.sin(e)))
     cam.location = pos
     cam.rotation_euler = (center - pos).to_track_quat("-Z","Y").to_euler()
     bpy.context.scene.camera = cam
