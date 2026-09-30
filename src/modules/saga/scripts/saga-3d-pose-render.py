@@ -93,6 +93,17 @@ def import_glb(p): bpy.ops.import_scene.gltf(filepath=p)
 def find_objs():
     arm = next((o for o in bpy.data.objects if o.type=="ARMATURE"), None)
     meshes = [o for o in bpy.data.objects if o.type=="MESH"]
+    # ignore stray/junk meshes (e.g. UniRig's leftover Icosphere): keep only meshes
+    # bound to the armature; if none are bound, fall back to the single largest mesh.
+    bound = [m for m in meshes if any(md.type=="ARMATURE" for md in m.modifiers)]
+    if bound:
+        meshes = bound
+    elif len(meshes) > 1:
+        meshes = [max(meshes, key=lambda m: len(m.data.vertices))]
+    # delete the rest so they never affect framing or the render
+    keep = set(meshes)
+    for o in [o for o in bpy.data.objects if o.type=="MESH" and o not in keep]:
+        bpy.data.objects.remove(o, do_unlink=True)
     return arm, meshes
 
 def world_bbox(meshes):
