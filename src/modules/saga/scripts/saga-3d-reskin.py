@@ -42,16 +42,61 @@ def activate(obj):
     bpy.context.view_layer.objects.active = obj
 
 def smooth_all_weights(mesh, factor, iters):
-    """Blur every vertex group toward neighbours: turns hard bone boundaries into
-    gradients so joints crease instead of tearing. Operates on all verts."""
-    activate(mesh)
-    # select all verts (the operator acts on the selection)
-    bpy.ops.object.mode_set(mode="EDIT")
-    bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.object.mode_set(mode="OBJECT")
-    # smooth all deform groups, then renormalise so per-vertex weights still sum to 1
-    bpy.ops.object.vertex_group_smooth(group_select_mode="ALL", factor=factor, repeat=iters)
-    bpy.ops.object.vertex_group_normalize_all(group_select_mode="ALL", lock_active=False)
+    """Blur every vertex group toward its topological neighbours so hard bone
+    boundaries become gradients (joints crease instead of tearing). Implemented
+    directly in NumPy over the mesh graph — NO bpy.ops — because the interactive
+    vertex_group_smooth operator requires a 3D-viewport context that headless
+    Blender lacks (poll() fails). This runs identically with or without a UI."""
+    import numpy as np
+    me = mesh.data
+    nv = len(me.vertices)
+    vgs = list(mesh.vertex_groups)
+    nb = len(vgs)
+    col_of = {vg.index: k for k, vg in enumerate(vgs)}      # vertex_group.index -> matrix column
+
+    # dense weight matrix W[vert, bone]
+    W = np.zeros((nv, nb), dtype=np.float32)
+    for v in me.vertices:
+        for g in v.groups:
+            c = col_of.get(g.group)
+            if c is not None:
+                W[v.index, c] = g.weight
+
+    # undirected edge graph
+    ne = len(me.edges)
+    e = np.empty(ne * 2, dtype=np.int64)
+    me.edges.foreach_get("vertices", e)
+    e = e.reshape(ne, 2)
+    i, j = e[:, 0], e[:, 1]
+    valence = (np.bincount(i, minlength=nv) + np.bincount(j, minlength=nv)).astype(np.float32)
+    valence = np.maximum(valence, 1.0)[:, None]
+
+    # iterative Laplacian blend: W <- (1-f)W + f * mean(neighbours)
+    for _ in range(iters):
+        nsum = np.zeros_like(W)
+        np.add.at(nsum, i, W[j])
+        np.add.at(nsum, j, W[i])
+        W = (1.0 - factor) * W + factor * (nsum / valence)
+
+    # renormalise each vertex's weights to sum to 1 (skip unweighted verts)
+    rs = W.sum(axis=1, keepdims=True)
+    nz = rs[:, 0] > 1e-8
+    W[nz] = W[nz] / rs[nz]
+
+    # write back: clear each group fully, then re-add in quantised buckets (fast — avoids
+    # 240k individual add() calls while keeping ~1/255 weight precision, ample for a proxy).
+    all_idx = list(range(nv))
+    for vg in vgs:
+        vg.remove(all_idx)
+    Q = 255
+    Wq = np.rint(W * Q).astype(np.int32)
+    idx_arange = np.arange(nv)
+    for c, vg in enumerate(vgs):
+        wc = Wq[:, c]
+        for b in range(1, Q + 1):
+            sel = idx_arange[wc == b]
+            if sel.size:
+                vg.add(sel.tolist(), b / Q, "REPLACE")
 
 def bone_heat(mesh, arm):
     """Fallback for a raw mesh with no incoming weights."""
