@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
 # ============================================================================
-# saga-3d-reskin.py — soften an auto-rigger's HARD skin weights so joints crease
-# smoothly instead of SHREDDING/tearing when posed.
+# saga-3d-reskin.py — turn a raw UniRig output into a cleanly-poseable rig:
+# WELD the triangle-soup mesh, then RECOMPUTE skin weights with bone-heat.
 #
 #   blender -b -P saga-3d-reskin.py -- --in alien_rigged.glb --out alien_reskinned.glb
-#   blender -b -P saga-3d-reskin.py -- --in r.glb --iters 30 --factor 0.5   # stronger smoothing
+#   blender -b -P saga-3d-reskin.py -- --in r.glb --polish 3      # soften a residual joint crease
+#   blender -b -P saga-3d-reskin.py -- --in r.glb --method smooth # keep+blur UniRig weights instead
 #
-# WHY SMOOTH, NOT RECOMPUTE:
-#   Blender's bone-heat ("automatic weights") fails on dense/non-manifold meshes
-#   — on our 240k-vert TRELLIS+remesh proxy it returns ZERO weights, producing an
-#   un-poseable file. But the auto-rigger (UniRig) already ships VALID weights;
-#   they just have sharp bone-to-bone boundaries. A vertex that is 100% owned by
-#   the arm bone sitting next to a vertex 0% owned by it means the two split apart
-#   when the arm rotates → the shredded seam we see. Smoothing each vertex's
-#   weights toward its neighbours' turns that step into a gradient, so the surface
-#   creases as one skin. We KEEP UniRig's weights + armature modifier and only
-#   blur them — no manifold requirement, no zero-weight failure.
-#
-# FALLBACK: if the mesh arrives with NO vertex groups at all (a raw, unrigged
-# mesh), we fall back to bone-heat (ARMATURE_AUTO), which is the only option then.
+# THE TWO DEFECTS UNIRIG LEAVES, AND THE FIX (proven on the alien):
+#   1) TRIANGLE SOUP — UniRig's merge writes a separate vertex per triangle, so the
+#      clean 40k-vert watertight input comes back as ~240k verts / 80k components /
+#      every edge non-manifold. Posed, the detached triangles fly apart (shred).
+#      FIX: weld coincident verts (merge-by-distance) → one watertight component.
+#   2) BLEEDING WEIGHTS — UniRig's weights let the arm bones own head/neck verts, so
+#      posing the arms drags the face; smoothing those weights only spreads the bleed.
+#      FIX: once the mesh is welded (manifold), bone-heat SUCCEEDS (it returns zero
+#      weights on soup) and weights by distance ALONG THE SURFACE — head verts are far
+#      from the arm bones along the surface, so they get ~zero arm weight. Head holds
+#      still, fingers follow their own bones. This is the default (--method boneheat).
+#   --method smooth keeps UniRig's weights and blurs them; only useful when a mesh
+#   arrives already clean and you want to preserve its authored weights.
 #
 # HARD REQUIREMENT: the output GLB must round-trip as a real rig. glTF stores
 # joint NODES + a SKIN; Blender only rebuilds an Armature on import if the skin is
@@ -153,7 +154,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="inp", required=True)
     ap.add_argument("--out", default="")
-    ap.add_argument("--iters", type=int, default=20, help="weight-smoothing passes (more = softer seams)")
+    ap.add_argument("--method", choices=["boneheat", "smooth"], default="boneheat",
+                    help="boneheat: RECOMPUTE weights on the welded mesh — surface-distance weights, "
+                         "so no bleed into the head and fingers follow the arm (the good result). "
+                         "smooth: keep UniRig weights and blur them (bleeds on no-neck characters).")
+    ap.add_argument("--polish", type=int, default=0,
+                    help="optional post-boneheat smoothing passes to soften a residual joint crease (0 = none)")
+    ap.add_argument("--iters", type=int, default=20, help="smooth-method weight-smoothing passes")
     ap.add_argument("--factor", type=float, default=0.5, help="per-pass smoothing strength 0..1")
     ap.add_argument("--weld", type=float, default=1e-4,
                     help="merge-by-distance epsilon to repair UniRig triangle-soup (0 = skip welding)")
@@ -187,14 +194,23 @@ def main():
         weld_mesh(main_mesh, args.weld)
 
     wv0 = total_weighted_verts(main_mesh)
-    if wv0 > 0:
+    # DEFAULT = boneheat: recompute weights on the now-watertight welded mesh. Bone-heat
+    # weights by distance ALONG THE SURFACE, so head verts (far from the arm bones along
+    # the surface) get ~zero arm weight — the head no longer drags and the fingers follow
+    # their own bones. This only works because welding made the mesh manifold; on the raw
+    # triangle-soup bone-heat returned zero weights. "smooth" keeps UniRig's weights and
+    # blurs them, which bleeds into the head on a no-neck character.
+    if args.method == "boneheat" or wv0 == 0:
+        log("bone-heat on welded mesh (localized surface-distance weights)")
+        bone_heat(main_mesh, arm)
+        if args.polish > 0:
+            log(f"polish smoothing: factor={args.factor} iters={args.polish}")
+            smooth_all_weights(main_mesh, args.factor, args.polish)
+    else:
         if not has_armature_mod(main_mesh, arm):
             mod = main_mesh.modifiers.new(name="Armature", type="ARMATURE"); mod.object = arm
-        log(f"smoothing existing weights: factor={args.factor} iters={args.iters}")
+        log(f"smoothing existing UniRig weights: factor={args.factor} iters={args.iters}")
         smooth_all_weights(main_mesh, args.factor, args.iters)
-    else:
-        log("no incoming weights → falling back to bone-heat (ARMATURE_AUTO)")
-        bone_heat(main_mesh, arm)
 
     wv1 = total_weighted_verts(main_mesh)
     log(f"after reskin: {wv1}/{len(main_mesh.data.vertices)} verts weighted")
