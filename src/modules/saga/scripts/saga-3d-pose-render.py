@@ -56,17 +56,19 @@ CAMS = {
     "high": (0, 45), "low": (0, -18),
 }
 
-# All limb bones swing about their LOCAL X (read from the rig's rest axes): arms local-X ≈ world Z
-# (raise/lower), legs local-X = world X (kick fwd/back), spine/head local-X = world X (lean/nod).
-# Signs are first estimates — the calibration render confirms/flips them, then these are final.
+# ALIEN rig (T-pose, bone-heat skin). Bone roles read from the rig's rest axes:
+#   shoulders bone_6 (R) / bone_13 (L), elbows bone_7 / bone_14;
+#   hips bone_20 (R) / bone_24 (L), knees bone_21 / bone_25; spine bone_1; head bone_4.
+# Arms swing up/down about LOCAL X (SAME sign both sides: +X raise, -X lower) and fwd/back about local Z.
+# Legs & spine swing about local X. Magnitudes/signs are estimates confirmed by render, then finalized.
 POSES = {
-    "rest": [],
-    "reach": [("bone_6","x",80),("bone_7","x",25),("bone_10","x",80),("bone_11","x",25),("bone_4","x",-12)],
-    "wave":  [("bone_6","x",95),("bone_7","x",20),("bone_4","x",6)],
-    "crouch":[("bone_1","x",18),("bone_14","x",-45),("bone_15","x",70),("bone_18","x",-45),("bone_19","x",70)],
-    "jump":  [("bone_6","x",70),("bone_10","x",70),("bone_14","x",35),("bone_15","x",-45),
-              ("bone_18","x",35),("bone_19","x",-45),("bone_4","x",-14)],
-    "run":   [("bone_6","x",45),("bone_10","x",-30),("bone_14","x",-40),("bone_18","x",40),("bone_1","x",10)],
+    "rest": [],                                                  # T-pose (bind)
+    "arms_down": [("bone_6","x",-78),("bone_13","x",-78)],       # natural standing, arms at sides
+    "reach":     [("bone_6","x",55),("bone_13","x",55),("bone_4","x",-10)],   # both arms up + look up
+    "wave":      [("bone_6","x",-78),("bone_13","x",40),("bone_14","x",20)],  # left down, right raised wave
+    "crouch":    [("bone_1","x",20),("bone_6","x",-50),("bone_13","x",-50),
+                  ("bone_20","x",45),("bone_21","x",-70),("bone_24","x",45),("bone_25","x",-70)],
+    "run":       [("bone_6","x",-30),("bone_13","x",-55),("bone_20","x",40),("bone_24","x",-40),("bone_1","x",12)],
 }
 
 LENS, SENSOR = 50.0, 36.0
