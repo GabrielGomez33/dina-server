@@ -132,6 +132,14 @@ def main():
     try:
         from trellis.pipelines import TrellisImageTo3DPipeline
     except Exception as e:
+        es = str(e)
+        if "libEGL" in es or "libGL" in es or "libGLdispatch" in es:
+            die(
+                f"trellis import failed on a system GL library: {e}\n"
+                "   → FRESH POD: the GL libs live on the ephemeral overlay and were wiped.\n"
+                "     Fix: source /workspace/SAGA/scripts/saga-pod-init.sh   (re-installs libEGL/libGL + PATH)\n"
+                "     or:  apt-get update && apt-get install -y libegl1 libgl1 libglib2.0-0"
+            )
         die(
             "trellis import failed: "
             f"{e}\n   → check the SDPA sparse-attention patch (PR #357) applied, and that "
