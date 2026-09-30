@@ -71,6 +71,8 @@ def main():
                     help="current axis that is the character's UP/head: auto|+X|-X|+Y|-Y|+Z|-Z")
     ap.add_argument("--height", type=float, default=0.0, help="scale so height = H (0 = keep as-is)")
     ap.add_argument("--yaw", type=float, default=0.0, help="spin about the new up axis (deg) to face front")
+    ap.add_argument("--flip", action="store_true",
+                    help="180° about X after standing (use when auto-up lands it upside-down, e.g. a big-headed/narrow-legged character)")
     ap.add_argument("--project", action="store_true", help="write <out>_proj.png silhouette check")
     args = ap.parse_args()
 
@@ -93,6 +95,8 @@ def main():
 
     # single principal-axis rotation → +Y (keeps width/depth axis-aligned, no arbitrary azimuth)
     m.apply_transform(stand_rotation(ax, sign))
+    if args.flip:   # turn top-bottom over (fixes an inverted auto-up guess)
+        m.apply_transform(trimesh.transformations.rotation_matrix(np.radians(180), [1, 0, 0]))
     if abs(args.yaw) > 1e-6:
         m.apply_transform(trimesh.transformations.rotation_matrix(np.radians(args.yaw), [0, 1, 0]))
 
