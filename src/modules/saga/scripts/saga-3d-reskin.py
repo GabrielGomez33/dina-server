@@ -49,6 +49,20 @@ def weld_mesh(mesh, eps):
     log(f"weld (merge-by-distance eps={eps}): {before} → {after} verts")
     return before, after
 
+def smooth_surface(mesh, iters, factor=0.5):
+    """Laplacian smoothing of VERTEX POSITIONS to knock down the raw TRELLIS
+    generation bumps for a cleaner depth/lineart control signal. Topology is
+    unchanged, so skin weights are preserved. Headless-safe (bmesh)."""
+    if iters <= 0:
+        return
+    me = mesh.data
+    bm = bmesh.new(); bm.from_mesh(me)
+    for _ in range(iters):
+        bmesh.ops.smooth_vert(bm, verts=bm.verts, factor=factor,
+                              use_axis_x=True, use_axis_y=True, use_axis_z=True)
+    bm.to_mesh(me); bm.free(); me.update()
+    log(f"surface smooth: {iters} passes @ factor {factor}")
+
 def has_armature_mod(mesh, arm):
     return any(md.type == "ARMATURE" and md.object == arm for md in mesh.modifiers)
 
@@ -159,7 +173,11 @@ def main():
                          "so no bleed into the head and fingers follow the arm (the good result). "
                          "smooth: keep UniRig weights and blur them (bleeds on no-neck characters).")
     ap.add_argument("--polish", type=int, default=0,
-                    help="optional post-boneheat smoothing passes to soften a residual joint crease (0 = none)")
+                    help="optional post-boneheat weight-smoothing passes to soften residual joint creases (0 = none)")
+    ap.add_argument("--smooth-surface", dest="smooth_surface", type=int, default=0,
+                    help="Laplacian vertex-position smoothing passes to remove generation bumps (0 = none)")
+    ap.add_argument("--surface-factor", dest="surface_factor", type=float, default=0.5,
+                    help="strength of each surface-smoothing pass 0..1")
     ap.add_argument("--iters", type=int, default=20, help="smooth-method weight-smoothing passes")
     ap.add_argument("--factor", type=float, default=0.5, help="per-pass smoothing strength 0..1")
     ap.add_argument("--weld", type=float, default=1e-4,
@@ -192,6 +210,10 @@ def main():
     # across the real mesh (on soup, each vert only touches its own triangle).
     if args.weld and args.weld > 0:
         weld_mesh(main_mesh, args.weld)
+
+    # optional: smooth generation bumps out of the surface (positions only; weights preserved)
+    if args.smooth_surface > 0:
+        smooth_surface(main_mesh, args.smooth_surface, args.surface_factor)
 
     wv0 = total_weighted_verts(main_mesh)
     # DEFAULT = boneheat: recompute weights on the now-watertight welded mesh. Bone-heat

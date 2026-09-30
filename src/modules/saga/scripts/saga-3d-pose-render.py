@@ -77,7 +77,8 @@ POSES = {
     "reach":     [("bone_6","x",28),("bone_13","x",28),("bone_4","x",-8)],    # arms up-and-out, clear of head
     "wave":      [("bone_6","x",-55),("bone_13","x",28),("bone_14","x",22)],  # R at side, L raised out + elbow
     "crouch":    [("bone_1","x",12),("bone_6","x",-45),("bone_13","x",-45),
-                  ("bone_20","x",40),("bone_21","x",-60),("bone_24","x",40),("bone_25","x",-60)],
+                  ("bone_20","x",38),("bone_21","x",-55),("bone_22","x",20),    # R hip/knee/ankle
+                  ("bone_24","x",38),("bone_25","x",-55),("bone_26","x",20)],   # L hip/knee/ankle (ankle flattens foot)
     "run":       [("bone_6","x",-30),("bone_13","x",-45),("bone_20","x",35),("bone_24","x",-35),("bone_1","x",10)],
 }
 
