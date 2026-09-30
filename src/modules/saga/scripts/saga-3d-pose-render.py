@@ -39,6 +39,9 @@ def parse_args():
     ap.add_argument("--in", dest="inp", required=True)
     ap.add_argument("--out", default="renders")
     ap.add_argument("--pose", default="rest")
+    ap.add_argument("--label", default="",
+                    help="prefix for every output filename (e.g. a sweep angle) so batch runs into one "
+                         "--out dir never collide when flattened by scp")
     ap.add_argument("--rot", default="")
     ap.add_argument("--cams", default="front,3q_l,3q_r,side_l")
     ap.add_argument("--passes", default="depth,lineart,clay")
@@ -258,7 +261,7 @@ def main():
         if cname not in CAMS: log(f"⚠ unknown cam '{cname}'"); continue
         az,el=CAMS[cname]; place_camera(center,size,az,el)
         for p in passes:
-            tag=f"{args.pose}_{cname}_{p}"; path=os.path.join(outd,tag+".png")
+            tag=f"{args.label}{args.pose}_{cname}_{p}"; path=os.path.join(outd,tag+".png")
             if p=="depth":
                 lineart_compositor(False); set_world((0,0,0)); all_mesh_materials(meshes, depth_mat)
                 near,vfar = view_depth_range(meshes)
