@@ -130,3 +130,7 @@ models/
 # Python bytecode caches
 __pycache__/
 *.pyc
+
+# SAGA pod secrets / local clone (never commit)
+.gh_token
+*.gh_token

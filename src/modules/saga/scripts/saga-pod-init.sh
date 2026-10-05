@@ -23,6 +23,43 @@ if [ -x "$SAGA_ROOT/engine/blender/blender" ]; then
   ln -sf "$SAGA_ROOT/engine/blender/blender" /usr/local/bin/blender 2>/dev/null || true
 fi
 
+# --- repo sync: pull the latest scripts from GitHub so a fresh pod is always current ---
+# Needs a READ-ONLY token on the volume (never committed): create it ONCE with
+#   printf '%s' 'github_pat_xxx' > "$SAGA_ROOT/.gh_token" && chmod 600 "$SAGA_ROOT/.gh_token"
+# (a fine-grained PAT with Contents:Read on GabrielGomez33/dina-server). Or export SAGA_GH_TOKEN.
+# The token is read from that file, used ONLY via a per-command auth header (never written into
+# git config or the remote URL), never echoed, and unset after. Any failure is soft: the pod
+# keeps whatever scripts it already has and still works.
+saga_sync_repo() {
+  local url="https://github.com/GabrielGomez33/dina-server.git"
+  local branch="${SAGA_REPO_BRANCH:-claude/dina-server-analysis-9wjtkc}"
+  local dir="${SAGA_REPO_DIR:-$SAGA_ROOT/repo}"
+  local token="${SAGA_GH_TOKEN:-}"
+  [ -z "$token" ] && [ -f "$SAGA_ROOT/.gh_token" ] && token="$(tr -d '\r\n' < "$SAGA_ROOT/.gh_token" 2>/dev/null)"
+  if [ -z "$token" ]; then
+    echo "  ⚠ repo sync skipped (no token; create \$SAGA_ROOT/.gh_token to enable)"; return 0
+  fi
+  command -v git >/dev/null 2>&1 || { echo "  ⚠ repo sync skipped (git not installed)"; return 0; }
+  local auth; auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')"
+  if [ -d "$dir/.git" ]; then
+    if git -c http.extraheader="$auth" -C "$dir" fetch -q --depth 1 origin "$branch" 2>/dev/null \
+       && git -C "$dir" checkout -q -B "$branch" FETCH_HEAD 2>/dev/null; then
+      echo "  ✓ repo updated ($branch)"
+    else echo "  ⚠ repo update failed — keeping existing scripts"; unset auth token; return 0; fi
+  else
+    if git -c http.extraheader="$auth" clone -q --depth 1 --branch "$branch" "$url" "$dir" 2>/dev/null; then
+      echo "  ✓ repo cloned ($branch)"
+    else echo "  ⚠ repo clone failed (token/network?) — keeping existing scripts"; unset auth token; return 0; fi
+  fi
+  unset auth token
+  local src="$dir/src/modules/saga/scripts"
+  if [ -d "$src" ]; then
+    mkdir -p "$SAGA_ROOT/scripts"
+    if cp -f "$src"/* "$SAGA_ROOT/scripts/" 2>/dev/null; then echo "  ✓ scripts deployed from repo"; fi
+  fi
+}
+saga_sync_repo
+
 # --- system GL libs (ephemeral; required by trellis/nvdiffrast/moderngl/open3d/blender) ---
 # idempotent: only apt-install when libEGL.so.1 is not already resolvable.
 if ldconfig -p 2>/dev/null | grep -q 'libEGL\.so\.1'; then
