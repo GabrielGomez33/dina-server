@@ -57,6 +57,9 @@ def parse_args():
                          "(0 disables). Heals shoulder/armpit pinching & tearing that bad skin "
                          "weights cause when a limb swings far. Proxy only — safe to smooth.")
     ap.add_argument("--smooth-iters", type=int, default=20)
+    ap.add_argument("--subsurf", type=int, default=0,
+                    help="Subdivision-surface levels for a smooth render surface on the "
+                         "low-poly proxy (0=off). Applied last, after corrective smooth.")
     ap.add_argument("--list-poses", action="store_true")
     return ap.parse_args(argv())
 
@@ -384,6 +387,19 @@ def add_corrective_smooth(meshes, factor, iters):
         cs.use_pin_boundary = False
     log(f"corrective-smooth: factor={factor} iters={iters} on {[o.name for o in meshes]}")
 
+def add_subsurf(meshes, levels):
+    """Append a Subdivision Surface modifier (after corrective smooth) so the final
+    render surface is smooth/rounded even on a low-poly proxy. Catmull-Clark; render
+    and viewport levels both set. Off when levels<=0. Added LAST so it polishes the
+    already-smoothed deformation."""
+    if levels <= 0: return
+    for o in meshes:
+        ss = o.modifiers.new("render_subsurf", "SUBSURF")
+        ss.subdivision_type = "CATMULL_CLARK"
+        ss.levels = levels
+        ss.render_levels = levels
+    log(f"subsurf: levels={levels} on {[o.name for o in meshes]}")
+
 def main():
     args = parse_args()
     if args.list_poses:
@@ -408,6 +424,7 @@ def main():
     log(f"armature: {arm.name if arm else 'NONE'}   meshes: {[m.name for m in meshes]}")
     apply_pose(arm, ops)
     add_corrective_smooth(meshes, args.smooth_deform, args.smooth_iters)
+    add_subsurf(meshes, args.subsurf)
     lo,hi = world_bbox(meshes); center=(lo+hi)/2; size=max((hi-lo).x,(hi-lo).y,(hi-lo).z)
     R=cam_radius(size)
     log(f"pose='{args.pose}'{' +rot' if args.rot else ''}  size={size:.2f}  camR={R:.2f}  cams={cams}  passes={passes}")
