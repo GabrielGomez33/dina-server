@@ -80,6 +80,33 @@ POSES = {
                   ("bone_20","x",38),("bone_21","x",-55),("bone_22","x",20),    # R hip/knee/ankle
                   ("bone_24","x",38),("bone_25","x",-55),("bone_26","x",20)],   # L hip/knee/ankle (ankle flattens foot)
     "run":       [("bone_6","x",-30),("bone_13","x",-45),("bone_20","x",35),("bone_24","x",-35),("bone_1","x",10)],
+    # --- action poses (fwd/back arm = local Z: R fwd -Z / L fwd +Z; Z signs & hip-abduction are
+    #     computed best-guesses — expect to flip 1-2 after the first clay render) ---
+    "punch":     [("bone_6","z",-85),                                   # R fist thrust forward
+                  ("bone_13","x",-45),("bone_14","x",-60),              # L arm pulled in (bent guard)
+                  ("bone_1","z",-10)],                                   # slight torso twist
+    "kick":      [("bone_20","x",85),                                    # R leg kicks up/forward
+                  ("bone_6","x",-35),("bone_13","x",-35),               # arms out for balance
+                  ("bone_1","x",-8)],                                    # lean back to counterbalance
+    "karate":    [("bone_6","z",-30),("bone_7","x",-70),                # R guard (fist up front)
+                  ("bone_13","z",30),("bone_14","x",-70),               # L guard
+                  ("bone_20","x",20),("bone_21","x",-35),               # knees bent
+                  ("bone_24","x",20),("bone_25","x",-35)],
+    "karate_stance": [("bone_20","z",25),("bone_21","x",-40),           # wide horse stance (hips abduct)
+                      ("bone_24","z",-25),("bone_25","x",-40),
+                      ("bone_6","z",-30),("bone_7","x",-60),            # guards up
+                      ("bone_13","z",30),("bone_14","x",-60)],
+    "meditate":  [("bone_6","x",-65),("bone_7","x",-25),                # arms rest, elbows drawn in
+                  ("bone_13","x",-65),("bone_14","x",-25),
+                  ("bone_4","x",15)],                                    # head gently bowed
+    "ninja_run": [("bone_1","x",35),                                     # strong forward lean
+                  ("bone_6","z",80),("bone_13","z",-80),                # arms stretched back
+                  ("bone_20","x",45),("bone_21","x",-45),               # R leg forward (stride)
+                  ("bone_24","x",-30),("bone_25","x",-20)],             # L leg back
+    "jump":      [("bone_6","x",28),("bone_13","x",28),                 # arms up-and-out (clear of head)
+                  ("bone_20","x",55),("bone_21","x",-85),               # knees tucked
+                  ("bone_24","x",55),("bone_25","x",-85),
+                  ("bone_1","x",-6)],                                    # slight back arch
 }
 
 LENS, SENSOR = 50.0, 36.0
