@@ -74,6 +74,17 @@ else
   fi
 fi
 
+# --- imagemagick (for contact-sheet montage; ephemeral) — idempotent ---
+if command -v montage >/dev/null 2>&1; then
+  echo "  ✓ imagemagick present"
+else
+  if apt-get install -y --no-install-recommends imagemagick >/dev/null 2>&1; then
+    echo "  ✓ imagemagick installed"
+  else
+    echo "  ⚠ imagemagick install failed — contact sheets will fall back to individual PNGs"
+  fi
+fi
+
 # --- summary so you can see the pod is ready at a glance ---
 echo "✔ SAGA pod ready  (SAGA_ROOT=$SAGA_ROOT, HF_HOME=$HF_HOME)"
 command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | sed 's/^/  GPU:    /'
