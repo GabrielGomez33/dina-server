@@ -150,6 +150,38 @@ def smooth_all_weights(mesh, factor, iters):
             if sel.size:
                 vg.add(sel.tolist(), b / Q, "REPLACE")
 
+def clamp_bone_weights(mesh, bone_names, x_abs):
+    """Zero the named bones' skin weight on central-torso verts (|x| < x_abs in bind
+    pose), then renormalize. Confines shoulder/arm bones whose heads sit inside the
+    chest to the arm, so lifting the arm no longer drags and folds the chest. NumPy,
+    headless-safe. x_abs is in the mesh's own units (the character stands arms-out)."""
+    import numpy as np
+    me = mesh.data
+    nv = len(me.vertices)
+    vgs = list(mesh.vertex_groups)
+    col = {vg.index: k for k, vg in enumerate(vgs)}
+    clampcols = [k for k, vg in enumerate(vgs) if vg.name in set(bone_names)]
+    if not clampcols:
+        log(f"⚠ clamp: none of {bone_names} found as vertex groups"); return
+    W = np.zeros((nv, len(vgs)), np.float32)
+    for v in me.vertices:
+        for g in v.groups:
+            c = col.get(g.group)
+            if c is not None: W[v.index, c] = g.weight
+    co = np.empty(nv * 3); me.vertices.foreach_get("co", co); X = co.reshape(-1, 3)[:, 0]
+    inb = np.abs(X) < x_abs
+    W[np.ix_(inb, clampcols)] = 0.0
+    rs = W.sum(1, keepdims=True); nz = rs[:, 0] > 1e-8; W[nz] = W[nz] / rs[nz]
+    ai = list(range(nv))
+    for vg in vgs: vg.remove(ai)
+    Wq = np.rint(W * 255).astype(np.int32); ar = np.arange(nv)
+    for c, vg in enumerate(vgs):
+        wc = Wq[:, c]
+        for b in range(1, 256):
+            sel = ar[wc == b]
+            if sel.size: vg.add(sel.tolist(), b / 255, "REPLACE")
+    log(f"clamp {list(bone_names)} off central torso: {int(inb.sum())} verts cleared (|x|<{x_abs})")
+
 def bone_heat(mesh, arm):
     """Fallback for a raw mesh with no incoming weights."""
     mesh.vertex_groups.clear()
@@ -204,6 +236,12 @@ def main():
     ap.add_argument("--remesh", type=float, default=0.0,
                     help="voxel size for a watertight voxel-remesh after welding (0 = off; "
                          "~0.012 keeps thin antennae/fingers while killing seams/cracks and bumps)")
+    ap.add_argument("--clamp-arms", dest="clamp_arms", default="",
+                    help="comma bone names whose weight is removed from the central torso "
+                         "(e.g. the shoulder bones that sit inside the chest), to stop arm motion "
+                         "dragging/folding the chest, e.g. 'bone_6,bone_13'")
+    ap.add_argument("--clamp-x", dest="clamp_x", type=float, default=0.3,
+                    help="|x| below which --clamp-arms bones are cleared (bind-pose units)")
     args = ap.parse_args(argv())
     inp = os.path.abspath(args.inp)
     out = os.path.abspath(args.out) if args.out else os.path.splitext(inp)[0] + "_reskinned.glb"
@@ -260,6 +298,11 @@ def main():
             mod = main_mesh.modifiers.new(name="Armature", type="ARMATURE"); mod.object = arm
         log(f"smoothing existing UniRig weights: factor={args.factor} iters={args.iters}")
         smooth_all_weights(main_mesh, args.factor, args.iters)
+
+    # targeted clamp: pull shoulder/arm bones off the central torso so arm motion
+    # doesn't drag and fold the chest (their heads sit inside the chest on this character)
+    if args.clamp_arms.strip():
+        clamp_bone_weights(main_mesh, [b.strip() for b in args.clamp_arms.split(",") if b.strip()], args.clamp_x)
 
     wv1 = total_weighted_verts(main_mesh)
     log(f"after reskin: {wv1}/{len(main_mesh.data.vertices)} verts weighted")
