@@ -41,7 +41,7 @@ FLUX_CN="${FLUX_CN:-flux-union-pro.safetensors}"
 
 OUT="saga_flux"; SEED=0; W=768; H=1344; STEPS=20; GUIDANCE=3.5; CFG=1.0; BATCH=1
 PROMPT=""; NEG=""; ANCHOR=""; REDUX_STR="0.6"
-POSE=""; POSE_TYPE="openpose"; POSE_STR="0.7"; POSE_RAW=0
+POSE=""; POSE_TYPE="openpose"; POSE_STR="0.7"; POSE_RAW=0; POSE_END="1.0"
 LORA=""; LORA_STR="0.9"
 INIT=""; DENOISE="1.0"
 DUMP=0; CHECK=0
@@ -54,6 +54,7 @@ while [ $# -gt 0 ]; do case "$1" in
   -a|--anchor) ANCHOR="$2"; shift 2;;  --redux-strength) REDUX_STR="$2"; shift 2;;
   --pose) POSE="$2"; shift 2;;  --pose-type) POSE_TYPE="$2"; shift 2;;
   --pose-strength) POSE_STR="$2"; shift 2;;  --pose-raw) POSE_RAW=1; shift;;
+  --pose-end) POSE_END="$2"; shift 2;;
   --lora) LORA="$2"; shift 2;;  --lora-strength) LORA_STR="$2"; shift 2;;
   --init) INIT="$2"; shift 2;;  --denoise) DENOISE="$2"; shift 2;;
   --steps) STEPS="$2"; shift 2;;  --guidance) GUIDANCE="$2"; shift 2;;  --cfg) CFG="$2"; shift 2;;
@@ -139,7 +140,7 @@ if [ -n "$POSE" ]; then
  "20":{"class_type":"ControlNetLoader","inputs":{"control_net_name":"'"$FLUX_CN"'"}},
  "21":{"class_type":"SetUnionControlNetType","inputs":{"control_net":["20",0],"type":"'"$POSE_TYPE"'"}},
  "22":{"class_type":"LoadImage","inputs":{"image":"'"$PZ"'"}}'"$PRE"',
- "24":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["3",0],"negative":'"$NEG_BASE"',"control_net":["21",0],"image":'"$local_cn_img"',"vae":["1",2],"strength":'"$POSE_STR"',"start_percent":0.0,"end_percent":1.0}}'
+ "24":{"class_type":"ControlNetApplyAdvanced","inputs":{"positive":["3",0],"negative":'"$NEG_BASE"',"control_net":["21",0],"image":'"$local_cn_img"',"vae":["1",2],"strength":'"$POSE_STR"',"start_percent":0.0,"end_percent":'"$POSE_END"'}}'
   KS_POS='["24",0]'; KS_NEG='["24",1]'
 fi
 
