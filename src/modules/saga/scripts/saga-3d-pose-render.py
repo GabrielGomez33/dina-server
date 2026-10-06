@@ -43,6 +43,11 @@ def parse_args():
                     help="prefix for every output filename (e.g. a sweep angle) so batch runs into one "
                          "--out dir never collide when flattened by scp")
     ap.add_argument("--rot", default="")
+    ap.add_argument("--aim", default="",
+                    help="ad-hoc AIM calibration, applied on top of --pose, as "
+                         "'bone:x,y,z;bone:x,y,z' — each bone's head->tail is swung to "
+                         "point along WORLD dir (x,y,z) [+X=right,-Y=forward,+Z=up]. "
+                         "Use to validate one bone before trusting a full pose.")
     ap.add_argument("--cams", default="front,3q_l,3q_r,side_l")
     ap.add_argument("--passes", default="depth,lineart,clay")
     ap.add_argument("--res", type=int, default=768)
@@ -181,18 +186,33 @@ def world_bbox(meshes):
 FINGERS = {"R": ["bone_9","bone_10","bone_11","bone_12"],
            "L": ["bone_16","bone_17","bone_18","bone_19"]}
 
-def _aim(arm, name, tgt_world, roll_axis="Z"):
-    """Rotate pose bone `name` so its head→tail points along tgt_world (a direction
-    in WORLD space: +X=char-right, -Y=forward/face, +Z=up). Deterministic — computes
-    the bone orientation directly instead of guessing Euler signs. Call parent→child
-    (we do, via the op order) with an update between so chains follow."""
+def _aim(arm, name, tgt_world, _roll="Z"):
+    """Swing pose bone `name` so its head→tail points along tgt_world (a direction in
+    WORLD space: +X=char-right, -Y=forward/face, +Z=up).
+
+    Uses a SHORTEST-ARC rotation (rotation_difference) from the bone's CURRENT
+    direction to the target, applied about the bone's head. This is critical:
+      • it only swings the bone the minimal amount, so it NEVER flips a limb
+        upside-down (the failure to_track_quat('Y','Z') hit on down-pointing legs);
+      • it preserves the bone's existing ROLL, so no twist is injected into the skin
+        — that twist was what cracked the torso/belly open.
+    Call parent→child (op order does) with a view-layer update between so the child
+    reads its parent's new pose before swinging."""
     pb = arm.pose.bones.get(name)
     if pb is None: log(f"⚠ no bone '{name}'"); return
     Rinv = arm.matrix_world.to_3x3().inverted()
-    t = (Rinv @ Vector(tgt_world)).normalized()          # target in armature space
-    head = pb.matrix.to_translation()
-    q = t.to_track_quat('Y', roll_axis)                  # align bone +Y (length) to t
-    pb.matrix = Matrix.Translation(head) @ q.to_matrix().to_4x4()
+    t = (Rinv @ Vector(tgt_world)).normalized()          # target dir, armature space
+    M = pb.matrix.copy()
+    head = M.to_translation()
+    cur = (M.to_3x3() @ Vector((0, 1, 0))).normalized()  # bone's current length (+Y) axis
+    if cur.dot(t) < -0.9999:                              # antiparallel: pick any ⊥ axis
+        axis = cur.cross(Vector((1, 0, 0)))
+        if axis.length < 1e-6: axis = cur.cross(Vector((0, 0, 1)))
+        rot = Matrix.Rotation(math.pi, 4, axis.normalized())
+    else:
+        rot = cur.rotation_difference(t).to_matrix().to_4x4()  # minimal swing cur→t
+    # rotate the bone about its head: translate head→origin, rotate, translate back
+    pb.matrix = Matrix.Translation(head) @ rot @ Matrix.Translation(-head) @ M
     bpy.context.view_layer.update()
 
 def apply_pose(arm, ops):
@@ -353,6 +373,12 @@ def main():
     if args.rot:
         for tok in args.rot.split(","):
             b,spec=tok.split(":"); ops.append((b, spec[0].lower(), float(spec[1:])))
+    if args.aim:
+        for tok in args.aim.split(";"):
+            tok=tok.strip()
+            if not tok: continue
+            b,vec=tok.split(":"); x,y,z=(float(c) for c in vec.split(","))
+            ops.append(("aim", b, (x,y,z)))
     cams=[c.strip() for c in args.cams.split(",") if c.strip()]
     passes=[p.strip() for p in args.passes.split(",") if p.strip()]
 
