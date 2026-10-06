@@ -52,6 +52,11 @@ def parse_args():
     ap.add_argument("--passes", default="depth,lineart,clay")
     ap.add_argument("--res", type=int, default=768)
     ap.add_argument("--samples", type=int, default=24)
+    ap.add_argument("--smooth-deform", type=float, default=0.65,
+                    help="Corrective-Smooth factor applied to the DEFORMED mesh before render "
+                         "(0 disables). Heals shoulder/armpit pinching & tearing that bad skin "
+                         "weights cause when a limb swings far. Proxy only — safe to smooth.")
+    ap.add_argument("--smooth-iters", type=int, default=20)
     ap.add_argument("--list-poses", action="store_true")
     return ap.parse_args(argv())
 
@@ -364,6 +369,21 @@ def render_to(path, res, samples):
     scene.render.filepath=path
     bpy.ops.render.render(write_still=True)
 
+def add_corrective_smooth(meshes, factor, iters):
+    """Append a Corrective Smooth modifier AFTER the armature so it operates on the
+    DEFORMED surface, smoothing out deform-induced pinching/tearing (shoulder, armpit,
+    belly creases) while holding the rest shape as reference. ORCO = the mesh's original
+    (bind) coordinates, so the correction is measured against the undeformed proxy."""
+    if factor <= 0: return
+    for o in meshes:
+        cs = o.modifiers.new("deform_smooth", "CORRECTIVE_SMOOTH")
+        cs.smooth_type   = "LENGTH_WEIGHTED"   # resists collapse/shrink better than simple
+        cs.rest_source   = "ORCO"              # undeformed verts as the reference shape
+        cs.factor        = factor
+        cs.iterations    = iters
+        cs.use_pin_boundary = False
+    log(f"corrective-smooth: factor={factor} iters={iters} on {[o.name for o in meshes]}")
+
 def main():
     args = parse_args()
     if args.list_poses:
@@ -387,6 +407,7 @@ def main():
     if not meshes: log("❌ no mesh imported"); sys.exit(1)
     log(f"armature: {arm.name if arm else 'NONE'}   meshes: {[m.name for m in meshes]}")
     apply_pose(arm, ops)
+    add_corrective_smooth(meshes, args.smooth_deform, args.smooth_iters)
     lo,hi = world_bbox(meshes); center=(lo+hi)/2; size=max((hi-lo).x,(hi-lo).y,(hi-lo).z)
     R=cam_radius(size)
     log(f"pose='{args.pose}'{' +rot' if args.rot else ''}  size={size:.2f}  camR={R:.2f}  cams={cams}  passes={passes}")
