@@ -23,7 +23,8 @@ if [ -f "$SAGA_ROOT/scripts/saga-pod-init.sh" ]; then
 fi
 
 GLB="${1:-}"
-[ -z "$GLB" ] && GLB="$(ls -t "$SAGA_ROOT"/*reskinned*.glb "$SAGA_ROOT"/*rigged*.glb 2>/dev/null | head -1)"
+# discover the newest rigged/reskinned mesh anywhere under SAGA_ROOT (recursive)
+[ -z "$GLB" ] && GLB="$(find "$SAGA_ROOT" -maxdepth 4 \( -iname '*reskinned*.glb' -o -iname '*rigged*.glb' \) -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-)"
 POSES="${2:-rest arms_down punch kick karate karate_stance meditate ninja_run jump}"
 RES="${RES:-1024}"
 SMOOTH="${SMOOTH:-0.65}"
