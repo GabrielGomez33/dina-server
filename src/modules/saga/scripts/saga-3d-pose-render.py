@@ -28,7 +28,7 @@
 # armR=6..9; armL=10..13; legR=14..17; legL=18..21.
 # ============================================================================
 import bpy, sys, os, math
-from mathutils import Vector
+from mathutils import Vector, Matrix
 
 def argv():
     return sys.argv[sys.argv.index("--")+1:] if "--" in sys.argv else []
@@ -80,33 +80,68 @@ POSES = {
                   ("bone_20","x",38),("bone_21","x",-55),("bone_22","x",20),    # R hip/knee/ankle
                   ("bone_24","x",38),("bone_25","x",-55),("bone_26","x",20)],   # L hip/knee/ankle (ankle flattens foot)
     "run":       [("bone_6","x",-30),("bone_13","x",-45),("bone_20","x",35),("bone_24","x",-35),("bone_1","x",10)],
-    # --- action poses (fwd/back arm = local Z: R fwd -Z / L fwd +Z; Z signs & hip-abduction are
-    #     computed best-guesses — expect to flip 1-2 after the first clay render) ---
-    "punch":     [("bone_6","z",-85),                                   # R fist thrust forward
-                  ("bone_13","x",-45),("bone_14","x",-60),              # L arm pulled in (bent guard)
-                  ("bone_1","z",-10)],                                   # slight torso twist
-    "kick":      [("bone_20","x",85),                                    # R leg kicks up/forward
-                  ("bone_6","x",-35),("bone_13","x",-35),               # arms out for balance
-                  ("bone_1","x",-8)],                                    # lean back to counterbalance
-    "karate":    [("bone_6","z",-30),("bone_7","x",-70),                # R guard (fist up front)
-                  ("bone_13","z",30),("bone_14","x",-70),               # L guard
-                  ("bone_20","x",20),("bone_21","x",-35),               # knees bent
-                  ("bone_24","x",20),("bone_25","x",-35)],
-    "karate_stance": [("bone_20","z",25),("bone_21","x",-40),           # wide horse stance (hips abduct)
-                      ("bone_24","z",-25),("bone_25","x",-40),
-                      ("bone_6","z",-30),("bone_7","x",-60),            # guards up
-                      ("bone_13","z",30),("bone_14","x",-60)],
-    "meditate":  [("bone_6","x",-65),("bone_7","x",-25),                # arms rest, elbows drawn in
-                  ("bone_13","x",-65),("bone_14","x",-25),
-                  ("bone_4","x",15)],                                    # head gently bowed
-    "ninja_run": [("bone_1","x",35),                                     # strong forward lean
-                  ("bone_6","z",80),("bone_13","z",-80),                # arms stretched back
-                  ("bone_20","x",45),("bone_21","x",-45),               # R leg forward (stride)
-                  ("bone_24","x",-30),("bone_25","x",-20)],             # L leg back
-    "jump":      [("bone_6","x",28),("bone_13","x",28),                 # arms up-and-out (clear of head)
-                  ("bone_20","x",55),("bone_21","x",-85),               # knees tucked
-                  ("bone_24","x",55),("bone_25","x",-85),
-                  ("bone_1","x",-6)],                                    # slight back arch
+    # --- action poses, authored with AIM: ("aim", bone, (x,y,z)) points that bone's
+    #     head->tail along a WORLD direction (+X=char-right, -Y=forward/face, +Z=up).
+    #     Emulates real pose geometry (limb by limb) instead of guessing Euler signs.
+    #     ("fist","R"/"L") curls the finger bones. Ops run parent->child in order. ---
+    "punch":     [("aim","bone_6",(0.10,-1.0, 0.00)),   # R upper arm thrusts forward
+                  ("aim","bone_7",(0.05,-1.0, 0.00)),   # R forearm straight (full extension)
+                  ("aim","bone_8",(0.00,-1.0, 0.00)),   # R hand forward
+                  ("fist","R"),
+                  ("aim","bone_13",(-0.35,0.35,-0.55)), # L arm chambered back/down at the ribs
+                  ("aim","bone_14",(-0.10,-0.45,0.20)),
+                  ("fist","L"),
+                  ("bone_1","z",-12)],                   # torso twists into the punch
+    "kick":      [("aim","bone_20",(0.0,-0.75, 0.45)),  # R thigh drives up & forward
+                  ("aim","bone_21",(0.0,-1.0,  0.15)),  # R shin snaps straight out (front kick)
+                  ("aim","bone_22",(0.0,-1.0, -0.20)),  # R foot pointed
+                  ("aim","bone_6",( 0.5, 0.1,-0.60)),   # arms counter-balance
+                  ("aim","bone_13",(-0.4,-0.3,-0.45)),
+                  ("bone_1","x",-8)],                    # slight back lean
+    "karate":    [("aim","bone_6",( 0.25,-0.5,-0.30)),  # R guard: upper arm fwd/down,
+                  ("aim","bone_7",( 0.15,-0.4, 0.60)),  #          forearm up -> fist by the face
+                  ("fist","R"),
+                  ("aim","bone_13",(-0.25,-0.5,-0.30)),
+                  ("aim","bone_14",(-0.15,-0.4, 0.60)),
+                  ("fist","L"),
+                  ("aim","bone_20",( 0.25,-0.3,-0.90)), # feet apart, knees softly bent
+                  ("aim","bone_21",( 0.10,-0.1,-1.00)),
+                  ("aim","bone_24",(-0.25,-0.3,-0.90)),
+                  ("aim","bone_25",(-0.10,-0.1,-1.00))],
+    "karate_stance": [("aim","bone_20",( 0.75,0.0,-0.70)),  # horse stance: thighs out & down,
+                      ("aim","bone_21",( 0.10,0.0,-1.00)),  #               shins vertical (deep)
+                      ("aim","bone_24",(-0.75,0.0,-0.70)),
+                      ("aim","bone_25",(-0.10,0.0,-1.00)),
+                      ("aim","bone_6",( 0.30,-0.2,-0.90)),  # fists chambered at the sides
+                      ("aim","bone_7",( 0.20,-0.6, 0.10)),
+                      ("fist","R"),
+                      ("aim","bone_13",(-0.30,-0.2,-0.90)),
+                      ("aim","bone_14",(-0.20,-0.6, 0.10)),
+                      ("fist","L")],
+    "meditate":  [("aim","bone_20",( 0.60,-0.5,-0.55)), # cross-legged: thighs out-forward,
+                  ("aim","bone_21",(-0.90,-0.35,-0.10)),#   R shin crosses to the LEFT in front
+                  ("aim","bone_24",(-0.60,-0.5,-0.55)),
+                  ("aim","bone_25",( 0.90,-0.35,-0.10)),#   L shin crosses to the RIGHT
+                  ("aim","bone_6",( 0.25,-0.4,-0.85)),  # hands rest toward the lap
+                  ("aim","bone_7",(-0.20,-0.6,-0.30)),
+                  ("aim","bone_13",(-0.25,-0.4,-0.85)),
+                  ("aim","bone_14",( 0.20,-0.6,-0.30)),
+                  ("aim","bone_4",(0.0,-0.35,0.90))],    # head gently bowed
+    "ninja_run": [("bone_1","x",40),                     # strong forward lean of the torso
+                  ("aim","bone_6",( 0.20,1.0,0.20)),     # arms swept straight back
+                  ("aim","bone_7",( 0.10,1.0,0.20)),
+                  ("aim","bone_13",(-0.20,1.0,0.20)),
+                  ("aim","bone_14",(-0.10,1.0,0.20)),
+                  ("aim","bone_20",(0.0,-0.7,-0.55)),    # R leg strides forward
+                  ("aim","bone_21",(0.0,-0.5,-0.85)),
+                  ("aim","bone_24",(0.0, 0.6,-0.60)),    # L leg trails back
+                  ("aim","bone_25",(0.0, 0.35,-0.90))],
+    "jump":      [("aim","bone_6",( 0.5,-0.1,0.85)),     # arms up & out (clear of the head)
+                  ("aim","bone_13",(-0.5,-0.1,0.85)),
+                  ("aim","bone_20",(0.0,-0.45,0.35)),    # knees tucked up
+                  ("aim","bone_21",(0.0, 0.30,-0.75)),
+                  ("aim","bone_24",(0.0,-0.45,0.35)),
+                  ("aim","bone_25",(0.0, 0.30,-0.75))],
 }
 
 LENS, SENSOR = 50.0, 36.0
@@ -142,17 +177,51 @@ def world_bbox(meshes):
             hi = Vector((max(hi.x,w.x),max(hi.y,w.y),max(hi.z,w.z)))
     return lo, hi
 
+# Finger bones per hand (UniRig alien) — curled for a FIST.
+FINGERS = {"R": ["bone_9","bone_10","bone_11","bone_12"],
+           "L": ["bone_16","bone_17","bone_18","bone_19"]}
+
+def _aim(arm, name, tgt_world, roll_axis="Z"):
+    """Rotate pose bone `name` so its head→tail points along tgt_world (a direction
+    in WORLD space: +X=char-right, -Y=forward/face, +Z=up). Deterministic — computes
+    the bone orientation directly instead of guessing Euler signs. Call parent→child
+    (we do, via the op order) with an update between so chains follow."""
+    pb = arm.pose.bones.get(name)
+    if pb is None: log(f"⚠ no bone '{name}'"); return
+    Rinv = arm.matrix_world.to_3x3().inverted()
+    t = (Rinv @ Vector(tgt_world)).normalized()          # target in armature space
+    head = pb.matrix.to_translation()
+    q = t.to_track_quat('Y', roll_axis)                  # align bone +Y (length) to t
+    pb.matrix = Matrix.Translation(head) @ q.to_matrix().to_4x4()
+    bpy.context.view_layer.update()
+
 def apply_pose(arm, ops):
     if arm is None: return
+    from mathutils import Vector, Matrix  # local alias in case module import differs
     bpy.context.view_layer.objects.active = arm
     bpy.ops.object.mode_set(mode="POSE")
     for pb in arm.pose.bones:
         pb.rotation_mode = "XYZ"; pb.rotation_euler = (0,0,0)
+    bpy.context.view_layer.update()
     ax = {"x":0,"y":1,"z":2}
-    for bone, axis, deg in ops:
-        pb = arm.pose.bones.get(bone)
-        if pb is None: log(f"⚠ no bone '{bone}'"); continue
-        e = list(pb.rotation_euler); e[ax[axis]] += math.radians(deg); pb.rotation_euler = e
+    for op in ops:
+        tag = op[0]
+        if tag == "aim":                                  # ("aim", bone, (x,y,z)[, rollaxis])
+            _aim(arm, op[1], op[2], op[3] if len(op) > 3 else "Z")
+        elif tag == "fist":                               # ("fist", "R"|"L"[, deg])
+            deg = op[2] if len(op) > 2 else -80
+            for b in FINGERS.get(op[1], []):
+                pb = arm.pose.bones.get(b)
+                if pb is None: continue
+                pb.rotation_mode = "XYZ"
+                e = list(pb.rotation_euler); e[0] += math.radians(deg); pb.rotation_euler = e
+            bpy.context.view_layer.update()
+        else:                                             # (bone, axis, deg) explicit local rot
+            bone, axis, deg = op
+            pb = arm.pose.bones.get(bone)
+            if pb is None: log(f"⚠ no bone '{bone}'"); continue
+            e = list(pb.rotation_euler); e[ax[axis]] += math.radians(deg); pb.rotation_euler = e
+            bpy.context.view_layer.update()
     bpy.ops.object.mode_set(mode="OBJECT")
     bpy.context.view_layer.update()
 
