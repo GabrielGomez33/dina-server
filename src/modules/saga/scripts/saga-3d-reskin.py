@@ -49,6 +49,25 @@ def weld_mesh(mesh, eps):
     log(f"weld (merge-by-distance eps={eps}): {before} → {after} verts")
     return before, after
 
+def voxel_remesh(mesh, voxel):
+    """Rebuild the surface as a GUARANTEED watertight manifold via voxel remesh.
+    A volumetric re-surface cannot preserve a seam/crack/hole (they're re-filled
+    from the solid), so it permanently eliminates the TRELLIS front/back seam that
+    tears open when posed — and smooths generation bumps in the same step. New
+    uniform topology; the armature modifier + vertex groups are dropped here and
+    recomputed by bone-heat afterwards. Headless-safe (modifier_apply on the
+    active object). Smaller voxel = more detail (keep thin antennae/fingers)."""
+    for md in list(mesh.modifiers):
+        mesh.modifiers.remove(md)
+    mesh.vertex_groups.clear()
+    bpy.ops.object.select_all(action="DESELECT")
+    mesh.select_set(True); bpy.context.view_layer.objects.active = mesh
+    mod = mesh.modifiers.new(name="Remesh", type="REMESH")
+    mod.mode = "VOXEL"; mod.voxel_size = voxel; mod.use_smooth_shade = True
+    before = len(mesh.data.vertices)
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+    log(f"voxel remesh @ {voxel}: {before} -> {len(mesh.data.vertices)} verts (watertight)")
+
 def smooth_surface(mesh, iters, factor=0.5):
     """Laplacian smoothing of VERTEX POSITIONS to knock down the raw TRELLIS
     generation bumps for a cleaner depth/lineart control signal. Topology is
@@ -182,6 +201,9 @@ def main():
     ap.add_argument("--factor", type=float, default=0.5, help="per-pass smoothing strength 0..1")
     ap.add_argument("--weld", type=float, default=1e-4,
                     help="merge-by-distance epsilon to repair UniRig triangle-soup (0 = skip welding)")
+    ap.add_argument("--remesh", type=float, default=0.0,
+                    help="voxel size for a watertight voxel-remesh after welding (0 = off; "
+                         "~0.012 keeps thin antennae/fingers while killing seams/cracks and bumps)")
     args = ap.parse_args(argv())
     inp = os.path.abspath(args.inp)
     out = os.path.abspath(args.out) if args.out else os.path.splitext(inp)[0] + "_reskinned.glb"
@@ -210,6 +232,11 @@ def main():
     # across the real mesh (on soup, each vert only touches its own triangle).
     if args.weld and args.weld > 0:
         weld_mesh(main_mesh, args.weld)
+
+    # optional: voxel-remesh to a guaranteed watertight manifold (kills seams/cracks/holes
+    # and bumps). Drops weights → recomputed by bone-heat below. Do it before smoothing.
+    if args.remesh and args.remesh > 0:
+        voxel_remesh(main_mesh, args.remesh)
 
     # optional: smooth generation bumps out of the surface (positions only; weights preserved)
     if args.smooth_surface > 0:
