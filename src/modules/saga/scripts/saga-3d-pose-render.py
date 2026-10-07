@@ -84,77 +84,80 @@ CAMS = {
 #   arm lower  ≳ -60  (hand stays clear of the belly)
 #   spine/neck bends kept gentle so the thin neck doesn't crease/self-intersect.
 # +X raises an arm, -X lowers it (both shoulders same sign: bone_6 R, bone_13 L).
+# ALIEN rig — pose library authored from the MEASURED aim→result map (saga-3d-aimcal.sh)
+# and the rig geometry (saga-3d-rig-inspect.py). Every action pose uses AIM:
+#   ("aim", bone, (x,y,z)) swings that bone's head→tail to point along a WORLD direction
+#   — +X=char-right, −Y=forward/face, +Z=up — via a shortest-arc rotation (no flip/twist).
+# Confirmed bone response:
+#   ARM upper bone_6(R)/bone_13(L): Yf→forward, Yb→back, Xr/Xl→out/across, Zu→up, Zd→down;
+#     forearm bone_7/14, hand bone_8/15, fingers 9-12/16-19 (curled by the "fist" op).
+#   LEG thigh bone_20(R)/bone_24(L): Yf→knee lifts forward, Xr/Xl→abduct/adduct, Yb→back,
+#     Zd→down; shin bone_21/25, foot bone_22/26, toe bone_23/27.  spine bone_1, head bone_4.
+# Ops run parent→child in order (view layer updates between), so chains follow.
 POSES = {
     "rest":      [],                                             # T-pose (bind)
-    "arms_down": [("bone_6","x",-58),("bone_13","x",-58)],       # relaxed at sides, clear of belly
-    "reach":     [("bone_6","x",28),("bone_13","x",28),("bone_4","x",-8)],    # arms up-and-out, clear of head
-    "wave":      [("bone_6","x",-55),("bone_13","x",28),("bone_14","x",22)],  # R at side, L raised out + elbow
+    "arms_down": [("aim","bone_6",( 0.35,0.0,-1.0)),("aim","bone_7",( 0.25,0.0,-1.0)),("aim","bone_8",( 0.15,0.0,-1.0)),
+                  ("aim","bone_13",(-0.35,0.0,-1.0)),("aim","bone_14",(-0.25,0.0,-1.0)),("aim","bone_15",(-0.15,0.0,-1.0))],
+    "reach":     [("bone_6","x",28),("bone_13","x",28),("bone_4","x",-8)],    # (euler; untouched)
+    "wave":      [("bone_6","x",-55),("bone_13","x",28),("bone_14","x",22)],  # (euler; untouched)
     "crouch":    [("bone_1","x",12),("bone_6","x",-45),("bone_13","x",-45),
-                  ("bone_20","x",38),("bone_21","x",-55),("bone_22","x",20),    # R hip/knee/ankle
-                  ("bone_24","x",38),("bone_25","x",-55),("bone_26","x",20)],   # L hip/knee/ankle (ankle flattens foot)
+                  ("bone_20","x",38),("bone_21","x",-55),("bone_22","x",20),
+                  ("bone_24","x",38),("bone_25","x",-55),("bone_26","x",20)],
     "run":       [("bone_6","x",-30),("bone_13","x",-45),("bone_20","x",35),("bone_24","x",-35),("bone_1","x",10)],
-    # --- action poses, authored with AIM: ("aim", bone, (x,y,z)) points that bone's
-    #     head->tail along a WORLD direction (+X=char-right, -Y=forward/face, +Z=up).
-    #     Emulates real pose geometry (limb by limb) instead of guessing Euler signs.
-    #     ("fist","R"/"L") curls the finger bones. Ops run parent->child in order. ---
-    "punch":     [("aim","bone_6",(0.10,-1.0, 0.00)),   # R upper arm thrusts forward
-                  ("aim","bone_7",(0.05,-1.0, 0.00)),   # R forearm straight (full extension)
-                  ("aim","bone_8",(0.00,-1.0, 0.00)),   # R hand forward
+    # --- action poses (aim, calibrated) ---
+    "punch":     [("aim","bone_6",( 0.12,-1.0, 0.0)),   # R arm thrusts straight forward (Yf)
+                  ("aim","bone_7",( 0.06,-1.0, 0.0)),   #   forearm forward = full extension
+                  ("aim","bone_8",( 0.0, -1.0, 0.0)),("fist","R"),
+                  ("aim","bone_13",(-0.35,0.55,-0.45)), # L fist chambered back at the ribs
+                  ("aim","bone_14",(-0.12,-0.5, 0.2)),("fist","L")],
+    "kick":      [("aim","bone_20",( 0.0,-1.0, 0.35)),  # R thigh drives knee up & forward (Yf+up)
+                  ("aim","bone_21",( 0.0,-1.0, 0.0)),   #   shin snaps straight out (front kick)
+                  ("aim","bone_22",( 0.0,-1.0,-0.15)),  #   foot pointed
+                  ("aim","bone_6",( 0.35,0.45,-0.45)),  # R arm back, L arm guards forward
+                  ("aim","bone_13",(-0.25,-0.6,-0.25)),("fist","L")],
+    "karate":    [("aim","bone_6",( 0.22,-0.45,-0.35)), # guard: upper arms fwd/down,
+                  ("aim","bone_7",( 0.10,-0.35, 0.85)), #   forearms up -> fists by the face
                   ("fist","R"),
-                  ("aim","bone_13",(-0.35,0.35,-0.55)), # L arm chambered back/down at the ribs
-                  ("aim","bone_14",(-0.10,-0.45,0.20)),
-                  ("fist","L"),
-                  ("bone_1","z",-12)],                   # torso twists into the punch
-    "kick":      [("aim","bone_20",(0.0,-0.75, 0.45)),  # R thigh drives up & forward
-                  ("aim","bone_21",(0.0,-1.0,  0.15)),  # R shin snaps straight out (front kick)
-                  ("aim","bone_22",(0.0,-1.0, -0.20)),  # R foot pointed
-                  ("aim","bone_6",( 0.5, 0.1,-0.60)),   # arms counter-balance
-                  ("aim","bone_13",(-0.4,-0.3,-0.45)),
-                  ("bone_1","x",-8)],                    # slight back lean
-    "karate":    [("aim","bone_6",( 0.25,-0.5,-0.30)),  # R guard: upper arm fwd/down,
-                  ("aim","bone_7",( 0.15,-0.4, 0.60)),  #          forearm up -> fist by the face
-                  ("fist","R"),
-                  ("aim","bone_13",(-0.25,-0.5,-0.30)),
-                  ("aim","bone_14",(-0.15,-0.4, 0.60)),
-                  ("fist","L"),
-                  ("aim","bone_20",( 0.25,-0.3,-0.90)), # feet apart, knees softly bent
-                  ("aim","bone_21",( 0.10,-0.1,-1.00)),
-                  ("aim","bone_24",(-0.25,-0.3,-0.90)),
-                  ("aim","bone_25",(-0.10,-0.1,-1.00))],
-    "karate_stance": [("aim","bone_20",( 0.75,0.0,-0.70)),  # horse stance: thighs out & down,
-                      ("aim","bone_21",( 0.10,0.0,-1.00)),  #               shins vertical (deep)
-                      ("aim","bone_24",(-0.75,0.0,-0.70)),
-                      ("aim","bone_25",(-0.10,0.0,-1.00)),
-                      ("aim","bone_6",( 0.30,-0.2,-0.90)),  # fists chambered at the sides
-                      ("aim","bone_7",( 0.20,-0.6, 0.10)),
-                      ("fist","R"),
-                      ("aim","bone_13",(-0.30,-0.2,-0.90)),
-                      ("aim","bone_14",(-0.20,-0.6, 0.10)),
-                      ("fist","L")],
+                  ("aim","bone_13",(-0.22,-0.45,-0.35)),
+                  ("aim","bone_14",(-0.10,-0.35, 0.85)),("fist","L"),
+                  ("aim","bone_20",( 0.32,-0.25,-0.90)),# feet apart, knees softly bent
+                  ("aim","bone_21",( 0.12,-0.10,-1.0)),
+                  ("aim","bone_24",(-0.32,-0.25,-0.90)),
+                  ("aim","bone_25",(-0.12,-0.10,-1.0))],
+    "karate_stance": [("aim","bone_20",( 0.70,0.0,-0.72)), # horse stance: thighs wide & down,
+                      ("aim","bone_21",( 0.15,0.0,-1.0)),  #   shins near-vertical (deep bend)
+                      ("aim","bone_24",(-0.70,0.0,-0.72)),
+                      ("aim","bone_25",(-0.15,0.0,-1.0)),
+                      ("aim","bone_6",( 0.30,-0.2,-0.88)), # fists chambered at the hips
+                      ("aim","bone_7",( 0.20,-0.70,0.15)),("fist","R"),
+                      ("aim","bone_13",(-0.30,-0.2,-0.88)),
+                      ("aim","bone_14",(-0.20,-0.70,0.15)),("fist","L")],
     "meditate":  [("aim","bone_20",( 0.60,-0.5,-0.55)), # cross-legged: thighs out-forward,
-                  ("aim","bone_21",(-0.90,-0.35,-0.10)),#   R shin crosses to the LEFT in front
+                  ("aim","bone_21",(-0.95,-0.35,-0.05)),#   R shin crosses LEFT in front (Xl)
                   ("aim","bone_24",(-0.60,-0.5,-0.55)),
-                  ("aim","bone_25",( 0.90,-0.35,-0.10)),#   L shin crosses to the RIGHT
-                  ("aim","bone_6",( 0.25,-0.4,-0.85)),  # hands rest toward the lap
-                  ("aim","bone_7",(-0.20,-0.6,-0.30)),
-                  ("aim","bone_13",(-0.25,-0.4,-0.85)),
-                  ("aim","bone_14",( 0.20,-0.6,-0.30)),
-                  ("aim","bone_4",(0.0,-0.35,0.90))],    # head gently bowed
-    "ninja_run": [("bone_1","x",40),                     # strong forward lean of the torso
-                  ("aim","bone_6",( 0.20,1.0,0.20)),     # arms swept straight back
-                  ("aim","bone_7",( 0.10,1.0,0.20)),
-                  ("aim","bone_13",(-0.20,1.0,0.20)),
-                  ("aim","bone_14",(-0.10,1.0,0.20)),
-                  ("aim","bone_20",(0.0,-0.7,-0.55)),    # R leg strides forward
-                  ("aim","bone_21",(0.0,-0.5,-0.85)),
-                  ("aim","bone_24",(0.0, 0.6,-0.60)),    # L leg trails back
-                  ("aim","bone_25",(0.0, 0.35,-0.90))],
-    "jump":      [("aim","bone_6",( 0.5,-0.1,0.85)),     # arms up & out (clear of the head)
-                  ("aim","bone_13",(-0.5,-0.1,0.85)),
-                  ("aim","bone_20",(0.0,-0.45,0.35)),    # knees tucked up
-                  ("aim","bone_21",(0.0, 0.30,-0.75)),
-                  ("aim","bone_24",(0.0,-0.45,0.35)),
-                  ("aim","bone_25",(0.0, 0.30,-0.75))],
+                  ("aim","bone_25",( 0.95,-0.35,-0.05)),#   L shin crosses RIGHT (Xr)
+                  ("aim","bone_6",( 0.22,-0.5,-0.80)),  # hands rest toward the lap
+                  ("aim","bone_7",(-0.35,-0.70,-0.2)),
+                  ("aim","bone_13",(-0.22,-0.5,-0.80)),
+                  ("aim","bone_14",( 0.35,-0.70,-0.2)),
+                  ("aim","bone_4",( 0.0,-0.40, 0.90))], # head gently bowed
+    "ninja_run": [("aim","bone_1",( 0.0,-0.50, 0.87)), # torso leans forward (~30°)
+                  ("aim","bone_6",( 0.20,1.0,0.10)),    # arms swept straight back (Yb)
+                  ("aim","bone_7",( 0.10,1.0,0.10)),
+                  ("aim","bone_13",(-0.20,1.0,0.10)),
+                  ("aim","bone_14",(-0.10,1.0,0.10)),
+                  ("aim","bone_20",( 0.0,-0.70,-0.60)), # R leg strides forward
+                  ("aim","bone_21",( 0.0,-0.50,-0.85)),
+                  ("aim","bone_24",( 0.0, 0.60,-0.70)), # L leg trails back
+                  ("aim","bone_25",( 0.0, 0.40,-0.90))],
+    "jump":      [("aim","bone_6",( 0.70,-0.1,0.60)),   # arms up & out (clear of the head)
+                  ("aim","bone_7",( 0.55,-0.1,0.75)),
+                  ("aim","bone_13",(-0.70,-0.1,0.60)),
+                  ("aim","bone_14",(-0.55,-0.1,0.75)),
+                  ("aim","bone_20",( 0.0,-0.50,0.40)),  # knees tucked up
+                  ("aim","bone_21",( 0.0, 0.30,-0.85)),
+                  ("aim","bone_24",( 0.0,-0.50,0.40)),
+                  ("aim","bone_25",( 0.0, 0.30,-0.85))],
 }
 
 LENS, SENSOR = 50.0, 36.0
