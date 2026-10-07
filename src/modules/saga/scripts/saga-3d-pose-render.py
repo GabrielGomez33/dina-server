@@ -61,6 +61,10 @@ def parse_args():
                     help="Subdivision-surface levels for a smooth render surface on the "
                          "low-poly proxy (0=off). Applied last, after corrective smooth.")
     ap.add_argument("--list-poses", action="store_true")
+    ap.add_argument("--dump-euler", action="store_true",
+                    help="For every pose in the library, print each posed bone's final LOCAL "
+                         "euler (deg) — used to set joint limits that clip extremes without "
+                         "distorting authored poses. No render.")
     return ap.parse_args(argv())
 
 def log(*a): print("  [pose-render]", *a, file=sys.stderr, flush=True)
@@ -403,6 +407,33 @@ def add_subsurf(meshes, levels):
         ss.render_levels = levels
     log(f"subsurf: levels={levels} on {[o.name for o in meshes]}")
 
+def dump_pose_eulers(arm):
+    """Apply every pose and print each posed bone's final LOCAL euler (deg), plus the
+    per-bone min/max across all poses — so joint limits can be set just outside the
+    authored range (clip extremes, never distort a good pose)."""
+    if arm is None: log("no armature"); return
+    agg = {}
+    for pname, ops in POSES.items():
+        apply_pose(arm, ops)
+        print(f"\n=== pose: {pname} ===", file=sys.stderr)
+        for pb in arm.pose.bones:
+            e = pb.matrix_basis.to_euler('XYZ')
+            dx, dy, dz = math.degrees(e.x), math.degrees(e.y), math.degrees(e.z)
+            if max(abs(dx), abs(dy), abs(dz)) < 1.0: continue
+            print(f"  {pb.name:9s} X={dx:+7.1f} Y={dy:+7.1f} Z={dz:+7.1f}", file=sys.stderr)
+            a = agg.setdefault(pb.name, [1e9, -1e9, 1e9, -1e9, 1e9, -1e9])
+            a[0] = min(a[0], dx); a[1] = max(a[1], dx)
+            a[2] = min(a[2], dy); a[3] = max(a[3], dy)
+            a[4] = min(a[4], dz); a[5] = max(a[5], dz)
+    print("\n=== PER-BONE RANGE across all authored poses (deg) ===", file=sys.stderr)
+    def _idx(n):
+        try: return int(n.split('_')[1])
+        except Exception: return 999
+    for b in sorted(agg, key=_idx):
+        a = agg[b]
+        print(f"  {b:9s} X[{a[0]:+6.1f},{a[1]:+6.1f}]  Y[{a[2]:+6.1f},{a[3]:+6.1f}]  Z[{a[4]:+6.1f},{a[5]:+6.1f}]",
+              file=sys.stderr)
+
 def main():
     args = parse_args()
     if args.list_poses:
@@ -425,6 +456,9 @@ def main():
     arm, meshes = find_objs()
     if not meshes: log("❌ no mesh imported"); sys.exit(1)
     log(f"armature: {arm.name if arm else 'NONE'}   meshes: {[m.name for m in meshes]}")
+
+    if args.dump_euler:
+        dump_pose_eulers(arm); return
     apply_pose(arm, ops)
     add_corrective_smooth(meshes, args.smooth_deform, args.smooth_iters)
     add_subsurf(meshes, args.subsurf)
