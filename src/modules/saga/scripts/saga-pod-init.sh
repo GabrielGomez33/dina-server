@@ -85,6 +85,31 @@ else
   fi
 fi
 
+# --- ComfyUI: ensure the image-stage server is up (ephemeral; needed by saga-flux/kontext) ---
+# Idempotent: if it already answers on $COMFY, do nothing. Otherwise launch it in the background
+# (own venv if present, else system python), wait for it to accept requests, and tail the log on
+# failure. Non-fatal — the rest of the pod still works for rigging/rendering.
+saga_start_comfy() {
+  local url="${COMFY:-http://127.0.0.1:8188}" dir="$SAGA_ROOT/engine/ComfyUI" code py p i
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url/" 2>/dev/null)
+  if [ "$code" = "200" ]; then echo "  ✓ ComfyUI already up ($url)"; return 0; fi
+  [ -f "$dir/main.py" ] || { echo "  ⚠ ComfyUI not found ($dir/main.py) — start it manually"; return 0; }
+  for p in "$dir/.venv/bin/python" "$dir/venv/bin/python" "$dir/python_embeded/python"; do
+    [ -x "$p" ] && py="$p" && break
+  done
+  py="${py:-$(command -v python3)}"
+  echo "  starting ComfyUI ($py)…"
+  ( cd "$dir" && nohup "$py" main.py --listen 127.0.0.1 --port 8188 >"$SAGA_ROOT/comfy.log" 2>&1 & )
+  for i in $(seq 1 60); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url/" 2>/dev/null)
+    [ "$code" = "200" ] && { echo "  ✓ ComfyUI up ($url)"; return 0; }
+    sleep 2
+  done
+  echo "  ⚠ ComfyUI not up after 120s — tail of $SAGA_ROOT/comfy.log:"
+  tail -10 "$SAGA_ROOT/comfy.log" 2>/dev/null | sed 's/^/      /'
+}
+saga_start_comfy
+
 # --- summary so you can see the pod is ready at a glance ---
 echo "✔ SAGA pod ready  (SAGA_ROOT=$SAGA_ROOT, HF_HOME=$HF_HOME)"
 command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | sed 's/^/  GPU:    /'
@@ -92,4 +117,6 @@ for e in TRELLIS UniRig ComfyUI blender; do
   [ -e "$SAGA_ROOT/engine/$e" ] && echo "  engine: $e ✓" || echo "  engine: $e MISSING (reinstall needed)"
 done
 command -v blender >/dev/null 2>&1 && echo "  blender:$(blender --version 2>/dev/null | head -1 | sed 's/^/ /')" || echo "  blender: not found"
+[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "${COMFY:-http://127.0.0.1:8188}/" 2>/dev/null)" = "200" ] \
+  && echo "  ComfyUI: up ($COMFY)" || echo "  ComfyUI: DOWN (image stage unavailable)"
 echo "  venvs:  TRELLIS→ . \$SAGA_ROOT/engine/TRELLIS/.venv/bin/activate   (rig script self-activates UniRig)"
