@@ -78,7 +78,7 @@ fi
 if command -v montage >/dev/null 2>&1; then
   echo "  ✓ imagemagick present"
 else
-  if apt-get install -y --no-install-recommends imagemagick >/dev/null 2>&1; then
+  if apt-get install -y --no-install-recommends imagemagick fonts-dejavu-core >/dev/null 2>&1; then
     echo "  ✓ imagemagick installed"
   else
     echo "  ⚠ imagemagick install failed — contact sheets will fall back to individual PNGs"
