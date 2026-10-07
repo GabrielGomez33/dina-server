@@ -108,8 +108,8 @@ POSES = {
     "punch":     [("aim","bone_6",( 0.12,-1.0, 0.0)),   # R arm thrusts straight forward (Yf)
                   ("aim","bone_7",( 0.06,-1.0, 0.0)),   #   forearm forward = full extension
                   ("aim","bone_8",( 0.0, -1.0, 0.0)),("fist","R"),
-                  ("aim","bone_13",(-0.35,0.55,-0.45)), # L fist chambered back at the ribs
-                  ("aim","bone_14",(-0.12,-0.5, 0.2)),("fist","L")],
+                  ("aim","bone_13",(-0.18,0.30,-0.85)), # L upper arm down (elbow at the side)
+                  ("aim","bone_14",( 0.15,-0.80,0.10)),("fist","L")], #  forearm forward → fist chambered at the ribs
     "kick":      [("aim","bone_20",( 0.0,-1.0, 0.35)),  # R thigh drives knee up & forward (Yf+up)
                   ("aim","bone_21",( 0.0,-1.0, 0.0)),   #   shin snaps straight out (front kick)
                   ("aim","bone_22",( 0.0,-1.0,-0.15)),  #   foot pointed
@@ -136,10 +136,10 @@ POSES = {
                   ("aim","bone_21",(-0.95,-0.35,-0.05)),#   R shin crosses LEFT in front (Xl)
                   ("aim","bone_24",(-0.60,-0.5,-0.55)),
                   ("aim","bone_25",( 0.95,-0.35,-0.05)),#   L shin crosses RIGHT (Xr)
-                  ("aim","bone_6",( 0.22,-0.5,-0.80)),  # hands rest toward the lap
-                  ("aim","bone_7",(-0.35,-0.70,-0.2)),
-                  ("aim","bone_13",(-0.22,-0.5,-0.80)),
-                  ("aim","bone_14",( 0.35,-0.70,-0.2)),
+                  ("aim","bone_6",( 0.10,-0.45,-0.88)), # upper arms down & slightly fwd (not out)
+                  ("aim","bone_7",(-0.45,-0.55,-0.35)), #   R forearm angles inward → hand to the lap
+                  ("aim","bone_13",(-0.10,-0.45,-0.88)),
+                  ("aim","bone_14",( 0.45,-0.55,-0.35)),#   L forearm angles inward → hand to the lap
                   ("aim","bone_4",( 0.0,-0.40, 0.90))], # head gently bowed
     "ninja_run": [("aim","bone_1",( 0.0,-0.50, 0.87)), # torso leans forward (~30°)
                   ("aim","bone_6",( 0.20,1.0,0.10)),    # arms swept straight back (Yb)
