@@ -61,6 +61,9 @@ def parse_args():
                     help="Subdivision-surface levels for a smooth render surface on the "
                          "low-poly proxy (0=off). Applied last, after corrective smooth.")
     ap.add_argument("--list-poses", action="store_true")
+    ap.add_argument("--no-limits", action="store_true",
+                    help="disable the joint rotation limits (on by default; they clamp each "
+                         "bone to a human-plausible range so no pose drives a limb into the body)")
     ap.add_argument("--dump-euler", action="store_true",
                     help="For every pose in the library, print each posed bone's final LOCAL "
                          "euler (deg) — used to set joint limits that clip extremes without "
@@ -200,6 +203,51 @@ def world_bbox(meshes):
 # Finger bones per hand (UniRig alien) — curled for a FIST.
 FINGERS = {"R": ["bone_9","bone_10","bone_11","bone_12"],
            "L": ["bone_16","bone_17","bone_18","bone_19"]}
+
+# Joint rotation limits — LOCAL euler (deg) as (minX,maxX, minY,maxY, minZ,maxZ).
+# Set just OUTSIDE the range the authored poses actually use (measured with
+# --dump-euler), so they NEVER distort an approved pose but hard-block anything
+# beyond it: an arm swinging into the giant head, a knee/elbow past its hinge, the
+# neck creasing through itself. Enforced every render via Limit Rotation constraints.
+LIMITS = {
+    "bone_1": (-25, 40, -20, 20, -30, 30),     # spine
+    "bone_2": (-25, 40, -20, 20, -30, 30),
+    "bone_3": (-25, 40, -20, 20, -30, 30),
+    "bone_4": (-28, 40, -30, 30, -40, 40),     # head/neck
+    "bone_6": (-80, 58, -40, 40, -95, 90),     # R shoulder (X+58 caps arm below the head)
+    "bone_13":(-80, 58, -40, 40, -95, 90),     # L shoulder
+    "bone_7": (-115, 45, -45, 45, -140, 140),  # R elbow/forearm
+    "bone_14":(-115, 45, -45, 45, -140, 140),  # L elbow/forearm
+    "bone_8": (-30, 30, -30, 30, -35, 35),     # R hand
+    "bone_15":(-30, 30, -30, 30, -35, 35),     # L hand
+    "bone_20":(-140, 50, -40, 40, -55, 55),    # R thigh
+    "bone_24":(-140, 50, -40, 40, -55, 55),    # L thigh
+    "bone_21":(-65, 165, -45, 45, -95, 95),    # R shin/knee
+    "bone_25":(-65, 165, -45, 45, -95, 95),    # L shin/knee
+    "bone_22":(-35, 70, -30, 30, -30, 30),     # R foot/ankle
+    "bone_26":(-35, 70, -30, 30, -30, 30),     # L foot/ankle
+}
+FINGER_LIMIT = (-95, 18, -20, 20, -20, 20)     # all finger bones: curl to a fist, don't hyperextend
+
+def add_joint_limits(arm):
+    """Attach a Limit Rotation constraint (LOCAL space) to each bone per LIMITS /
+    FINGER_LIMIT. Blender clamps the bone's final local rotation every evaluation, so
+    a pose set via aim is held inside the range during the render and down the chain."""
+    if arm is None: return
+    def _set(pb, lim):
+        c = pb.constraints.new("LIMIT_ROTATION"); c.owner_space = "LOCAL"
+        c.use_limit_x = True; c.min_x = math.radians(lim[0]); c.max_x = math.radians(lim[1])
+        c.use_limit_y = True; c.min_y = math.radians(lim[2]); c.max_y = math.radians(lim[3])
+        c.use_limit_z = True; c.min_z = math.radians(lim[4]); c.max_z = math.radians(lim[5])
+    n = 0
+    for name, lim in LIMITS.items():
+        pb = arm.pose.bones.get(name)
+        if pb: _set(pb, lim); n += 1
+    for grp in FINGERS.values():
+        for name in grp:
+            pb = arm.pose.bones.get(name)
+            if pb: _set(pb, FINGER_LIMIT); n += 1
+    log(f"joint limits: {n} bones constrained (Limit Rotation, LOCAL)")
 
 def _aim(arm, name, tgt_world, _roll="Z"):
     """Swing pose bone `name` so its head→tail points along tgt_world (a direction in
@@ -459,6 +507,8 @@ def main():
 
     if args.dump_euler:
         dump_pose_eulers(arm); return
+    if not args.no_limits:
+        add_joint_limits(arm)
     apply_pose(arm, ops)
     add_corrective_smooth(meshes, args.smooth_deform, args.smooth_iters)
     add_subsurf(meshes, args.subsurf)
